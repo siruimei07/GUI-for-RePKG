@@ -1,0 +1,19 @@
+<Application x:Class="FieldStation.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:viewModels="clr-namespace:FieldStation.ViewModels"
+             xmlns:views="clr-namespace:FieldStation.Views"
+             ShutdownMode="OnMainWindowClose">
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="Themes/MaximalTheme.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+            <DataTemplate DataType="{x:Type viewModels:CommandCenterViewModel}"><views:CommandCenterView /></DataTemplate>
+            <DataTemplate DataType="{x:Type viewModels:TopologyViewModel}"><views:TopologyView /></DataTemplate>
+            <DataTemplate DataType="{x:Type viewModels:AssetArchiveViewModel}"><views:AssetArchiveView /></DataTemplate>
+            <DataTemplate DataType="{x:Type viewModels:ReportsViewModel}"><views:ReportsView /></DataTemplate>
+            <DataTemplate DataType="{x:Type viewModels:ExtensionsViewModel}"><views:ExtensionsView /></DataTemplate>
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>
