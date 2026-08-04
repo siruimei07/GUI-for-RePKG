@@ -55,6 +55,7 @@ public sealed class WallpaperLibraryService : IWallpaperLibraryService
                     ? workshopId
                     : storedRecord.Title.Trim();
                 var previewPath = ResolvePreviewPath(itemDirectory, storedRecord);
+                var scenePackagePath = ResolveScenePackagePath(storedRecord);
 
                 var record = storedRecord with
                 {
@@ -63,6 +64,8 @@ public sealed class WallpaperLibraryService : IWallpaperLibraryService
                     OutputDirectory = Path.GetFullPath(itemDirectory),
                     PreviewPath = previewPath,
                     PreviewFileName = previewPath is null ? null : Path.GetFileName(previewPath),
+                    HasScenePackage = storedRecord.HasScenePackage || scenePackagePath is not null,
+                    ScenePackagePath = scenePackagePath,
                     Warnings = storedRecord.Warnings ?? Array.Empty<string>()
                 };
 
@@ -135,7 +138,21 @@ public sealed class WallpaperLibraryService : IWallpaperLibraryService
                     SearchOption.TopDirectoryOnly))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    if ((File.GetAttributes(childDirectory) & FileAttributes.ReparsePoint) == 0)
+                    var childName = Path.GetFileName(childDirectory);
+                    var isBelowOutputRoot = !string.Equals(
+                        Path.TrimEndingDirectorySeparator(directory),
+                        Path.TrimEndingDirectorySeparator(root),
+                        StringComparison.OrdinalIgnoreCase);
+                    var isExtractorOwnedDirectory = isBelowOutputRoot
+                        && (string.Equals(
+                                childName,
+                                RePkgWallpaperUnpackService.UnpackFolderName,
+                                StringComparison.OrdinalIgnoreCase)
+                            || childName.StartsWith(
+                                ".unpacked-stage-",
+                                StringComparison.OrdinalIgnoreCase));
+                    if (!isExtractorOwnedDirectory
+                        && (File.GetAttributes(childDirectory) & FileAttributes.ReparsePoint) == 0)
                     {
                         pending.Push(childDirectory);
                     }
@@ -176,6 +193,39 @@ public sealed class WallpaperLibraryService : IWallpaperLibraryService
             File.Exists(storedRecord.PreviewPath))
         {
             return Path.GetFullPath(storedRecord.PreviewPath);
+        }
+
+        return null;
+    }
+
+    private static string? ResolveScenePackagePath(WallpaperRecord storedRecord)
+    {
+        if (!string.IsNullOrWhiteSpace(storedRecord.SourceDirectory)
+            && Directory.Exists(storedRecord.SourceDirectory))
+        {
+            try
+            {
+                var discoveredPackage = Directory
+                    .EnumerateFiles(storedRecord.SourceDirectory, "*", SearchOption.TopDirectoryOnly)
+                    .FirstOrDefault(path => string.Equals(
+                        Path.GetFileName(path),
+                        "scene.pkg",
+                        StringComparison.OrdinalIgnoreCase));
+                if (discoveredPackage is not null)
+                {
+                    return Path.GetFullPath(discoveredPackage);
+                }
+            }
+            catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
+            {
+                // Older metadata may need a best-effort backfill. A temporarily
+                // inaccessible source must not hide the already stored catalog item.
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(storedRecord.ScenePackagePath))
+        {
+            return Path.GetFullPath(storedRecord.ScenePackagePath);
         }
 
         return null;

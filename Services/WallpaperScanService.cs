@@ -246,11 +246,14 @@ public sealed class WallpaperScanService : IWallpaperScanService
             warnings.Add("未找到 preview.png、preview.jpg、preview.jpeg 或 preview.gif。");
         }
 
+        var scenePackagePath = FindScenePackage(sourceFolder);
+
         return new ScanCandidate(
             workshopId!,
             title.Trim(),
             Path.GetFullPath(sourceFolder),
             previewPath,
+            scenePackagePath,
             usedFolderNameAsWorkshopId,
             warnings);
     }
@@ -293,6 +296,10 @@ public sealed class WallpaperScanService : IWallpaperScanService
             OutputDirectory = Path.GetFullPath(itemOutputDirectory),
             PreviewPath = previewPath is null ? null : Path.GetFullPath(previewPath),
             PreviewFileName = previewFileName,
+            HasScenePackage = candidate.ScenePackagePath is not null,
+            ScenePackagePath = candidate.ScenePackagePath is null
+                ? null
+                : Path.GetFullPath(candidate.ScenePackagePath),
             UsedFolderNameAsWorkshopId = candidate.UsedFolderNameAsWorkshopId,
             ScannedAtUtc = DateTimeOffset.UtcNow,
             Warnings = candidate.Warnings.ToArray()
@@ -365,6 +372,15 @@ public sealed class WallpaperScanService : IWallpaperScanService
             .FirstOrDefault(path => string.Equals(
                 Path.GetFileName(path),
                 "project.json",
+                StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string? FindScenePackage(string directory)
+    {
+        return Directory.EnumerateFiles(directory, "*", SearchOption.TopDirectoryOnly)
+            .FirstOrDefault(path => string.Equals(
+                Path.GetFileName(path),
+                "scene.pkg",
                 StringComparison.OrdinalIgnoreCase));
     }
 
@@ -477,6 +493,7 @@ public sealed class WallpaperScanService : IWallpaperScanService
         string Title,
         string SourceDirectory,
         string? PreviewSourcePath,
+        string? ScenePackagePath,
         bool UsedFolderNameAsWorkshopId,
         IReadOnlyList<string> Warnings);
 }

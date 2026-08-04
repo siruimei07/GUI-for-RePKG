@@ -58,7 +58,7 @@ public sealed record ScanResult
 
 public sealed record WallpaperIndex
 {
-    public int SchemaVersion { get; init; } = 1;
+    public int SchemaVersion { get; init; } = 2;
 
     public DateTimeOffset GeneratedAtUtc { get; init; }
 

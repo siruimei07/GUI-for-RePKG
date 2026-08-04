@@ -10,9 +10,13 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationTitle>Wallpaper Field</ApplicationTitle>
     <Product>Wallpaper Field</Product>
-    <Description>Wallpaper Engine workshop preview catalog</Description>
+    <Description>Wallpaper Engine workshop catalog and safe scene.pkg extractor</Description>
   </PropertyGroup>
   <ItemGroup>
     <Compile Remove="tests\**\*.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Update="THIRD-PARTY-NOTICES.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Update="ThirdParty\RePKG\LICENSE.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

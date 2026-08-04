@@ -23,8 +23,10 @@ public sealed class ShellViewModel : ObservableObject
     private string _currentPage = ScanPage;
     private string _sourcePath = string.Empty;
     private string _outputPath = string.Empty;
+    private string _scanOutputPath = string.Empty;
     private bool _isBusy;
     private bool _isScanning;
+    private bool _isUnpacking;
     private bool _isRefreshingLibrary;
     private double _progressValue;
     private int _scannedCount;
@@ -67,7 +69,7 @@ public sealed class ShellViewModel : ObservableObject
         BrowseOutputCommand = new RelayCommand(BrowseOutput, () => !IsBusy);
         ScanCommand = new AsyncRelayCommand(ScanAsync, CanStartScan);
         CancelScanCommand = new RelayCommand(CancelScan, () => IsScanning);
-        UnpackCommand = new RelayCommand(ShowUnpackPlaceholder, () => !IsBusy);
+        UnpackCommand = new AsyncRelayCommand(UnpackAsync, CanStartUnpack);
         RefreshLibraryCommand = new AsyncRelayCommand(RefreshLibraryAsync, CanRefreshLibrary);
         OpenFolderCommand = new RelayCommand(OpenFolder, CanOpenFolder);
     }
@@ -95,7 +97,7 @@ public sealed class ShellViewModel : ObservableObject
 
     public RelayCommand CancelScanCommand { get; }
 
-    public RelayCommand UnpackCommand { get; }
+    public AsyncRelayCommand UnpackCommand { get; }
 
     public AsyncRelayCommand RefreshLibraryCommand { get; }
 
@@ -147,8 +149,10 @@ public sealed class ShellViewModel : ObservableObject
                 OnPropertiesChanged(
                     nameof(StateLabel),
                     nameof(ScanButtonText),
+                    nameof(UnpackButtonText),
                     nameof(CanScan),
-                    nameof(CanRefreshOutput));
+                    nameof(CanRefreshOutput),
+                    nameof(IsUnpackAvailable));
                 UpdateCommandStates();
             }
         }
@@ -182,20 +186,45 @@ public sealed class ShellViewModel : ObservableObject
         }
     }
 
+    public bool IsUnpacking
+    {
+        get => _isUnpacking;
+        private set
+        {
+            if (SetProperty(ref _isUnpacking, value))
+            {
+                OnPropertiesChanged(
+                    nameof(StateLabel),
+                    nameof(UnpackButtonText),
+                    nameof(IsUnpackAvailable));
+            }
+        }
+    }
+
     public bool CanScan => CanStartScan();
 
     public bool CanCancelScan => IsScanning;
 
     public bool CanRefreshOutput => CanRefreshLibrary();
 
-    public bool IsUnpackAvailable => false;
+    public bool IsUnpackAvailable => CanStartUnpack();
 
     public string ScanButtonText => IsScanning ? "正在扫描…" : "开始扫描";
 
-    public string UnpackButtonText => "开始解包 · 预留";
+    public string UnpackButtonText => IsUnpacking
+        ? "正在解包…"
+        : $"开始解包 · {PackageReadyCount:00}";
+
+    public string UnpackToolTip => ScannedWallpapers.Count == 0
+        ? "请先扫描 Workshop 项目。"
+        : !IsCurrentOutputScanRoot()
+            ? "输出目录已在扫描后更改；请恢复扫描时的输出目录或重新扫描。"
+            : "仅处理扫描时发现 scene.pkg 的项目；其余项目会直接跳过。";
 
     public string StateLabel => IsScanning
         ? "SCANNING"
+        : IsUnpacking
+            ? "UNPACKING"
         : IsRefreshingLibrary
             ? "REFRESHING"
             : IsBusy
@@ -249,6 +278,8 @@ public sealed class ShellViewModel : ObservableObject
     }
 
     public int MissingPreviewCount => ScannedWallpapers.Count(item => !item.HasPreview);
+
+    public int PackageReadyCount => ScannedWallpapers.Count(item => item.HasScenePackage);
 
     public int LibraryCount => LibraryWallpapers.Count;
 
@@ -396,6 +427,7 @@ public sealed class ShellViewModel : ObservableObject
     public void CancelPendingWork()
     {
         ScanCommand.Cancel();
+        UnpackCommand.Cancel();
         RefreshLibraryCommand.Cancel();
     }
 
@@ -418,7 +450,9 @@ public sealed class ShellViewModel : ObservableObject
             OnPropertiesChanged(
                 nameof(OutputDirectory),
                 nameof(CanScan),
-                nameof(CanRefreshOutput));
+                nameof(CanRefreshOutput),
+                nameof(IsUnpackAvailable),
+                nameof(UnpackToolTip));
             UpdateCommandStates();
         }
     }
@@ -473,6 +507,31 @@ public sealed class ShellViewModel : ObservableObject
            && !string.IsNullOrWhiteSpace(SourcePath)
            && !string.IsNullOrWhiteSpace(OutputPath);
 
+    private bool CanStartUnpack()
+        => !IsBusy
+           && ScannedWallpapers.Count > 0
+           && IsCurrentOutputScanRoot();
+
+    private bool IsCurrentOutputScanRoot()
+    {
+        if (string.IsNullOrWhiteSpace(OutputPath) || string.IsNullOrWhiteSpace(_scanOutputPath))
+        {
+            return false;
+        }
+
+        try
+        {
+            return string.Equals(
+                Path.TrimEndingDirectorySeparator(Path.GetFullPath(OutputPath.Trim())),
+                Path.TrimEndingDirectorySeparator(Path.GetFullPath(_scanOutputPath)),
+                StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private async Task ScanAsync(CancellationToken cancellationToken)
     {
         if (!Directory.Exists(SourcePath))
@@ -498,6 +557,9 @@ public sealed class ShellViewModel : ObservableObject
                 .ConfigureAwait(true);
 
             ReplaceItems(ScannedWallpapers, result.Items);
+            _scanOutputPath = Path.GetFullPath(request.OutputDirectory);
+            OnPropertiesChanged(nameof(IsUnpackAvailable), nameof(UnpackToolTip));
+            UnpackCommand.NotifyCanExecuteChanged();
             SuccessCount = result.SuccessCount;
             FailureCount = result.FailedCount;
             ScannedCount = result.SuccessCount + result.FailedCount;
@@ -622,11 +684,77 @@ public sealed class ShellViewModel : ObservableObject
         }
     }
 
-    private void ShowUnpackPlaceholder()
+    private async Task UnpackAsync(CancellationToken cancellationToken)
     {
-        // The injected service keeps the composition contract ready for the later implementation.
-        _ = _unpackService;
-        SetStatus("解包接口已预留，当前版本暂不执行解包操作", "Neutral");
+        ClearError();
+        IsBusy = true;
+        IsUnpacking = true;
+        CurrentStage = "UNPACK";
+        ScannedCount = 0;
+        TotalCount = ScannedWallpapers.Count;
+        ProgressValue = 0;
+        SetStatus($"准备解包 · {PackageReadyCount} 个项目包含 scene.pkg", "Working");
+
+        var progress = new Progress<WallpaperUnpackProgress>(UpdateUnpackProgress);
+
+        try
+        {
+            var request = new WallpaperUnpackRequest
+            {
+                OutputDirectory = OutputPath.Trim(),
+                Items = ScannedWallpapers.Select(card => card.Record).ToArray()
+            };
+            var result = await _unpackService
+                .UnpackAsync(request, progress, cancellationToken)
+                .ConfigureAwait(true);
+
+            ScannedCount = result.ProcessedCount;
+            TotalCount = result.TotalCount;
+            ProgressValue = 100;
+            CurrentStage = result.FailedCount == 0 ? "COMPLETE" : "CHECK";
+
+            if (result.Errors.Count > 0)
+            {
+                ErrorText = string.Join(
+                    Environment.NewLine,
+                    result.Errors.Select(error =>
+                        $"{error.WorkshopId}：{error.Message}"));
+                SetStatus(result.Message, "Warning");
+            }
+            else
+            {
+                SetStatus(result.Message, "Success");
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            CurrentStage = "CANCELED";
+            SetStatus($"解包已取消 · 已处理 {ScannedCount}/{TotalCount}", "Neutral");
+        }
+        catch (Exception exception)
+        {
+            CurrentStage = "FAILED";
+            PresentError("解包未能完成", exception);
+        }
+        finally
+        {
+            IsUnpacking = false;
+            IsBusy = false;
+        }
+    }
+
+    private void UpdateUnpackProgress(WallpaperUnpackProgress progress)
+    {
+        ScannedCount = progress.ProcessedCount;
+        TotalCount = progress.TotalCount;
+        ProgressValue = progress.Percent;
+        CurrentTitle = progress.CurrentWorkshopId ?? string.Empty;
+        CurrentFolder = progress.CurrentEntry ?? string.Empty;
+        CurrentStage = "UNPACK";
+        if (!string.IsNullOrWhiteSpace(progress.Message))
+        {
+            SetStatus(progress.Message, "Working");
+        }
     }
 
     private bool CanOpenFolder(object? parameter)
@@ -663,6 +791,7 @@ public sealed class ShellViewModel : ObservableObject
 
     private void ResetScanState()
     {
+        _scanOutputPath = string.Empty;
         ScannedWallpapers.Clear();
         ProgressValue = 0;
         ScannedCount = 0;
@@ -724,9 +853,16 @@ public sealed class ShellViewModel : ObservableObject
         => target.ReplaceRange(records.Select(record => new WallpaperCardViewModel(record)));
 
     private void OnScanCollectionChanged(object? sender, NotifyCollectionChangedEventArgs args)
-        => OnPropertiesChanged(
+    {
+        OnPropertiesChanged(
             nameof(HasScanResults),
-            nameof(MissingPreviewCount));
+            nameof(MissingPreviewCount),
+            nameof(PackageReadyCount),
+            nameof(UnpackButtonText),
+            nameof(IsUnpackAvailable),
+            nameof(UnpackToolTip));
+        UnpackCommand.NotifyCanExecuteChanged();
+    }
 
     private void OnLibraryCollectionChanged(object? sender, NotifyCollectionChangedEventArgs args)
         => OnPropertiesChanged(

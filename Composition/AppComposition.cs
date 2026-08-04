@@ -14,5 +14,5 @@ public static class AppComposition
         new WallpaperLibraryService(),
         new FolderPickerService(),
         new SystemFolderService(),
-        new PlaceholderWallpaperUnpackService());
+        new RePkgWallpaperUnpackService());
 }

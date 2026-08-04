@@ -1,6 +1,11 @@
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using WallpaperField.Contracts;
 using WallpaperField.Models;
 using WallpaperField.Services;
+using WallpaperField.ThirdParty.RePKG;
+using WallpaperField.ViewModels;
 
 var testRoot = Path.Combine(
     Path.GetTempPath(),
@@ -11,29 +16,239 @@ var outputRoot = Path.Combine(testRoot, "output");
 try
 {
     Directory.CreateDirectory(sourceRoot);
-    CreateItem("101", "PNG Item", "101", "preview.PNG", GetPngBytes());
-    CreateItem("202", "GIF Item", "202", "preview.GIF", GetGifBytes());
-    CreateItem("303", "JPG Item", "303", "preview.jpg", GetPngBytes());
-    CreateItem("404", "No Preview", "404", null, null);
+    CreateItem("101", "PNG + Valid PKG", "101", "preview.PNG", GetPngBytes());
+    CreateItem("202", "GIF + No PKG", "202", "preview.GIF", GetGifBytes());
+    CreateItem("303", "JPG + Bad Magic", "303", "preview.jpg", GetPngBytes());
+    CreateItem("404", "No Preview + Traversal", "404", null, null);
+    CreateItem("505", "Valid After Failures", "505", "preview.png", GetPngBytes());
+
+    WritePackage(
+        Path.Combine(sourceRoot, "101", "scene.pkg"),
+        "PKGV0024",
+        [
+            ("scene.json", Encoding.UTF8.GetBytes("{\"camera\":\"main\"}")),
+            ("scripts/main.js", Encoding.UTF8.GetBytes("console.log('wallpaper');")),
+            ("metadata.json", Encoding.UTF8.GetBytes("{\"packageOwned\":true}")),
+            ("preview.png", Encoding.UTF8.GetBytes("package preview must stay isolated"))
+        ]);
+    WritePackage(
+        Path.Combine(sourceRoot, "303", "scene.pkg"),
+        "NOTPKG!!",
+        [("bad.txt", Encoding.UTF8.GetBytes("bad"))]);
+    WritePackage(
+        Path.Combine(sourceRoot, "404", "scene.pkg"),
+        "PKGV0023",
+        [("../escape.txt", Encoding.UTF8.GetBytes("must never escape"))]);
+    WritePackage(
+        Path.Combine(sourceRoot, "505", "SCENE.PKG"),
+        "PKGV0018",
+        [("assets/after.bin", [0, 1, 2, 3, 255])]);
 
     var scanService = new WallpaperScanService();
-    var result = await scanService.ScanAsync(new WallpaperScanRequest(sourceRoot, outputRoot));
+    var scanResult = await scanService.ScanAsync(new WallpaperScanRequest(sourceRoot, outputRoot));
 
-    Assert(result.SuccessCount == 4, "Expected four successful records.");
-    Assert(result.FailedCount == 0, "Expected no fatal item failures.");
+    Assert(scanResult.SuccessCount == 5, "Expected five successful scan records.");
+    Assert(scanResult.FailedCount == 0, "Expected no fatal item scan failures.");
     Assert(File.Exists(Path.Combine(outputRoot, "wallpaper-index.json")), "Missing root index.");
     Assert(File.Exists(Path.Combine(outputRoot, "workshop-ids.txt")), "Missing ID list.");
     Assert(File.Exists(Path.Combine(outputRoot, "101", "preview.png")), "PNG was not copied.");
     Assert(File.Exists(Path.Combine(outputRoot, "202", "preview.gif")), "GIF was not copied.");
     Assert(File.Exists(Path.Combine(outputRoot, "303", "preview.jpg")), "JPG was not copied.");
-    Assert(!result.Items.Single(item => item.WorkshopId == "404").HasPreview, "Missing preview was not reported.");
+    Assert(!scanResult.Items.Single(item => item.WorkshopId == "404").HasPreview,
+        "Missing preview was not reported.");
+    Assert(scanResult.Items.Count(item => item.HasScenePackage) == 4,
+        "scene.pkg eligibility was not captured during scanning.");
+    Assert(!scanResult.Items.Single(item => item.WorkshopId == "202").HasScenePackage,
+        "A folder without scene.pkg was incorrectly marked eligible.");
 
     var ids = await File.ReadAllLinesAsync(Path.Combine(outputRoot, "workshop-ids.txt"));
-    Assert(ids.Order().SequenceEqual(["101", "202", "303", "404"]), "ID list contents differ.");
+    Assert(ids.Order().SequenceEqual(["101", "202", "303", "404", "505"]),
+        "ID list contents differ.");
+
+    var legacyMetadataPath = Path.Combine(outputRoot, "101", "metadata.json");
+    var legacyMetadata = JsonNode.Parse(await File.ReadAllTextAsync(legacyMetadataPath))?.AsObject()
+        ?? throw new InvalidDataException("Could not prepare legacy metadata fixture.");
+    legacyMetadata.Remove("hasScenePackage");
+    legacyMetadata.Remove("scenePackagePath");
+    await File.WriteAllTextAsync(
+        legacyMetadataPath,
+        legacyMetadata.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
 
     var library = await new WallpaperLibraryService().LoadAsync(outputRoot);
-    Assert(library.Items.Count == 4, "Library did not reload all records.");
-    Assert(library.Items.Any(item => item.Title == "GIF Item"), "Stored title did not round-trip.");
+    Assert(library.Items.Count == 5, "Library did not reload all records.");
+    Assert(library.Items.Any(item => item.Title == "GIF + No PKG"),
+        "Stored title did not round-trip.");
+    Assert(library.Items.Single(item => item.WorkshopId == "101").HasScenePackage,
+        "Legacy metadata did not backfill scene.pkg state from the source folder.");
+
+    var unpackService = new RePkgWallpaperUnpackService();
+    var unpackResult = await unpackService.UnpackAsync(new WallpaperUnpackRequest
+    {
+        OutputDirectory = outputRoot,
+        Items = scanResult.Items
+    });
+
+    Assert(unpackResult.TotalCount == 5, "Unpack total count differs.");
+    Assert(unpackResult.EligibleCount == 4, "Unpack eligible count differs.");
+    Assert(unpackResult.SucceededCount == 2, "Expected two successful packages.");
+    Assert(unpackResult.SkippedCount == 1, "The no-PKG record was not skipped.");
+    Assert(unpackResult.FailedCount == 2, "Corrupt and traversal packages must fail.");
+    Assert(!unpackResult.Succeeded, "A partial batch must not report full success.");
+    Assert(File.Exists(Path.Combine(outputRoot, "101", "unpacked", "scripts", "main.js")),
+        "Nested package entry was not extracted.");
+    Assert(File.Exists(Path.Combine(outputRoot, "101", "unpacked", ".wallpaper-field-unpack.json")),
+        "Unpack manifest was not written.");
+    Assert(File.Exists(Path.Combine(outputRoot, "505", "unpacked", "assets", "after.bin")),
+        "Processing did not continue after failed packages.");
+    Assert(!Directory.Exists(Path.Combine(outputRoot, "202", "unpacked")),
+        "A skipped item unexpectedly created an unpack directory.");
+    Assert(!File.Exists(Path.Combine(outputRoot, "escape.txt"))
+           && !File.Exists(Path.Combine(testRoot, "escape.txt")),
+        "A traversal package wrote outside its isolated unpack directory.");
+    Assert(!Directory.EnumerateDirectories(Path.Combine(outputRoot, "404"))
+        .Any(path => Path.GetFileName(path).StartsWith(".unpacked-stage-", StringComparison.Ordinal)),
+        "Failed unpack left a staging directory behind.");
+    Assert((await File.ReadAllBytesAsync(Path.Combine(outputRoot, "101", "preview.png")))
+            .SequenceEqual(GetPngBytes()),
+        "A package entry overwrote the catalog preview.");
+
+    var libraryAfterUnpack = await new WallpaperLibraryService().LoadAsync(outputRoot);
+    Assert(libraryAfterUnpack.Items.Count == 5,
+        "Library discovery entered unpacked package content and loaded false metadata.");
+
+    var existingMainPath = Path.Combine(outputRoot, "101", "unpacked", "scripts", "main.js");
+    var existingMainBytes = await File.ReadAllBytesAsync(existingMainPath);
+    using (var cancellation = new CancellationTokenSource())
+    {
+        var cancelProgress = new InlineProgress<WallpaperUnpackProgress>(value =>
+        {
+            if (!string.IsNullOrWhiteSpace(value.CurrentEntry))
+            {
+                cancellation.Cancel();
+            }
+        });
+        var canceled = false;
+        try
+        {
+            _ = await unpackService.UnpackAsync(
+                new WallpaperUnpackRequest
+                {
+                    OutputDirectory = outputRoot,
+                    Items = [scanResult.Items.Single(item => item.WorkshopId == "101")]
+                },
+                cancelProgress,
+                cancellation.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            canceled = true;
+        }
+
+        Assert(canceled, "Cancellation did not interrupt a package between entries.");
+    }
+    Assert((await File.ReadAllBytesAsync(existingMainPath)).SequenceEqual(existingMainBytes),
+        "Canceled extraction changed the previously committed output.");
+    Assert(!Directory.EnumerateDirectories(Path.Combine(outputRoot, "101"))
+        .Any(path => Path.GetFileName(path).StartsWith(".unpacked-stage-", StringComparison.Ordinal)),
+        "Canceled extraction left a staging directory behind.");
+
+    var repeatResult = await unpackService.UnpackAsync(new WallpaperUnpackRequest
+    {
+        OutputDirectory = outputRoot,
+        Items = [scanResult.Items.Single(item => item.WorkshopId == "101")]
+    });
+    Assert(repeatResult.SucceededCount == 1 && repeatResult.FailedCount == 0,
+        "Repeated extraction should safely overwrite package-owned files.");
+
+    var item101 = scanResult.Items.Single(item => item.WorkshopId == "101");
+    var item505 = scanResult.Items.Single(item => item.WorkshopId == "505");
+    var tamperedResult = await unpackService.UnpackAsync(new WallpaperUnpackRequest
+    {
+        OutputDirectory = outputRoot,
+        Items = [item101 with { OutputDirectory = item505.OutputDirectory }]
+    });
+    Assert(tamperedResult.FailedCount == 1,
+        "A record pointing at another workshop output directory must be rejected.");
+
+    var viewModelOutputRoot = Path.Combine(testRoot, "view-model-output");
+    var shell = new ShellViewModel(
+        new WallpaperScanService(),
+        new WallpaperLibraryService(),
+        new NoOpFolderPicker(),
+        new NoOpSystemFolderService(),
+        new RePkgWallpaperUnpackService())
+    {
+        SourcePath = sourceRoot,
+        OutputPath = viewModelOutputRoot
+    };
+    await shell.ScanCommand.ExecuteAsync();
+    Assert(shell.ScannedWallpapers.Count == 5 && shell.PackageReadyCount == 4,
+        "The scan command did not project scene.pkg state into the UI model.");
+    Assert(shell.UnpackCommand.CanExecute(null),
+        "The unpack button command was not enabled after a successful scan.");
+    shell.OutputPath = Path.Combine(testRoot, "different-output");
+    Assert(!shell.UnpackCommand.CanExecute(null),
+        "Changing the output root after scanning must disable unpacking stale records.");
+    shell.OutputPath = viewModelOutputRoot;
+    Assert(shell.UnpackCommand.CanExecute(null),
+        "Restoring the scan output root did not re-enable unpacking.");
+    await shell.UnpackCommand.ExecuteAsync();
+    Assert(File.Exists(Path.Combine(
+            viewModelOutputRoot,
+            "101",
+            "unpacked",
+            "scripts",
+            "main.js")),
+        "The unpack button command did not invoke the RePKG backend.");
+    Assert(!Directory.Exists(Path.Combine(viewModelOutputRoot, "202", "unpacked")),
+        "The unpack button command did not skip an item without scene.pkg.");
+    Assert(!shell.IsBusy && !shell.IsUnpacking,
+        "The UI model remained busy after the unpack command completed.");
+
+    if (args.Length > 0)
+    {
+        var acceptancePath = Path.GetFullPath(args[0]);
+        if (Directory.Exists(acceptancePath))
+        {
+            ValidateRealCatalog(acceptancePath);
+        }
+        else
+        {
+        var realPackagePath = acceptancePath;
+        var realSourceDirectory = Path.GetDirectoryName(realPackagePath)
+            ?? throw new InvalidOperationException("Real package path has no parent directory.");
+        var realWorkshopId = Path.GetFileName(realSourceDirectory);
+        var realOutputRoot = Path.Combine(testRoot, "real-output");
+        var realOutputDirectory = Path.Combine(realOutputRoot, realWorkshopId);
+        var realResult = await unpackService.UnpackAsync(new WallpaperUnpackRequest
+        {
+            OutputDirectory = realOutputRoot,
+            Items =
+            [
+                new WallpaperRecord
+                {
+                    WorkshopId = realWorkshopId,
+                    Title = "Real RePKG acceptance sample",
+                    SourceDirectory = realSourceDirectory,
+                    OutputDirectory = realOutputDirectory,
+                    HasScenePackage = true,
+                    ScenePackagePath = realPackagePath
+                }
+            ]
+        });
+        var realUnpackDirectory = Path.Combine(realOutputDirectory, "unpacked");
+        Assert(realResult.SucceededCount == 1 && realResult.FailedCount == 0,
+            "Real scene.pkg acceptance extraction failed.");
+        Assert(realResult.ExtractedEntryCount > 0,
+            "Real scene.pkg did not contain any extracted entries.");
+        Assert(Directory.EnumerateFiles(realUnpackDirectory, "*", SearchOption.AllDirectories).Count()
+               == realResult.ExtractedEntryCount + 1,
+            "Real scene.pkg output count differs from entries plus manifest.");
+        Console.WriteLine(
+            $"Real RePKG acceptance passed: {realWorkshopId}, " +
+            $"{realResult.ExtractedEntryCount} entries.");
+        }
+    }
 
     var overlapRejected = false;
     try
@@ -46,7 +261,7 @@ try
     }
 
     Assert(overlapRejected, "Overlapping source/output paths must be rejected.");
-    Console.WriteLine("Wallpaper Field smoke tests passed.");
+    Console.WriteLine("Wallpaper Field scan, library, safety, and RePKG unpack smoke tests passed.");
 }
 finally
 {
@@ -84,6 +299,74 @@ void CreateItem(
     }
 }
 
+static void WritePackage(
+    string path,
+    string magic,
+    IReadOnlyList<(string Path, byte[] Bytes)> entries)
+{
+    Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+    using var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
+    using var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: false);
+    WriteSizedUtf8(writer, magic);
+    writer.Write(entries.Count);
+
+    var offset = 0;
+    foreach (var entry in entries)
+    {
+        WriteSizedUtf8(writer, entry.Path);
+        writer.Write(offset);
+        writer.Write(entry.Bytes.Length);
+        offset = checked(offset + entry.Bytes.Length);
+    }
+
+    foreach (var entry in entries)
+    {
+        writer.Write(entry.Bytes);
+    }
+}
+
+static void WriteSizedUtf8(BinaryWriter writer, string value)
+{
+    var bytes = Encoding.UTF8.GetBytes(value);
+    writer.Write(bytes.Length);
+    writer.Write(bytes);
+}
+
+static void ValidateRealCatalog(string catalogRoot)
+{
+    var packagePaths = Directory
+        .EnumerateDirectories(catalogRoot, "*", SearchOption.TopDirectoryOnly)
+        .SelectMany(directory => Directory
+            .EnumerateFiles(directory, "*", SearchOption.TopDirectoryOnly)
+            .Where(path => string.Equals(
+                Path.GetFileName(path),
+                "scene.pkg",
+                StringComparison.OrdinalIgnoreCase)))
+        .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+        .ToArray();
+    Assert(packagePaths.Length > 0, "Real catalog does not contain scene.pkg files.");
+
+    var entryCount = 0;
+    var magics = new HashSet<string>(StringComparer.Ordinal);
+    foreach (var packagePath in packagePaths)
+    {
+        using var stream = new FileStream(
+            packagePath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            128 * 1024,
+            FileOptions.SequentialScan);
+        var package = SafePackageReader.Read(stream);
+        entryCount += package.Entries.Count;
+        magics.Add(package.Magic);
+    }
+
+    Console.WriteLine(
+        $"Real catalog parse passed: {packagePaths.Length} packages, {entryCount} entries, " +
+        $"magic {string.Join(", ", magics.Order())}.");
+}
+
 static void Assert(bool condition, string message)
 {
     if (!condition)
@@ -97,3 +380,20 @@ static byte[] GetPngBytes() => Convert.FromBase64String(
 
 static byte[] GetGifBytes() => Convert.FromBase64String(
     "R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==");
+
+sealed class InlineProgress<T>(Action<T> report) : IProgress<T>
+{
+    public void Report(T value) => report(value);
+}
+
+sealed class NoOpFolderPicker : IFolderPickerService
+{
+    public string? PickFolder(string title, string? initialPath = null) => null;
+}
+
+sealed class NoOpSystemFolderService : ISystemFolderService
+{
+    public void OpenFolder(string folderPath)
+    {
+    }
+}

@@ -20,6 +20,8 @@ internal sealed record LaunchOptions
 
     public bool ReducedMotion { get; init; }
 
+    public int? ScrollIndex { get; init; }
+
     public static LaunchOptions Parse(IReadOnlyList<string> args)
     {
         string? source = null;
@@ -30,6 +32,7 @@ internal sealed record LaunchOptions
         double? height = null;
         var startScan = false;
         var reducedMotion = false;
+        int? scrollIndex = null;
 
         for (var index = 0; index < args.Count; index++)
         {
@@ -68,6 +71,17 @@ internal sealed record LaunchOptions
                 case "--reduced-motion":
                     reducedMotion = true;
                     break;
+                case "--scroll-index":
+                    if (int.TryParse(
+                            NextValue(),
+                            NumberStyles.Integer,
+                            CultureInfo.InvariantCulture,
+                            out var parsedScrollIndex)
+                        && parsedScrollIndex >= 0)
+                    {
+                        scrollIndex = parsedScrollIndex;
+                    }
+                    break;
             }
         }
 
@@ -80,7 +94,8 @@ internal sealed record LaunchOptions
             Width = width,
             Height = height,
             StartScan = startScan,
-            ReducedMotion = reducedMotion
+            ReducedMotion = reducedMotion,
+            ScrollIndex = scrollIndex
         };
     }
 }

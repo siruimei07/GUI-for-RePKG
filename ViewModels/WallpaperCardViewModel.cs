@@ -29,6 +29,14 @@ public sealed class WallpaperCardViewModel
 
     public bool HasPreview => Record.HasPreview;
 
+    public bool HasScenePackage => Record.HasScenePackage;
+
+    public string PackageStatus => HasScenePackage ? "PKG READY" : "NO PKG";
+
+    public string PackageStatusDetail => HasScenePackage
+        ? $"已发现 scene.pkg\n{Record.ScenePackagePath}"
+        : "扫描时未发现 scene.pkg；批量解包会跳过此项目。";
+
     public int WarningCount => Record.Warnings.Count;
 
     public bool HasWarnings => WarningCount > 0;

@@ -2,7 +2,6 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:conv="clr-namespace:WallpaperField.Converters"
-        xmlns:controls="clr-namespace:WallpaperField.Controls"
         Title="Wallpaper Field"
         Width="1480"
         Height="900"
@@ -52,9 +51,9 @@
         </DrawingBrush>
 
         <DataTemplate x:Key="WallpaperCardTemplate">
-            <Button Width="318"
-                    Height="300"
-                    Margin="0,0,16,16"
+            <Button Height="154"
+                    MinHeight="0"
+                    Margin="0,0,8,12"
                     Padding="0"
                     HorizontalContentAlignment="Stretch"
                     VerticalContentAlignment="Stretch"
@@ -62,20 +61,20 @@
                     Command="{Binding DataContext.OpenFolderCommand, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
                     CommandParameter="{Binding OutputFolder}"
                     AutomationProperties.Name="{Binding Title, StringFormat=打开输出目录：{0}}"
-                    ToolTip="打开对应输出目录"
-                    Loaded="WallpaperCard_Loaded">
+                    ToolTip="打开对应输出目录">
                 <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="178" />
-                        <RowDefinition Height="*" />
-                    </Grid.RowDefinitions>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="236" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="66" />
+                    </Grid.ColumnDefinitions>
 
-                    <Border Grid.Row="0"
+                    <Border Grid.Column="0"
                             Background="{DynamicResource InkSoftBrush}"
                             ClipToBounds="True"
-                            CornerRadius="15,15,3,3">
+                            CornerRadius="15,3,3,15">
                         <Grid>
-                            <Image Source="{Binding PreviewPath, Converter={StaticResource PreviewImageConverter}}"
+                            <Image Source="{Binding PreviewPath, Converter={StaticResource PreviewImageConverter}, IsAsync=True}"
                                    Stretch="UniformToFill"
                                    Panel.ZIndex="1"
                                    RenderOptions.BitmapScalingMode="HighQuality">
@@ -154,18 +153,45 @@
                                 </StackPanel>
                             </Border>
 
-                            <Border Width="38"
-                                    Height="6"
-                                    Margin="0,0,12,12"
-                                    HorizontalAlignment="Right"
+                            <Border Margin="12,0,0,10"
+                                    Padding="9,5"
+                                    HorizontalAlignment="Left"
                                     VerticalAlignment="Bottom"
                                     Panel.ZIndex="2"
-                                    Background="{DynamicResource SignalBrush}"
-                                    CornerRadius="3" />
+                                    CornerRadius="9"
+                                    ToolTip="{Binding PackageStatusDetail}">
+                                <Border.Style>
+                                    <Style TargetType="Border">
+                                        <Setter Property="Background" Value="#DFF2F2F0" />
+                                        <Setter Property="BorderBrush" Value="#40191919" />
+                                        <Setter Property="BorderThickness" Value="1" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding HasScenePackage}" Value="True">
+                                                <Setter Property="Background" Value="{DynamicResource SignalBrush}" />
+                                                <Setter Property="BorderThickness" Value="0" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Border.Style>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Margin="0,0,6,0"
+                                               VerticalAlignment="Center"
+                                               FontFamily="Segoe Fluent Icons"
+                                               FontSize="10"
+                                               Foreground="{DynamicResource InkBrush}"
+                                               Text="&#xE7C5;" />
+                                    <TextBlock VerticalAlignment="Center"
+                                               FontFamily="Consolas"
+                                               FontSize="10"
+                                               FontWeight="Bold"
+                                               Foreground="{DynamicResource InkBrush}"
+                                               Text="{Binding PackageStatus}" />
+                                </StackPanel>
+                            </Border>
                         </Grid>
                     </Border>
 
-                    <Grid Grid.Row="1" Margin="16,14,16,13">
+                    <Grid Grid.Column="1" Margin="20,17,18,15">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="*" />
@@ -174,17 +200,16 @@
                         <TextBlock Grid.Row="0"
                                    Style="{StaticResource TechnicalLabel}"
                                    Foreground="{DynamicResource TextMutedBrush}"
-                                   Text="WALLPAPER / PREVIEW RECORD" />
+                                   Text="WALLPAPER / PACKAGE RECORD" />
                         <TextBlock Grid.Row="1"
-                                   Margin="0,7,32,4"
+                                   Margin="0,8,0,5"
                                    VerticalAlignment="Top"
-                                   FontSize="17"
+                                   FontSize="18"
                                    FontWeight="SemiBold"
                                    Foreground="{DynamicResource InkBrush}"
                                    Text="{Binding Title}"
                                    TextTrimming="CharacterEllipsis"
-                                   TextWrapping="Wrap"
-                                   MaxHeight="46" />
+                                   TextWrapping="NoWrap" />
                         <Grid Grid.Row="2">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
@@ -195,28 +220,40 @@
                                            Foreground="{DynamicResource TextMutedBrush}"
                                            Text="SOURCE FOLDER" />
                                 <TextBlock Margin="0,3,0,0"
-                                           MaxWidth="230"
                                            FontFamily="Consolas"
                                            FontSize="11"
                                            Foreground="{DynamicResource InkBrush}"
                                            Text="{Binding FolderName}"
                                            TextTrimming="CharacterEllipsis" />
                             </StackPanel>
-                            <Border Grid.Column="1"
-                                    Width="32"
-                                    Height="32"
-                                    VerticalAlignment="Bottom"
-                                    Background="{DynamicResource InkBrush}"
-                                    CornerRadius="16">
-                                <TextBlock HorizontalAlignment="Center"
-                                           VerticalAlignment="Center"
-                                           FontFamily="Segoe Fluent Icons"
-                                           FontSize="12"
-                                           Foreground="White"
-                                           Text="&#xE72A;" />
-                            </Border>
+                            <StackPanel Grid.Column="1" Margin="28,0,0,0">
+                                <TextBlock Style="{StaticResource TechnicalLabel}"
+                                           Foreground="{DynamicResource TextMutedBrush}"
+                                           Text="UNPACK STATE" />
+                                <TextBlock Margin="0,3,0,0"
+                                           HorizontalAlignment="Right"
+                                           FontFamily="Consolas"
+                                           FontSize="11"
+                                           FontWeight="Bold"
+                                           Text="{Binding PackageStatus}" />
+                            </StackPanel>
                         </Grid>
                     </Grid>
+
+                    <Border Grid.Column="2"
+                            Width="38"
+                            Height="38"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center"
+                            Background="{DynamicResource InkBrush}"
+                            CornerRadius="19">
+                        <TextBlock HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"
+                                   FontFamily="Segoe Fluent Icons"
+                                   FontSize="13"
+                                   Foreground="White"
+                                   Text="&#xE72A;" />
+                    </Border>
                 </Grid>
             </Button>
         </DataTemplate>
@@ -648,6 +685,8 @@
                                             <ColumnDefinition Width="Auto" />
                                             <ColumnDefinition Width="Auto" />
                                             <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
                                         </Grid.ColumnDefinitions>
                                         <StackPanel Width="90">
                                             <TextBlock Style="{StaticResource TechnicalLabel}" Text="SCANNED" />
@@ -657,6 +696,11 @@
                                         <StackPanel Grid.Column="2" Width="90">
                                             <TextBlock Style="{StaticResource TechnicalLabel}" Text="NO PREVIEW" />
                                             <TextBlock Margin="0,4,0,0" FontFamily="Arial Narrow" FontSize="29" FontWeight="Bold" Text="{Binding MissingPreviewCount, StringFormat={}{0:00}}" />
+                                        </StackPanel>
+                                        <Border Grid.Column="3" Width="1" Height="42" Margin="18,0" Background="{DynamicResource BorderBrush}" />
+                                        <StackPanel Grid.Column="4" Width="90">
+                                            <TextBlock Style="{StaticResource TechnicalLabel}" Text="PKG READY" />
+                                            <TextBlock Margin="0,4,0,0" FontFamily="Arial Narrow" FontSize="29" FontWeight="Bold" Text="{Binding PackageReadyCount, StringFormat={}{0:00}}" />
                                         </StackPanel>
                                     </Grid>
                                 </Grid>
@@ -738,10 +782,12 @@
                                                     MinWidth="152"
                                                     Margin="12,0,0,0"
                                                     Style="{StaticResource SecondaryButton}"
-                                                    Command="{Binding UnpackCommand}">
+                                                    Command="{Binding UnpackCommand}"
+                                                    AutomationProperties.Name="解包所有包含 scene.pkg 的扫描项目"
+                                                    ToolTip="{Binding UnpackToolTip}">
                                                 <StackPanel Orientation="Horizontal">
                                                     <TextBlock Margin="0,0,9,0" FontFamily="Segoe Fluent Icons" Text="&#xE7B8;" />
-                                                    <TextBlock Text="开始解包" />
+                                                    <TextBlock Text="{Binding UnpackButtonText}" />
                                                 </StackPanel>
                                             </Button>
                                             <StackPanel Grid.Column="2" Margin="24,0,0,0" VerticalAlignment="Center">
@@ -818,13 +864,17 @@
                                              ScrollViewer.CanContentScroll="True"
                                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                              ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                             ScrollViewer.IsDeferredScrollingEnabled="False"
                                              VirtualizingPanel.IsVirtualizing="True"
-                                             VirtualizingPanel.VirtualizationMode="Recycling">
+                                             VirtualizingPanel.VirtualizationMode="Recycling"
+                                             VirtualizingPanel.ScrollUnit="Pixel"
+                                             VirtualizingPanel.CacheLength="1,2"
+                                             VirtualizingPanel.CacheLengthUnit="Page">
                                         <ListBox.ItemContainerStyle>
                                             <Style TargetType="ListBoxItem">
                                                 <Setter Property="Padding" Value="0" />
                                                 <Setter Property="Margin" Value="0" />
-                                                <Setter Property="HorizontalContentAlignment" Value="Left" />
+                                                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
                                                 <Setter Property="IsTabStop" Value="False" />
                                                 <Setter Property="Template">
                                                     <Setter.Value>
@@ -837,7 +887,7 @@
                                         </ListBox.ItemContainerStyle>
                                         <ListBox.ItemsPanel>
                                             <ItemsPanelTemplate>
-                                                <controls:VirtualizingWrapPanel ItemWidth="334" ItemHeight="316" />
+                                                <VirtualizingStackPanel />
                                             </ItemsPanelTemplate>
                                         </ListBox.ItemsPanel>
                                     </ListBox>
@@ -993,13 +1043,17 @@
                                              ScrollViewer.CanContentScroll="True"
                                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                              ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                             ScrollViewer.IsDeferredScrollingEnabled="False"
                                              VirtualizingPanel.IsVirtualizing="True"
-                                             VirtualizingPanel.VirtualizationMode="Recycling">
+                                             VirtualizingPanel.VirtualizationMode="Recycling"
+                                             VirtualizingPanel.ScrollUnit="Pixel"
+                                             VirtualizingPanel.CacheLength="1,2"
+                                             VirtualizingPanel.CacheLengthUnit="Page">
                                         <ListBox.ItemContainerStyle>
                                             <Style TargetType="ListBoxItem">
                                                 <Setter Property="Padding" Value="0" />
                                                 <Setter Property="Margin" Value="0" />
-                                                <Setter Property="HorizontalContentAlignment" Value="Left" />
+                                                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
                                                 <Setter Property="IsTabStop" Value="False" />
                                                 <Setter Property="Template">
                                                     <Setter.Value>
@@ -1012,7 +1066,7 @@
                                         </ListBox.ItemContainerStyle>
                                         <ListBox.ItemsPanel>
                                             <ItemsPanelTemplate>
-                                                <controls:VirtualizingWrapPanel ItemWidth="334" ItemHeight="316" />
+                                                <VirtualizingStackPanel />
                                             </ItemsPanelTemplate>
                                         </ListBox.ItemsPanel>
                                     </ListBox>

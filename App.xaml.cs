@@ -45,10 +45,10 @@ public partial class App : Application
                 window.Height = Math.Max(window.MinHeight, height);
             }
 
-            window.SetReducedMotion(options.ReducedMotion || options.SnapshotPath is not null);
+            window.SetReducedMotion(options.ReducedMotion);
             if (!string.IsNullOrWhiteSpace(options.SnapshotPath))
             {
-                window.ConfigureSnapshot(options.SnapshotPath);
+                window.ConfigureSnapshot(options.SnapshotPath, scrollIndex: options.ScrollIndex);
             }
 
             window.Closed += (_, _) => viewModel.CancelPendingWork();

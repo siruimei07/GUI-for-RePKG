@@ -9,6 +9,7 @@ using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using WallpaperField.Infrastructure;
 using WallpaperField.ViewModels;
 
 namespace WallpaperField;
@@ -19,9 +20,9 @@ public partial class MainWindow : Window
     private const int DwmRoundCorners = 2;
 
     private bool _motionEnabled = SystemParameters.ClientAreaAnimation;
-    private int _cardRevealIndex;
     private string? _snapshotPath;
     private int _snapshotDelayMilliseconds = 1500;
+    private int? _snapshotScrollIndex;
 
     public MainWindow()
     {
@@ -32,10 +33,14 @@ public partial class MainWindow : Window
 
     private ShellViewModel? ViewModel => DataContext as ShellViewModel;
 
-    public void ConfigureSnapshot(string path, int delayMilliseconds = 1500)
+    public void ConfigureSnapshot(
+        string path,
+        int delayMilliseconds = 1500,
+        int? scrollIndex = null)
     {
         _snapshotPath = Path.GetFullPath(path);
         _snapshotDelayMilliseconds = Math.Max(250, delayMilliseconds);
+        _snapshotScrollIndex = scrollIndex is >= 0 ? scrollIndex : null;
     }
 
     public void SetReducedMotion(bool reduceMotion)
@@ -76,7 +81,6 @@ public partial class MainWindow : Window
             or nameof(ShellViewModel.IsLibraryPage)
             or nameof(ShellViewModel.PageCode))
         {
-            _cardRevealIndex = 0;
             Dispatcher.BeginInvoke(AnimateCurrentPage, DispatcherPriority.Loaded);
         }
 
@@ -219,34 +223,6 @@ public partial class MainWindow : Window
             });
     }
 
-    private void WallpaperCard_Loaded(object sender, RoutedEventArgs e)
-    {
-        if (!_motionEnabled || sender is not FrameworkElement card)
-        {
-            return;
-        }
-
-        var delay = TimeSpan.FromMilliseconds(Math.Min((_cardRevealIndex++ % 10) * 42, 300));
-        card.Opacity = 0;
-        var translate = new TranslateTransform(0, 14);
-        card.RenderTransform = translate;
-
-        card.BeginAnimation(
-            OpacityProperty,
-            new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(330))
-            {
-                BeginTime = delay,
-                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
-            });
-        translate.BeginAnimation(
-            TranslateTransform.YProperty,
-            new DoubleAnimation(14, 0, TimeSpan.FromMilliseconds(440))
-            {
-                BeginTime = delay,
-                EasingFunction = new QuarticEase { EasingMode = EasingMode.EaseOut }
-            });
-    }
-
     private void Window_SizeChanged(object sender, SizeChangedEventArgs e)
     {
         if (IsInitialized)
@@ -334,6 +310,12 @@ public partial class MainWindow : Window
     private async Task CaptureSnapshotAndExitAsync(string path, int delayMilliseconds)
     {
         await Task.Delay(delayMilliseconds);
+        if (!await PositionSnapshotListAsync())
+        {
+            AppLog.Write("Snapshot validation failed; no image was written.");
+            Application.Current.Shutdown(-2);
+            return;
+        }
         await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
 
         var dpi = VisualTreeHelper.GetDpi(this);
@@ -361,6 +343,100 @@ public partial class MainWindow : Window
         }
 
         Application.Current.Shutdown();
+    }
+
+    private async Task<bool> PositionSnapshotListAsync()
+    {
+        if (_snapshotScrollIndex is not { } requestedIndex)
+        {
+            return true;
+        }
+
+        var deadline = DateTime.UtcNow.AddSeconds(12);
+        ListBox targetList;
+        do
+        {
+            targetList = ViewModel?.IsLibraryPage == true
+                ? LibraryResultsList
+                : ScanResultsList;
+            if (targetList.Items.Count > requestedIndex && ViewModel?.IsBusy != true)
+            {
+                break;
+            }
+
+            await Task.Delay(100);
+        }
+        while (DateTime.UtcNow < deadline);
+
+        if (targetList.Items.Count == 0)
+        {
+            AppLog.Write($"Snapshot scroll target unavailable: list is empty (requested {requestedIndex}).");
+            return false;
+        }
+
+        var index = Math.Clamp(requestedIndex, 0, targetList.Items.Count - 1);
+        targetList.ScrollIntoView(targetList.Items[index]);
+        targetList.UpdateLayout();
+        await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.Render);
+
+        if (targetList.ItemContainerGenerator.ContainerFromIndex(index) is FrameworkElement container)
+        {
+            container.BringIntoView();
+            targetList.UpdateLayout();
+            await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.Render);
+
+            var previewVerified = true;
+            if (targetList.Items[index] is WallpaperCardViewModel { HasPreview: true })
+            {
+                previewVerified = false;
+                var previewDeadline = DateTime.UtcNow.AddSeconds(6);
+                while (DateTime.UtcNow < previewDeadline)
+                {
+                    var previewImage = FindVisualDescendant<Image>(container);
+                    if (previewImage?.Source is not null)
+                    {
+                        previewVerified = true;
+                        break;
+                    }
+
+                    await Task.Delay(50);
+                    await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.Render);
+                }
+            }
+
+            var validGeometry = container.Opacity > 0.99
+                                && container.ActualWidth > 0
+                                && container.ActualHeight > 0;
+            AppLog.Write(
+                $"Snapshot scroll target realized: index={index}, opacity={container.Opacity:0.###}, " +
+                $"size={container.ActualWidth:0.#}x{container.ActualHeight:0.#}, " +
+                $"previewLoaded={previewVerified}.");
+            return validGeometry && previewVerified;
+        }
+
+        AppLog.Write($"Snapshot scroll target was not realized: index={index}.");
+        return false;
+    }
+
+    private static T? FindVisualDescendant<T>(DependencyObject parent)
+        where T : DependencyObject
+    {
+        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(parent); index++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, index);
+            if (child is T match)
+            {
+                return match;
+            }
+
+            var descendant = FindVisualDescendant<T>(child);
+            if (descendant is not null)
+            {
+                return descendant;
+            }
+        }
+
+        return null;
     }
 
     [DllImport("dwmapi.dll")]

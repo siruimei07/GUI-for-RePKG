@@ -19,6 +19,15 @@ public sealed record WallpaperRecord
 
     public string? PreviewFileName { get; init; }
 
+    /// <summary>
+    /// True when a direct child named scene.pkg was present during the scan.
+    /// This value is persisted so the UI can explain why an item is eligible
+    /// for unpacking without probing every source folder while scrolling.
+    /// </summary>
+    public bool HasScenePackage { get; init; }
+
+    public string? ScenePackagePath { get; init; }
+
     public bool UsedFolderNameAsWorkshopId { get; init; }
 
     public DateTimeOffset ScannedAtUtc { get; init; }
@@ -27,4 +36,9 @@ public sealed record WallpaperRecord
 
     [JsonIgnore]
     public bool HasPreview => !string.IsNullOrWhiteSpace(PreviewPath) && File.Exists(PreviewPath);
+
+    [JsonIgnore]
+    public bool IsScenePackageAvailable => HasScenePackage
+        && !string.IsNullOrWhiteSpace(ScenePackagePath)
+        && File.Exists(ScenePackagePath);
 }
