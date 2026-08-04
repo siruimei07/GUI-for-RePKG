@@ -38,6 +38,8 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
         var succeededCount = 0;
         var skippedCount = 0;
         var extractedEntryCount = 0;
+        var convertedTextureCount = 0;
+        var warnings = new List<WallpaperUnpackWarning>();
 
         ReportProgress(
             progress,
@@ -79,7 +81,7 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
 
             try
             {
-                var entryCount = await ExtractItemAsync(
+                var itemResult = await ExtractItemAsync(
                     item,
                     outputRoot,
                     (entryName, currentEntry, totalEntries) => ReportProgress(
@@ -96,7 +98,9 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
                         $"正在解包 {item.WorkshopId} · {currentEntry}/{totalEntries}"),
                     cancellationToken).ConfigureAwait(false);
 
-                extractedEntryCount += entryCount;
+                extractedEntryCount += itemResult.EntryCount;
+                convertedTextureCount += itemResult.ConvertedTextureCount;
+                warnings.AddRange(itemResult.Warnings);
                 succeededCount++;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -131,8 +135,11 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
                     : $"{item.WorkshopId} 解包完成。");
         }
 
+        var warningSuffix = warnings.Count == 0
+            ? string.Empty
+            : $"，{warnings.Count} 个 TEX 转换警告";
         var message = errors.Count == 0
-            ? $"解包完成：{succeededCount} 个成功，{skippedCount} 个无 PKG 项目已跳过。"
+            ? $"解包完成：{succeededCount} 个成功，转换 {convertedTextureCount} 个 TEX，{skippedCount} 个无 PKG 项目已跳过{warningSuffix}。"
             : $"解包完成：{succeededCount} 个成功，{skippedCount} 个跳过，{errors.Count} 个失败。";
 
         return new WallpaperUnpackResult
@@ -145,12 +152,14 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
             SkippedCount = skippedCount,
             FailedCount = errors.Count,
             ExtractedEntryCount = extractedEntryCount,
+            ConvertedTextureCount = convertedTextureCount,
             Message = message,
-            Errors = errors.ToArray()
+            Errors = errors.ToArray(),
+            Warnings = warnings.ToArray()
         };
     }
 
-    private static async Task<int> ExtractItemAsync(
+    private static async Task<ItemExtractionResult> ExtractItemAsync(
         WallpaperRecord item,
         string outputRoot,
         Action<string, int, int> entryProgress,
@@ -180,6 +189,8 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
             itemOutputDirectory,
             $"{StagingPrefix}{Guid.NewGuid():N}");
         var extractionPlan = BuildExtractionPlan(package, stagingDirectory);
+        var convertedTextureCount = 0;
+        var warnings = new List<WallpaperUnpackWarning>();
 
         try
         {
@@ -207,21 +218,55 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
                     packageStream.Seek(
                         checked(package.DataStart + plannedEntry.Entry.DataOffset),
                         SeekOrigin.Begin);
-                    await using var outputStream = new FileStream(
-                        plannedEntry.OutputPath,
-                        FileMode.CreateNew,
-                        FileAccess.Write,
-                        FileShare.None,
-                        CopyBufferSize,
-                        FileOptions.Asynchronous | FileOptions.SequentialScan);
+                    await using (var outputStream = new FileStream(
+                                     plannedEntry.OutputPath,
+                                     FileMode.CreateNew,
+                                     FileAccess.Write,
+                                     FileShare.None,
+                                     CopyBufferSize,
+                                     FileOptions.Asynchronous | FileOptions.SequentialScan))
+                    {
+                        await CopyExactlyAsync(
+                            packageStream,
+                            outputStream,
+                            plannedEntry.Entry.DataLength,
+                            buffer,
+                            cancellationToken).ConfigureAwait(false);
+                        await outputStream.FlushAsync(cancellationToken).ConfigureAwait(false);
+                    }
 
-                    await CopyExactlyAsync(
-                        packageStream,
-                        outputStream,
-                        plannedEntry.Entry.DataLength,
-                        buffer,
-                        cancellationToken).ConfigureAwait(false);
-                    await outputStream.FlushAsync(cancellationToken).ConfigureAwait(false);
+                    if (string.Equals(
+                            Path.GetExtension(plannedEntry.OutputPath),
+                            ".tex",
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        try
+                        {
+                            _ = await Task.Run(
+                                    () => RePkgTextureConverter.Convert(plannedEntry.OutputPath),
+                                    cancellationToken)
+                                .ConfigureAwait(false);
+                            convertedTextureCount++;
+                        }
+                        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                        {
+                            throw;
+                        }
+                        catch (Exception exception)
+                        {
+                            warnings.Add(new WallpaperUnpackWarning
+                            {
+                                WorkshopId = item.WorkshopId,
+                                EntryPath = plannedEntry.Entry.FullPath,
+                                Message = exception.Message,
+                                ExceptionType = exception.GetType().Name
+                            });
+                        }
+
+                        cancellationToken.ThrowIfCancellationRequested();
+                    }
+
                     entryProgress(plannedEntry.Entry.FullPath, index + 1, extractionPlan.Count);
                 }
             }
@@ -241,13 +286,19 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
                     PackageLength = packageInfo.Length,
                     PackageLastWriteTimeUtc = packageInfo.LastWriteTimeUtc,
                     EntryCount = extractionPlan.Count,
+                    ConvertedTextureCount = convertedTextureCount,
+                    TextureWarningCount = warnings.Count,
+                    TextureWarnings = warnings.ToArray(),
                     CompletedAtUtc = DateTimeOffset.UtcNow
                 },
                 cancellationToken).ConfigureAwait(false);
 
             cancellationToken.ThrowIfCancellationRequested();
             CommitStagingDirectory(stagingDirectory, itemOutputDirectory);
-            return extractionPlan.Count;
+            return new ItemExtractionResult(
+                extractionPlan.Count,
+                convertedTextureCount,
+                warnings.ToArray());
         }
         finally
         {
@@ -558,9 +609,14 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
 
     private sealed record PlannedEntry(SafePackageEntry Entry, string OutputPath);
 
+    private sealed record ItemExtractionResult(
+        int EntryCount,
+        int ConvertedTextureCount,
+        IReadOnlyList<WallpaperUnpackWarning> Warnings);
+
     private sealed record UnpackManifest
     {
-        public int SchemaVersion { get; init; } = 1;
+        public int SchemaVersion { get; init; } = 2;
 
         public string Engine { get; init; } = "RePKG-compatible safe extractor";
 
@@ -575,6 +631,13 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
         public DateTime PackageLastWriteTimeUtc { get; init; }
 
         public int EntryCount { get; init; }
+
+        public int ConvertedTextureCount { get; init; }
+
+        public int TextureWarningCount { get; init; }
+
+        public IReadOnlyList<WallpaperUnpackWarning> TextureWarnings { get; init; }
+            = Array.Empty<WallpaperUnpackWarning>();
 
         public DateTimeOffset CompletedAtUtc { get; init; }
     }

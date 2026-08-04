@@ -14,9 +14,14 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Remove="tests\**\*.cs" />
+    <Compile Remove="ThirdParty\RePKG\Source\**\*.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="ThirdParty\RePKG\Source\RePKG.Application\RePKG.Application.csproj" />
   </ItemGroup>
   <ItemGroup>
     <None Update="THIRD-PARTY-NOTICES.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Update="ThirdParty\RePKG\LICENSE.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Update="ThirdParty\RePKG\THIRD-PARTY-NOTICES.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

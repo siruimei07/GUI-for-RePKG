@@ -14,7 +14,7 @@
 - 扫描时大小写不敏感地检测每个项目直接子级的 `scene.pkg`，并把可解包状态与完整路径写入元数据和根索引。
 - 输出库递归读取 `metadata.json`，但不会进入解包产物目录；点击卡片在文件管理器中打开对应输出目录。
 - “开始解包”会仅处理扫描时标记了 `scene.pkg` 的项目，其余项目直接跳过；每个包写入 `<workshopid>/unpacked/`。
-- 解包后端基于 MIT 许可的 RePKG 0.4.0 PKG 格式读取源码，加入流式复制、取消、原子 staging、范围校验、路径穿越与重解析点防护。
+- 解包后端基于 MIT 许可的 RePKG 0.4.0：安全流式释放原始 PKG 条目，并执行默认 TEX→图片与 `.tex-json` 后处理；支持取消、原子 staging、范围校验、路径穿越与重解析点防护。
 - 大图库使用 WPF 内置回收式纵向虚拟化和限宽异步解码；卡片回收不再重复执行透明度归零动画。
 - 支持扫描取消、路径重叠保护、原子写入、键盘焦点、减弱环境动效和紧凑窗口重排。
 
@@ -27,11 +27,19 @@ dotnet build .\WallpaperField.csproj --configuration Release
 .\bin\Release\net10.0-windows\WallpaperField.exe
 ```
 
-项目不依赖第三方 NuGet 包，`NuGet.Config` 已禁用外部包源。
+给最终用户生成无需预装 .NET 的 Windows x64 单文件版本：
+
+```powershell
+.\build-release.cmd
+.\GUI_for_RePKG.exe
+```
+
+仓库根目录中的 `GUI_for_RePKG.exe` 是可直接双击的自包含发布文件；RePKG 与运行时依赖均已链接进该 EXE，不需要额外安装或启动 `RePKG.exe`。
 
 RePKG 归属与 MIT 许可见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) 与
-`ThirdParty/RePKG/LICENSE.txt`。本项目执行原始 PKG 解包，保留包内目录和
-`.tex` 文件；不包含 RePKG 的 TEX→图片转换依赖。
+`ThirdParty/RePKG/LICENSE.txt`。本项目保留包内目录和原始 `.tex`，并与 RePKG
+默认 `extract` 一样额外生成图片和 `.tex-json`。ImageSharp 使用与 RePKG 2.x
+API 兼容的安全修复版本 2.1.13。
 
 运行无第三方测试框架的端到端烟雾测试：
 
@@ -59,7 +67,10 @@ dotnet run --project .\tests\WallpaperField.SmokeTests\WallpaperField.SmokeTests
 │  └─ unpacked/
 │     ├─ .wallpaper-field-unpack.json
 │     ├─ scene.json
-│     └─ ...包内原始文件
+│     ├─ materials/example.tex
+│     ├─ materials/example.png
+│     ├─ materials/example.tex-json
+│     └─ ...其余包内原始文件与转换产物
 └─ 1864604777/
    ├─ metadata.json
    └─ preview.jpg

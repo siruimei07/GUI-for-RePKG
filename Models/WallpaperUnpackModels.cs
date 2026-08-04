@@ -45,6 +45,17 @@ public sealed record WallpaperUnpackError
     public string? ExceptionType { get; init; }
 }
 
+public sealed record WallpaperUnpackWarning
+{
+    public string WorkshopId { get; init; } = string.Empty;
+
+    public string EntryPath { get; init; } = string.Empty;
+
+    public string Message { get; init; } = string.Empty;
+
+    public string? ExceptionType { get; init; }
+}
+
 public sealed record WallpaperUnpackResult
 {
     public bool IsImplemented { get; init; } = true;
@@ -65,7 +76,11 @@ public sealed record WallpaperUnpackResult
 
     public int ExtractedEntryCount { get; init; }
 
+    public int ConvertedTextureCount { get; init; }
+
     public string Message { get; init; } = string.Empty;
 
     public IReadOnlyList<WallpaperUnpackError> Errors { get; init; } = Array.Empty<WallpaperUnpackError>();
+
+    public IReadOnlyList<WallpaperUnpackWarning> Warnings { get; init; } = Array.Empty<WallpaperUnpackWarning>();
 }

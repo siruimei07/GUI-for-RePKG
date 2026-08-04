@@ -713,12 +713,14 @@ public sealed class ShellViewModel : ObservableObject
             ProgressValue = 100;
             CurrentStage = result.FailedCount == 0 ? "COMPLETE" : "CHECK";
 
-            if (result.Errors.Count > 0)
+            if (result.Errors.Count > 0 || result.Warnings.Count > 0)
             {
                 ErrorText = string.Join(
                     Environment.NewLine,
-                    result.Errors.Select(error =>
-                        $"{error.WorkshopId}：{error.Message}"));
+                    result.Errors
+                        .Select(error => $"{error.WorkshopId}：{error.Message}")
+                        .Concat(result.Warnings.Select(warning =>
+                            $"{warning.WorkshopId} · {warning.EntryPath}：TEX 转换失败，已保留原文件（{warning.Message}）")));
                 SetStatus(result.Message, "Warning");
             }
             else

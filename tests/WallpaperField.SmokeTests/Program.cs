@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Security.Cryptography;
 using WallpaperField.Contracts;
 using WallpaperField.Models;
 using WallpaperField.Services;
@@ -218,7 +219,9 @@ try
         var realSourceDirectory = Path.GetDirectoryName(realPackagePath)
             ?? throw new InvalidOperationException("Real package path has no parent directory.");
         var realWorkshopId = Path.GetFileName(realSourceDirectory);
-        var realOutputRoot = Path.Combine(testRoot, "real-output");
+        var realOutputRoot = args.Length > 1
+            ? Path.GetFullPath(args[1])
+            : Path.Combine(testRoot, "real-output");
         var realOutputDirectory = Path.Combine(realOutputRoot, realWorkshopId);
         var realResult = await unpackService.UnpackAsync(new WallpaperUnpackRequest
         {
@@ -241,12 +244,27 @@ try
             "Real scene.pkg acceptance extraction failed.");
         Assert(realResult.ExtractedEntryCount > 0,
             "Real scene.pkg did not contain any extracted entries.");
+        Assert(realResult.Warnings.Count == 0,
+            "Real scene.pkg produced TEX conversion warnings.");
         Assert(Directory.EnumerateFiles(realUnpackDirectory, "*", SearchOption.AllDirectories).Count()
-               == realResult.ExtractedEntryCount + 1,
-            "Real scene.pkg output count differs from entries plus manifest.");
+               == realResult.ExtractedEntryCount + (realResult.ConvertedTextureCount * 2) + 1,
+            "Real scene.pkg output count differs from raw entries, TEX products, and manifest.");
+
+        if (realResult.ExtractedEntryCount == 12)
+        {
+            Assert(realResult.ConvertedTextureCount == 3,
+                "Expected the acceptance scene.pkg to convert three TEX files.");
+            var haruJpegPath = Path.Combine(realUnpackDirectory, "materials", "Haru.jpg");
+            Assert(File.Exists(haruJpegPath), "RePKG TEX conversion did not create Haru.jpg.");
+            var haruHash = Convert.ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(haruJpegPath)));
+            Assert(
+                haruHash == "9370A0810471B30FE5FBF38F7AEC46F83334B59C93965083DD403531323D1ECF",
+                "Haru.jpg does not match the RePKG acceptance hash.");
+        }
         Console.WriteLine(
             $"Real RePKG acceptance passed: {realWorkshopId}, " +
-            $"{realResult.ExtractedEntryCount} entries.");
+            $"{realResult.ExtractedEntryCount} entries, " +
+            $"{realResult.ConvertedTextureCount} TEX conversions.");
         }
     }
 

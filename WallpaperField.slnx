@@ -1,3 +1,6 @@
 <Solution>
+  <Project Path="ThirdParty\RePKG\Source\RePKG.Core\RePKG.Core.csproj" />
+  <Project Path="ThirdParty\RePKG\Source\RePKG.Application\RePKG.Application.csproj" />
   <Project Path="WallpaperField.csproj" />
+  <Project Path="tests\WallpaperField.SmokeTests\WallpaperField.SmokeTests.csproj" />
 </Solution>

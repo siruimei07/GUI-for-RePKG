@@ -10,7 +10,7 @@ Wallpaper Field 把界面状态、文件系统逻辑和系统交互分开，后�
 
 - `IWallpaperScanService`：接管源目录发现、元数据读取、预览处理与索引写入。返回 `ScanResult`，通过 `IProgress<ScanProgress>` 把真实进度送回 UI。
 - `IWallpaperLibraryService`：接管第二页的数据来源。可以从 SQLite、远端 API 或混合缓存返回 `WallpaperLibraryResult`。
-- `IWallpaperUnpackService`：当前注入 `RePkgWallpaperUnpackService`，负责安全流式解包 `scene.pkg`。如需接入远端队列或 TEX 转换器，保留取消令牌、逐项错误隔离和进度回调即可替换。
+- `IWallpaperUnpackService`：当前注入 `RePkgWallpaperUnpackService`，负责安全流式解包 `scene.pkg`，并调用内置 RePKG TEX 转图链路。如需接入远端队列或其他转换器，保留取消令牌、逐项错误隔离和进度回调即可替换。
 - `IFolderPickerService`：替换目录选择体验，例如加入最近目录或企业存储位置。
 - `ISystemFolderService`：替换卡片点击行为，例如打开应用内详情、调用自定义文件浏览器或记录审计事件。
 

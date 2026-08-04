@@ -1,12 +1,19 @@
 # Third-party notices
 
-Wallpaper Field contains a security-hardened, streaming adaptation of the PKG
-header reader and package format documented by **RePKG 0.4.0**, Copyright (c)
-2019 notscuffed.
+Wallpaper Field includes source from **RePKG 0.4.0**, Copyright (c) 2019
+notscuffed, to read Wallpaper Engine PKG archives and perform RePKG's default
+TEX conversion. The application also keeps its security-hardened streaming PKG
+extractor around that conversion pipeline.
 
-RePKG is licensed under the MIT License. The complete license is distributed
-at `ThirdParty/RePKG/LICENSE.txt` and is also retained in the adapted source
-file `ThirdParty/RePKG/SafePackageReader.cs`.
+RePKG is licensed under the MIT License. Its complete license is distributed at
+`ThirdParty/RePKG/LICENSE.txt`. The dependency and incorporated-code notices
+from the upstream RePKG repository are distributed at
+`ThirdParty/RePKG/THIRD-PARTY-NOTICES.txt`.
 
-Only the package-format reader is included. RePKG's CLI, TEX conversion code,
-and its NuGet dependencies are not bundled into Wallpaper Field.
+Wallpaper Field uses the same RePKG texture reader, LZ4 decompressor, image
+converter, and TEX metadata generator as the upstream command-line program.
+The runtime is linked into the desktop application; users do not need to
+install or launch a separate RePKG executable.
+
+For security maintenance, the bundled ImageSharp dependency is updated from
+RePKG's original 2.1.9 reference to the API-compatible patched 2.1.13 release.
