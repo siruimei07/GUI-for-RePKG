@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "generatedAtUtc": "2026-08-04T04:56:36.354406+00:00",
+  "items": [
+    {
+      "workshopId": "5000000000",
+      "title": "5000000000",
+      "sourceDirectory": "D:\\University of Toronto\\Project\\EndfieldMaximal.Frontend\\artifacts\\qa-source\\5000000000",
+      "outputDirectory": "D:\\University of Toronto\\Project\\EndfieldMaximal.Frontend\\artifacts\\qa-output\\5000000000",
+      "previewPath": "D:\\University of Toronto\\Project\\EndfieldMaximal.Frontend\\artifacts\\qa-output\\5000000000\\preview.png",
+      "previewFileName": "preview.png",
+      "usedFolderNameAsWorkshopId": true,
+      "scannedAtUtc": "2026-08-04T04:56:36.3005227+00:00",
+      "warnings": [
+        "project.json \u8BFB\u53D6\u5931\u8D25\uFF1AExpected depth to be zero at the end of the JSON payload. There is an open JSON object or array that should be closed. LineNumber: 1 | BytePositionInLine: 0.",
+        "\u7F3A\u5C11 title\uFF0C\u5DF2\u4F7F\u7528\u6587\u4EF6\u5939\u540D\u79F0\u4EE3\u66FF\u3002",
+        "\u7F3A\u5C11 workshopid\uFF0C\u5DF2\u4F7F\u7528\u6587\u4EF6\u5939\u540D\u79F0\u4F5C\u4E3A\u8BC6\u522B\u7801\u3002"
+      ]
+    },
+    {
+      "workshopId": "4000000000",
+      "title": "\u9759\u9ED8\u6863\u6848 \u00B7 No Preview",
+      "sourceDirectory": "D:\\University of Toronto\\Project\\EndfieldMaximal.Frontend\\artifacts\\qa-source\\4000000000",
+      "outputDirectory": "D:\\University of Toronto\\Project\\EndfieldMaximal.Frontend\\artifacts\\qa-output\\4000000000",
+      "previewPath": null,
+      "previewFileName": null,
+      "usedFolderNameAsWorkshopId": false,
+      "scannedAtUtc": "2026-08-04T04:56:36.2973882+00:00",
+      "warnings": [
+        "\u672A\u627E\u5230 preview.png\u3001preview.jpg\u3001preview.jpeg \u6216 preview.gif\u3002"
+      ]
+    },
+    {
+      "workshopId": "884307090",
+      "title": "\u5C71\u95F4\u5217\u8F66 \u00B7 Alpine Transit",
+      "sourceDirectory": "D:\\University of Toronto\\Project\\EndfieldMaximal.Frontend\\artifacts\\qa-source\\884307090",
+      "outputDirectory": "D:\\University of Toronto\\Project\\EndfieldMaximal.Frontend\\artifacts\\qa-output\\884307090",
+      "previewPath": "D:\\University of Toronto\\Project\\EndfieldMaximal.Frontend\\artifacts\\qa-output\\884307090\\preview.png",
+      "previewFileName": "preview.png",
+      "usedFolderNameAsWorkshopId": false,
+      "scannedAtUtc": "2026-08-04T04:56:36.3028944+00:00",
+      "warnings": []
+    },
+    {
+      "workshopId": "2390303351",
+      "title": "\u661F\u7A7A\u89C2\u6D4B\u7AD9 \u00B7 Orbital Watch",
+      "sourceDirectory": "D:\\University of Toronto\\Project\\EndfieldMaximal.Frontend\\artifacts\\qa-source\\2390303351",
+      "outputDirectory": "D:\\University of Toronto\\Project\\EndfieldMaximal.Frontend\\artifacts\\qa-output\\2390303351",
+      "previewPath": "D:\\University of Toronto\\Project\\EndfieldMaximal.Frontend\\artifacts\\qa-output\\2390303351\\preview.gif",
+      "previewFileName": "preview.gif",
+      "usedFolderNameAsWorkshopId": false,
+      "scannedAtUtc": "2026-08-04T04:56:36.2960084+00:00",
+      "warnings": []
+    },
+    {
+      "workshopId": "1864604777",
+      "title": "\u96E8\u591C\u57CE\u5E02 \u00B7 Neon Rain",
+      "sourceDirectory": "D:\\University of Toronto\\Project\\EndfieldMaximal.Frontend\\artifacts\\qa-source\\1864604777",
+      "outputDirectory": "D:\\University of Toronto\\Project\\EndfieldMaximal.Frontend\\artifacts\\qa-output\\1864604777",
+      "previewPath": "D:\\University of Toronto\\Project\\EndfieldMaximal.Frontend\\artifacts\\qa-output\\1864604777\\preview.jpg",
+      "previewFileName": "preview.jpg",
+      "usedFolderNameAsWorkshopId": false,
+      "scannedAtUtc": "2026-08-04T04:56:36.2712856+00:00",
+      "warnings": []
+    }
+  ]
+}

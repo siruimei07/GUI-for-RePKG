@@ -1,53 +1,91 @@
 using System.Windows;
 using System.Windows.Threading;
-using FieldStation.Composition;
-using FieldStation.Services;
-using FieldStation.ViewModels;
+using WallpaperField.Composition;
+using WallpaperField.Infrastructure;
 
-namespace FieldStation;
+namespace WallpaperField;
 
 public partial class App : Application
 {
-    protected override void OnStartup(StartupEventArgs e)
+    private void Application_Startup(object sender, StartupEventArgs e)
     {
-        base.OnStartup(e);
-        AppComposition.Configure();
+        AppLog.Write($"Startup begin. Args: {string.Join(' ', e.Args)}");
+        DispatcherUnhandledException += OnDispatcherUnhandledException;
 
-        var requestedState = VisualSnapshotService.TryGetOption(e.Args, "--state", out var stateValue)
-            ? stateValue
-            : "stable";
-        if (string.Equals(requestedState, "running", StringComparison.OrdinalIgnoreCase) &&
-            AppComposition.Backend is DemoOperationsBackend demoBackend)
+        try
         {
-            demoBackend.SetQaRunningState(0.72);
-        }
+            var options = LaunchOptions.Parse(e.Args);
+            AppLog.Write("Launch options parsed.");
+            var viewModel = AppComposition.CreateShellViewModel();
+            AppLog.Write("Application services composed.");
 
-        if (VisualSnapshotService.HasFlag(e.Args, "--reduced-motion") ||
-            VisualSnapshotService.TryGetOption(e.Args, "--snapshot", out _))
-        {
-            MotionSettings.IsReducedMotion = true;
-        }
-
-        var window = new MainWindow();
-        MainWindow = window;
-        if (VisualSnapshotService.TryGetOption(e.Args, "--page", out var page) &&
-            window.DataContext is ShellViewModel shell)
-        {
-            shell.NavigateTo(page);
-        }
-
-        window.Show();
-
-        if (VisualSnapshotService.TryGetSnapshotPath(e.Args, out var outputPath))
-        {
-            var width = VisualSnapshotService.GetIntOption(e.Args, "--width", 1600);
-            var height = VisualSnapshotService.GetIntOption(e.Args, "--height", 960);
-            Dispatcher.InvokeAsync(() =>
+            if (!string.IsNullOrWhiteSpace(options.SourceDirectory))
             {
-                window.PrepareQaState(requestedState);
-                VisualSnapshotService.Capture(window, outputPath, width, height);
-                Shutdown(0);
-            }, DispatcherPriority.ApplicationIdle);
+                viewModel.SourcePath = options.SourceDirectory;
+            }
+
+            if (!string.IsNullOrWhiteSpace(options.OutputDirectory))
+            {
+                viewModel.OutputPath = options.OutputDirectory;
+            }
+
+            var window = new MainWindow
+            {
+                DataContext = viewModel
+            };
+            AppLog.Write("Main window constructed.");
+
+            if (options.Width is { } width)
+            {
+                window.Width = Math.Max(window.MinWidth, width);
+            }
+
+            if (options.Height is { } height)
+            {
+                window.Height = Math.Max(window.MinHeight, height);
+            }
+
+            window.SetReducedMotion(options.ReducedMotion || options.SnapshotPath is not null);
+            if (!string.IsNullOrWhiteSpace(options.SnapshotPath))
+            {
+                window.ConfigureSnapshot(options.SnapshotPath);
+            }
+
+            window.Closed += (_, _) => viewModel.CancelPendingWork();
+            MainWindow = window;
+            window.Show();
+            AppLog.Write("Main window shown.");
+
+            window.Dispatcher.BeginInvoke(() =>
+            {
+                if (options.Page is "library" or "output" or "02")
+                {
+                    viewModel.NavigateTo("LIBRARY");
+                }
+
+                if (options.StartScan && viewModel.ScanCommand.CanExecute(null))
+                {
+                    viewModel.ScanCommand.Execute(null);
+                }
+            }, DispatcherPriority.Loaded);
         }
+        catch (Exception exception)
+        {
+            AppLog.Write($"Startup failed: {exception}");
+            Shutdown(-1);
+        }
+    }
+
+    private static void OnDispatcherUnhandledException(
+        object sender,
+        DispatcherUnhandledExceptionEventArgs e)
+    {
+        AppLog.Write($"Unhandled UI exception: {e.Exception}");
+        MessageBox.Show(
+            $"Wallpaper Field 遇到未处理的问题：\n\n{e.Exception.Message}",
+            "Wallpaper Field",
+            MessageBoxButton.OK,
+            MessageBoxImage.Error);
+        e.Handled = true;
     }
 }

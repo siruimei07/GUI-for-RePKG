@@ -1,125 +1,67 @@
-# FIELD STATION / Maximal Frontend
+# Wallpaper Field
 
-一个原创、可离线构建的 C# / .NET 10 / WPF 软件前端。视觉契约为：
+一个纯 C# / WPF 的 Wallpaper Engine 本地壁纸索引工具。界面采用原创的 Endfield-inspired 白、炭黑、信号黄技术现场语言；没有打包官方徽标、角色图、字体或生产资源。
 
-- Family：`endfield`
-- Depth：`4 / maximal / 极繁`
-- Evidence pattern：浅色纵向 rail、炭黑工具坞、信号黄动作、分段舞台、超大索引、方向性擦除
-- Product task：选择工作计划、启动或停止流程、检查拓扑、资产和真实报告数据
+## 已实现
 
-本工程是 clean-room 的 Hypergryph-inspired 实现，没有复制或分发游戏 Logo、角色、美术、
-生产代码、网页资源或专有字体。
+- 两页桌面前端：`扫描中心` 与 `输出壁纸库`。
+- 壁纸根目录、输出目录均可直接输入或通过系统目录选择器选择。
+- 扫描壁纸根目录的所有直接子文件夹。
+- 大小写不敏感地读取 `project.json` 的 `title`、`workshopid`；支持字符串或数字 ID。
+- 识别 `preview.png`、`.jpg`、`.jpeg`、`.gif`，并复制到独立的 `<输出目录>/<workshopid>/`。
+- 缺少或损坏的元数据会安全回退并在卡片/提示栏显示警告；单项失败不终止整个扫描。
+- 生成逐项 `metadata.json`、根级 `wallpaper-index.json` 与 `workshop-ids.txt`。
+- 输出库递归读取 `metadata.json`；点击卡片在文件管理器中打开对应输出目录。
+- 解包按钮和服务契约已经预留，当前版本明确不执行解包。
+- 大图库使用回收式虚拟化布局和限宽解码，不会一次创建、解码全部预览卡片。
+- 支持扫描取消、路径重叠保护、原子写入、键盘焦点、减弱环境动效和紧凑窗口重排。
 
-## 运行
+## 构建与运行
 
-```powershell
-dotnet restore .\FieldStation.Maximal.csproj --configfile .\NuGet.Config
-dotnet run --project .\FieldStation.Maximal.csproj
-```
-
-没有第三方 NuGet 依赖。`NuGet.Config` 清空外部包源，因此工程可以离线还原和构建。
-
-## 当前功能
-
-- 五个独立导演的模式：总控、拓扑、资产、报告、扩展。
-- 1600×960 桌面 rail；小于 1000px 时重排为底部导航。
-- 黄色页面擦除、页面方向揭示、网格漂移、校准环旋转、在线信标呼吸、ticker 漂移。
-- 一键“静态模式”，同时停止持续动效并将页面揭示降级到最终状态。
-- 模拟后端可真实推进任务和单元进度，但不会访问用户文件。
-- 搜索、筛选、节点选择、资产选择、计划选择、启动和停止命令。
-- `IOperationsBackend`、`RegionRegistry`、`PageRegistry` 三条互相独立的扩展边界。
-- 非持久化 QA 入口，可复现稳定、运行中和页面过渡状态。
-
-## 后端接入
-
-实现 [Contracts/IOperationsBackend.cs](Contracts/IOperationsBackend.cs)：
-
-```csharp
-public sealed class ProductionBackend : IOperationsBackend
-{
-    public string ProviderName => "PRODUCTION";
-    public event EventHandler<OperationsSnapshot>? SnapshotChanged;
-
-    public Task<OperationsSnapshot> GetSnapshotAsync(CancellationToken token = default)
-        => LoadYourSnapshotAsync(token);
-
-    public Task<OperationResult> StartCycleAsync(string planId, CancellationToken token = default)
-        => StartYourRealOperationAsync(planId, token);
-
-    public Task<OperationResult> StopCycleAsync(CancellationToken token = default)
-        => StopYourRealOperationAsync(token);
-}
-```
-
-然后只修改 [Composition/AppComposition.cs](Composition/AppComposition.cs)：
-
-```csharp
-private static IOperationsBackend CreateBackend()
-    => new ProductionBackend();
-```
-
-Views 和 ViewModels 不需要知道真实后端的具体类型。
-
-## 局部 UI 扩展
-
-```csharp
-RegionRegistry.Default.Register(
-    "command.secondary",
-    () => new YourHealthDashboard());
-```
-
-可用 Region key：
-
-| Key | 位置 |
-|---|---|
-| `command.secondary` | 总控右下次级仪表 |
-| `topology.detail` | 拓扑节点 dossier |
-| `archive.preview` | 资产预览器 |
-| `reports.annotation` | 报告注释与操作 |
-| `extensions.canvas` | 扩展页完整画布 |
-
-## 整页扩展
-
-```csharp
-PageRegistry.Default.Register(new PageContribution(
-    "database",
-    "06",
-    "数据库",
-    "DATABASE",
-    () => new DatabasePage()));
-```
-
-注册发生在 `AppComposition.Configure()`，`ShellViewModel` 会自动把页面加入桌面 rail 和底部导航。
-
-## 视觉 QA
-
-稳定截图：
+要求 Windows 与 .NET 10 SDK。
 
 ```powershell
-.\bin\Debug\net10.0-windows\FieldStation.Maximal.exe `
-  --page COMMAND --width 1600 --height 960 `
-  --snapshot artifacts\command.png
+dotnet build .\WallpaperField.csproj --configuration Release
+.\bin\Release\net10.0-windows\WallpaperField.exe
 ```
 
-运行状态：
+项目不依赖第三方 NuGet 包，`NuGet.Config` 已禁用外部包源。
+
+运行无第三方测试框架的端到端烟雾测试：
 
 ```powershell
-.\bin\Debug\net10.0-windows\FieldStation.Maximal.exe `
-  --page COMMAND --state running `
-  --snapshot artifacts\running.png
+dotnet run --project .\tests\WallpaperField.SmokeTests\WallpaperField.SmokeTests.csproj --configuration Release
 ```
 
-过渡中间态：
+## 输出结构
 
-```powershell
-.\bin\Debug\net10.0-windows\FieldStation.Maximal.exe `
-  --page ARCHIVE --state transition `
-  --snapshot artifacts\transition.png
+```text
+用户选择的输出目录/
+├─ wallpaper-index.json
+├─ workshop-ids.txt
+├─ 884307090/
+│  ├─ metadata.json
+│  └─ preview.png
+└─ 1864604777/
+   ├─ metadata.json
+   └─ preview.jpg
 ```
 
-快照模式自动启用减少动态效果。它使用纯内存 Demo backend，不执行文件写入、删除或持久化。
+源目录和输出目录不能相同，也不能互相包含，避免扫描源被输出文件污染。GIF 会原样复制；WPF 卡片使用其静态首帧作为轻量预览。
 
-## 继续阅读
+## 后端扩展
 
-- [docs/CODE_GUIDE.md](docs/CODE_GUIDE.md)：每一个手写文件和关键代码的含义。
-- [docs/BUILD_ORDER.md](docs/BUILD_ORDER.md)：从空目录开始逐步编写同类软件的顺序。
+所有系统能力均通过 `Contracts/` 下的接口注入。替换实现只需要在 `Composition/AppComposition.cs` 修改一次组合关系；无需改动页面 XAML。具体扩展说明见 [docs/EXTENDING.md](docs/EXTENDING.md)。
+
+## QA 启动参数
+
+程序保留了非持久化的视觉验证入口：
+
+```text
+--source <目录> --output <目录> --scan
+--page scan|library
+--snapshot <png路径> --width <像素> --height <像素>
+--reduced-motion
+```
+
+这些参数仅便于自动验收，不改变正常用户流程。

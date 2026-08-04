@@ -1,82 +1,372 @@
 using System.ComponentModel;
+using System.IO;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
-using FieldStation.Composition;
-using FieldStation.Services;
-using FieldStation.ViewModels;
+using System.Windows.Media.Animation;
+using System.Windows.Media.Imaging;
+using System.Windows.Threading;
+using WallpaperField.ViewModels;
 
-namespace FieldStation;
+namespace WallpaperField;
 
 public partial class MainWindow : Window
 {
-    private readonly ShellViewModel _viewModel;
+    private const int DwmWindowCornerPreference = 33;
+    private const int DwmRoundCorners = 2;
+
+    private bool _motionEnabled = SystemParameters.ClientAreaAnimation;
+    private int _cardRevealIndex;
+    private string? _snapshotPath;
+    private int _snapshotDelayMilliseconds = 1500;
 
     public MainWindow()
     {
         InitializeComponent();
-        _viewModel = new ShellViewModel(AppComposition.Backend);
-        DataContext = _viewModel;
-        _viewModel.PropertyChanged += OnViewModelPropertyChanged;
-        SizeChanged += (_, _) => ApplyResponsiveLayout();
-        Loaded += (_, _) => StartAmbientMotion();
-        MotionSettings.Changed += OnMotionSettingsChanged;
-        Closed += (_, _) => MotionSettings.Changed -= OnMotionSettingsChanged;
+        DataContextChanged += OnDataContextChanged;
+        StateChanged += (_, _) => UpdateWindowStateVisuals();
     }
 
-    public void PrepareQaState(string state)
+    private ShellViewModel? ViewModel => DataContext as ShellViewModel;
+
+    public void ConfigureSnapshot(string path, int delayMilliseconds = 1500)
     {
-        ApplyResponsiveLayout();
-        if (string.Equals(state, "transition", StringComparison.OrdinalIgnoreCase))
-        {
-            TransitionWipe.Opacity = 1;
-            TransitionWipe.RenderTransform = new ScaleTransform(0.64, 1);
-        }
-        else
-        {
-            TransitionWipe.Opacity = 0;
-        }
-        UpdateLayout();
+        _snapshotPath = Path.GetFullPath(path);
+        _snapshotDelayMilliseconds = Math.Max(250, delayMilliseconds);
     }
 
-    private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs args)
+    public void SetReducedMotion(bool reduceMotion)
     {
-        if (args.PropertyName == nameof(ShellViewModel.CurrentPage))
+        _motionEnabled = SystemParameters.ClientAreaAnimation && !reduceMotion;
+    }
+
+    private void OnDataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        if (e.OldValue is INotifyPropertyChanged oldValue)
         {
-            Dispatcher.BeginInvoke(() => MotionDirector.PageTransition(PageContent, TransitionWipe));
+            oldValue.PropertyChanged -= ViewModel_PropertyChanged;
+        }
+
+        if (e.NewValue is INotifyPropertyChanged newValue)
+        {
+            newValue.PropertyChanged += ViewModel_PropertyChanged;
         }
     }
 
-    private void OnMotionSettingsChanged(object? sender, EventArgs args) => StartAmbientMotion();
+    private async void Window_Loaded(object sender, RoutedEventArgs e)
+    {
+        ApplyDwmWindowSettings();
+        UpdateResponsiveLayout(ActualWidth, ActualHeight);
+        StartAmbientMotion();
+        AnimateCurrentPage();
+        SetBusyAnimation(ViewModel?.IsBusy == true);
+
+        if (!string.IsNullOrWhiteSpace(_snapshotPath))
+        {
+            await CaptureSnapshotAndExitAsync(_snapshotPath, _snapshotDelayMilliseconds);
+        }
+    }
+
+    private void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(ShellViewModel.IsScanPage)
+            or nameof(ShellViewModel.IsLibraryPage)
+            or nameof(ShellViewModel.PageCode))
+        {
+            _cardRevealIndex = 0;
+            Dispatcher.BeginInvoke(AnimateCurrentPage, DispatcherPriority.Loaded);
+        }
+
+        if (e.PropertyName == nameof(ShellViewModel.IsBusy))
+        {
+            Dispatcher.BeginInvoke(
+                () => SetBusyAnimation(ViewModel?.IsBusy == true),
+                DispatcherPriority.Render);
+        }
+    }
 
     private void StartAmbientMotion()
-        => MotionDirector.StartAmbient(AmbientGridTransform, CalibrationTransform, ActivityBeacon, TickerText);
-
-    private void ApplyResponsiveLayout()
     {
-        var compact = ActualWidth > 0 && ActualWidth < 1000;
-        _viewModel.IsCompact = compact;
-        RailColumn.Width = new GridLength(compact ? 0 : 96);
-        DesktopRail.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
-        MobileNavigation.Visibility = compact ? Visibility.Visible : Visibility.Collapsed;
-        MobileNavRow.Height = new GridLength(compact ? 72 : 0);
-        Grid.SetColumn(PageContent, compact ? 0 : 0);
+        if (!_motionEnabled)
+        {
+            BackgroundGridOffset.X = 0;
+            BackgroundGridOffset.Y = 0;
+            SignalBeacon.Opacity = 1;
+            return;
+        }
+
+        var gridAnimation = new DoubleAnimation(0, 56, TimeSpan.FromSeconds(28))
+        {
+            RepeatBehavior = RepeatBehavior.Forever,
+            EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut }
+        };
+        BackgroundGridOffset.BeginAnimation(TranslateTransform.XProperty, gridAnimation);
+        BackgroundGridOffset.BeginAnimation(TranslateTransform.YProperty, gridAnimation);
+
+        var beaconAnimation = new DoubleAnimation(0.42, 1, TimeSpan.FromSeconds(1.15))
+        {
+            AutoReverse = true,
+            RepeatBehavior = RepeatBehavior.Forever,
+            EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut }
+        };
+        SignalBeacon.BeginAnimation(OpacityProperty, beaconAnimation);
+    }
+
+    private void StartCalibrationLoop()
+    {
+        CalibrationInstrument.BeginAnimation(OpacityProperty, null);
+        CalibrationInstrument.Opacity = 0.17;
+        CalibrationRotation.BeginAnimation(RotateTransform.AngleProperty, null);
+
+        if (!_motionEnabled)
+        {
+            CalibrationRotation.Angle = ViewModel?.IsLibraryPage == true ? 24 : 0;
+            return;
+        }
+
+        var idleRotation = new DoubleAnimation(
+            CalibrationRotation.Angle,
+            CalibrationRotation.Angle + 360,
+            TimeSpan.FromSeconds(42))
+        {
+            RepeatBehavior = RepeatBehavior.Forever
+        };
+        CalibrationRotation.BeginAnimation(RotateTransform.AngleProperty, idleRotation);
+    }
+
+    private void SetBusyAnimation(bool isBusy)
+    {
+        if (!isBusy || !_motionEnabled)
+        {
+            StartCalibrationLoop();
+            return;
+        }
+
+        CalibrationInstrument.BeginAnimation(
+            OpacityProperty,
+            new DoubleAnimation(0.18, 0.42, TimeSpan.FromMilliseconds(520))
+            {
+                AutoReverse = true,
+                RepeatBehavior = RepeatBehavior.Forever,
+                EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut }
+            });
+
+        CalibrationRotation.BeginAnimation(
+            RotateTransform.AngleProperty,
+            new DoubleAnimation(0, 360, TimeSpan.FromSeconds(1.8))
+            {
+                RepeatBehavior = RepeatBehavior.Forever
+            });
+    }
+
+    private void AnimateCurrentPage()
+    {
+        var target = ViewModel?.IsLibraryPage == true ? LibraryView : ScanView;
+        var other = ReferenceEquals(target, LibraryView) ? ScanView : LibraryView;
+        var targetStage = ViewModel?.IsLibraryPage == true ? LibraryStageOverlay : ScanStageOverlay;
+        var otherStage = ReferenceEquals(targetStage, LibraryStageOverlay)
+            ? ScanStageOverlay
+            : LibraryStageOverlay;
+        other.BeginAnimation(OpacityProperty, null);
+        otherStage.BeginAnimation(OpacityProperty, null);
+
+        if (!_motionEnabled)
+        {
+            target.Opacity = 1;
+            target.RenderTransform = Transform.Identity;
+            targetStage.Opacity = ViewModel?.IsLibraryPage == true ? 0.12 : 0.13;
+            StartCalibrationLoop();
+            return;
+        }
+
+        target.Opacity = 0;
+        var translate = new TranslateTransform(22, 0);
+        target.RenderTransform = translate;
+
+        target.BeginAnimation(
+            OpacityProperty,
+            new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(420))
+            {
+                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+            });
+        targetStage.BeginAnimation(
+            OpacityProperty,
+            new DoubleAnimation(
+                0,
+                ViewModel?.IsLibraryPage == true ? 0.12 : 0.13,
+                TimeSpan.FromMilliseconds(720))
+            {
+                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+            });
+        translate.BeginAnimation(
+            TranslateTransform.XProperty,
+            new DoubleAnimation(22, 0, TimeSpan.FromMilliseconds(560))
+            {
+                EasingFunction = new QuarticEase { EasingMode = EasingMode.EaseOut }
+            });
+
+        CalibrationRotation.BeginAnimation(
+            RotateTransform.AngleProperty,
+            new DoubleAnimation(
+                CalibrationRotation.Angle,
+                ViewModel?.IsLibraryPage == true ? 32 : 0,
+                TimeSpan.FromMilliseconds(620))
+            {
+                EasingFunction = new QuarticEase { EasingMode = EasingMode.EaseOut }
+            });
+    }
+
+    private void WallpaperCard_Loaded(object sender, RoutedEventArgs e)
+    {
+        if (!_motionEnabled || sender is not FrameworkElement card)
+        {
+            return;
+        }
+
+        var delay = TimeSpan.FromMilliseconds(Math.Min((_cardRevealIndex++ % 10) * 42, 300));
+        card.Opacity = 0;
+        var translate = new TranslateTransform(0, 14);
+        card.RenderTransform = translate;
+
+        card.BeginAnimation(
+            OpacityProperty,
+            new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(330))
+            {
+                BeginTime = delay,
+                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+            });
+        translate.BeginAnimation(
+            TranslateTransform.YProperty,
+            new DoubleAnimation(14, 0, TimeSpan.FromMilliseconds(440))
+            {
+                BeginTime = delay,
+                EasingFunction = new QuarticEase { EasingMode = EasingMode.EaseOut }
+            });
+    }
+
+    private void Window_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (IsInitialized)
+        {
+            UpdateResponsiveLayout(e.NewSize.Width, e.NewSize.Height);
+        }
+    }
+
+    private void UpdateResponsiveLayout(double width, double height)
+    {
+        var compact = width < 1190;
+        var narrow = width < 1060;
+        var shortWide = height < 760;
+        RailColumn.Width = new GridLength(compact ? 92 : 226);
+        BrandCopy.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        NavSectionLabel.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        ScanNavCopy.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        LibraryNavCopy.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        RailFooterCopy.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        RailFooterStatus.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        RailFooter.Margin = compact ? new Thickness(7, 0, 7, 0) : new Thickness(0);
+        PageBreadcrumb.Visibility = narrow ? Visibility.Collapsed : Visibility.Visible;
+        ScanStats.Visibility = narrow ? Visibility.Collapsed : Visibility.Visible;
+        LibraryStats.Visibility = narrow ? Visibility.Collapsed : Visibility.Visible;
+        CalibrationInstrument.Visibility = narrow ? Visibility.Collapsed : Visibility.Visible;
+        ScanDescription.Visibility = shortWide ? Visibility.Collapsed : Visibility.Visible;
+        LibraryDescription.Visibility = shortWide ? Visibility.Collapsed : Visibility.Visible;
+        ScanResultsList.Height = shortWide ? 282 : 350;
+        LibraryResultsList.Height = shortWide ? 388 : 520;
+        ScanView.Margin = narrow || shortWide
+            ? new Thickness(22, 16, 18, 14)
+            : new Thickness(34, 24, 28, 20);
+        LibraryView.Margin = ScanView.Margin;
     }
 
     private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        if (e.ClickCount == 2) { ToggleMaximize(); return; }
-        if (e.ButtonState == MouseButtonState.Pressed) DragMove();
+        if (e.ClickCount == 2)
+        {
+            ToggleMaximize();
+            return;
+        }
+
+        if (e.LeftButton == MouseButtonState.Pressed)
+        {
+            DragMove();
+        }
     }
 
-    private void Minimize_Click(object sender, RoutedEventArgs e) => SystemCommands.MinimizeWindow(this);
+    private void Minimize_Click(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
+
     private void Maximize_Click(object sender, RoutedEventArgs e) => ToggleMaximize();
-    private void Close_Click(object sender, RoutedEventArgs e) => SystemCommands.CloseWindow(this);
 
-    private void ToggleMaximize()
+    private void Close_Click(object sender, RoutedEventArgs e) => Close();
+
+    private void ToggleMaximize() =>
+        WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+
+    private void UpdateWindowStateVisuals()
     {
-        if (WindowState == WindowState.Maximized) SystemCommands.RestoreWindow(this);
-        else SystemCommands.MaximizeWindow(this);
+        var maximized = WindowState == WindowState.Maximized;
+        WindowFrame.CornerRadius = maximized ? new CornerRadius(0) : new CornerRadius(16);
+        WindowFrame.BorderThickness = maximized ? new Thickness(0) : new Thickness(1);
+        MaximizeGlyph.Text = maximized ? "\uE923" : "\uE922";
     }
+
+    private void ApplyDwmWindowSettings()
+    {
+        try
+        {
+            var handle = new WindowInteropHelper(this).Handle;
+            var preference = DwmRoundCorners;
+            _ = DwmSetWindowAttribute(
+                handle,
+                DwmWindowCornerPreference,
+                ref preference,
+                Marshal.SizeOf<int>());
+        }
+        catch
+        {
+            // Older Windows versions simply use the WPF frame fallback.
+        }
+    }
+
+    private async Task CaptureSnapshotAndExitAsync(string path, int delayMilliseconds)
+    {
+        await Task.Delay(delayMilliseconds);
+        await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+
+        var dpi = VisualTreeHelper.GetDpi(this);
+        var pixelWidth = Math.Max(1, (int)Math.Ceiling(ActualWidth * dpi.DpiScaleX));
+        var pixelHeight = Math.Max(1, (int)Math.Ceiling(ActualHeight * dpi.DpiScaleY));
+        var bitmap = new RenderTargetBitmap(
+            pixelWidth,
+            pixelHeight,
+            96 * dpi.DpiScaleX,
+            96 * dpi.DpiScaleY,
+            PixelFormats.Pbgra32);
+        bitmap.Render(this);
+
+        var directory = Path.GetDirectoryName(path);
+        if (!string.IsNullOrWhiteSpace(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        var encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        await using (var stream = File.Create(path))
+        {
+            encoder.Save(stream);
+        }
+
+        Application.Current.Shutdown();
+    }
+
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmSetWindowAttribute(
+        IntPtr windowHandle,
+        int attribute,
+        ref int attributeValue,
+        int attributeSize);
 }

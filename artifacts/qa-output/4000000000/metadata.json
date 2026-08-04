@@ -1,0 +1,13 @@
+{
+  "workshopId": "4000000000",
+  "title": "\u9759\u9ED8\u6863\u6848 \u00B7 No Preview",
+  "sourceDirectory": "D:\\University of Toronto\\Project\\EndfieldMaximal.Frontend\\artifacts\\qa-source\\4000000000",
+  "outputDirectory": "D:\\University of Toronto\\Project\\EndfieldMaximal.Frontend\\artifacts\\qa-output\\4000000000",
+  "previewPath": null,
+  "previewFileName": null,
+  "usedFolderNameAsWorkshopId": false,
+  "scannedAtUtc": "2026-08-04T04:56:36.2973882+00:00",
+  "warnings": [
+    "\u672A\u627E\u5230 preview.png\u3001preview.jpg\u3001preview.jpeg \u6216 preview.gif\u3002"
+  ]
+}
