@@ -18,13 +18,17 @@ _输出壁纸库：重新读取输出目录；点击卡片即可在 Windows 文�
 - 扫描 Wallpaper Engine Workshop 根目录下的所有直接子文件夹。
 - 从 `project.json` 读取 `title`、`workshopid`、`type` 和 `file`，字符串或数字形式的 Workshop ID 均可识别。
 - 识别 `preview.png`、`preview.jpg`、`preview.jpeg` 和 `preview.gif`；卡片直接读取源文件，不复制 preview。
+- GIF preview 会在可见卡片中逐帧播放；离屏卡片暂停播放，系统启用“减少动态效果”时显示静态帧。
+- 正常关闭程序时记住源壁纸目录和输出目录，下次启动自动恢复，无需重复输入。
 - 扫描全程只读，结果保存在当前运行会话的内存中，不会创建输出根目录、项目目录或任何索引文件。
 - 所有扫描卡片均提供复选框且默认不选；只有勾选的可处理项目才会进入后续操作。
 - 识别项目根目录中的 `scene.pkg`，并识别 `project.json` 中 `type` 为 `video`、`file` 指向有效相对路径的视频项目。
 - 使用内置 RePKG 解包 PKG，并执行默认的 TEX 图片转换与 `.tex-json` 元数据生成。
+- TEX 只作为当前解包任务的临时转换输入；转换完成或失败后都会删除，不写入最终壁纸库。
 - 处理视频项目时，将视频复制到对应项目的 `unpacked` 目录并保留 `file` 的相对路径。
 - 仅在单个项目处理成功后写入该项目的 `metadata.json`，供输出壁纸库重新加载。
 - 从输出目录重建已成功处理的壁纸库；点击任意卡片可定位到对应目录。
+- 扫描结果和输出壁纸库均可按标题实时搜索；过滤不会清除已勾选项目。
 - 大型壁纸库使用回收式列表虚拟化和异步图片解码，深度滚动时不会反复创建全部卡片。
 - 扫描与解包均有进度、取消、逐项错误隔离和安全路径检查。
 - 发布版是 Windows x64 自包含单文件 EXE，不需要另外安装 .NET 或 RePKG。
@@ -51,9 +55,10 @@ _输出壁纸库：重新读取输出目录；点击卡片即可在 Windows 文�
 3. 选择 Wallpaper Engine 壁纸根目录。
 4. 选择一个专门的输出目录。
 5. 点击“开始扫描”，等待卡片和统计信息出现。扫描不会修改输出目录。
-6. 勾选要处理的壁纸；所有复选框默认不选。
-7. 点击“解包选中项”。程序只处理已勾选的 `PKG READY` 或 `VIDEO READY` 项目。
-8. 打开左侧“输出壁纸库”，刷新并浏览已成功处理的内容。
+6. 可在结果上方输入标题关键词，快速缩小卡片范围。
+7. 勾选要处理的壁纸；所有复选框默认不选。
+8. 点击“解包选中项”。程序只处理已勾选的 `PKG READY` 或 `VIDEO READY` 项目。
+9. 打开左侧“输出壁纸库”，刷新、搜索并浏览已成功处理的内容。
 
 下面是每一步的详细说明。
 
@@ -88,7 +93,7 @@ E:\SteamLibrary\steamapps\workshop\content\431960
 └─ 2390303351\
 ```
 
-你可以直接在输入框中粘贴路径，也可以点击右侧的目录选择按钮。
+你可以直接在输入框中粘贴路径，也可以点击右侧的目录选择按钮。正常关闭程序后，这两个路径会保存到当前 Windows 用户的本地设置中，并在下次启动时自动恢复；命令行测试参数仍可临时覆盖它们。
 
 ### 2. 选择输出目录
 
@@ -147,7 +152,7 @@ D:\WallpaperFieldOutput
 | `scene.pkg` | 场景壁纸必需 | 只识别项目根目录中的同名文件，文件名不区分大小写 |
 | `file` 指向的视频 | 视频壁纸必需 | `type` 必须为 `video`；`file` 必须是项目目录内存在的安全相对路径 |
 
-preview 的选择优先级为 PNG → JPG → JPEG → GIF。程序直接读取源 preview；为了保持列表流畅，GIF 卡片只显示首帧。
+preview 的选择优先级为 PNG → JPG → JPEG → GIF。程序直接读取源 preview。GIF 会在当前可见卡片中按原始帧时长与循环设置播放，滚出可视区域后暂停；系统启用“减少动态效果”时保持为静态帧。图片数据先读入内存，因此播放期间不会锁住源文件。
 
 一个最小的 `project.json` 示例：
 
@@ -189,15 +194,11 @@ preview 的选择优先级为 PNG → JPG → JPEG → GIF。程序直接读取�
 
 可处理资格和勾选状态来自当前运行会话中的扫描结果。重新启动程序，或只在“输出壁纸库”中加载旧记录，并不会恢复待处理队列；此时请返回“扫描中心”重新扫描并重新勾选。
 
-#### 为什么解包后仍然有 `.tex` 文件？
+#### TEX 转换结果如何保存？
 
-这是正常行为，不是把文件误识别成了 LaTeX。Wallpaper Engine 的 `.tex` 是纹理资源，Windows 可能会把同名扩展显示为“LaTeX 源文件”。本程序与 RePKG 默认 `extract` 流程一致：
+Wallpaper Engine 的 `.tex` 是纹理资源，不是 LaTeX 文档。程序先把当前包内的 TEX 写入隔离的 staging 目录，尝试生成 `.png`、`.jpg`、`.gif` 或 `.mp4`，并生成相应的 `.tex-json` 元数据；随后无论转换成功、失败还是任务取消，都会删除本次任务创建的原始 `.tex` 中间文件。
 
-- 保留包内原始 `.tex` 文件。
-- 尝试额外生成可查看的图片或媒体文件。
-- 生成相应的 `.tex-json` 元数据。
-
-根据纹理内容，转换结果可能是 `.png`、`.jpg`、`.gif` 或 `.mp4`。如果某个纹理无法转换，原始 `.tex` 仍会保留，并在完成信息中给出警告；这不会阻止其他文件继续解包。
+如果某个纹理无法转换，完成信息中会给出警告，但不会为了失败项保留原始 TEX，也不会阻止其他文件继续解包。程序只清理自己在当前 staging 目录中创建的 TEX，不会递归删除已有输出中的同名文件。
 
 ### 6. 浏览输出壁纸库
 
@@ -205,6 +206,7 @@ preview 的选择优先级为 PNG → JPG → JPEG → GIF。程序直接读取�
 
 - 点击“刷新输出库”可重新读取磁盘内容。
 - 点击“更换目录”可浏览另一套输出库。
+- 在列表上方输入标题关键词可实时过滤卡片；右侧会显示“匹配数 / 总数”，清空搜索即可恢复全部记录。
 - 点击卡片或卡片右侧箭头，会在 Windows 文件资源管理器中打开该项目的输出文件夹。
 - 输出库不会进入 `unpacked` 等解包产物目录查找元数据，因此包内同名 JSON 不会被误当成壁纸记录。
 - preview 仍从原壁纸目录读取；如果源文件被移动或删除，输出库中的该卡片将无法继续显示预览图。
@@ -220,7 +222,6 @@ preview 的选择优先级为 PNG → JPG → JPEG → GIF。程序直接读取�
 │  └─ unpacked\
 │     ├─ .wallpaper-field-unpack.json
 │     ├─ scene.json
-│     ├─ materials\example.tex
 │     ├─ materials\example.png
 │     ├─ materials\example.tex-json
 │     └─ ...包内其他文件与转换产物
@@ -237,13 +238,13 @@ preview 的选择优先级为 PNG → JPG → JPEG → GIF。程序直接读取�
 | 文件 | 用途 |
 | --- | --- |
 | `<id>/metadata.json` | 成功处理项目的标题、源路径、源 preview、内容类型与警告；输出库以此发现项目 |
-| `<id>/unpacked/` | `scene.pkg` 的原始文件和 TEX 转换产物，或复制后的视频文件 |
+| `<id>/unpacked/` | `scene.pkg` 中除 TEX 中间文件外的原始文件、最终纹理转换产物，或复制后的视频文件 |
 | `.wallpaper-field-unpack.json` | 本次处理结果的应用清单 |
 
 `metadata.json` 是每个成功项目的持久化记录。后续接入数据库、HTTP API、队列或自己的后端时，可以直接消费这些 JSON，也可以替换程序中的服务实现。程序不再生成根索引或 Workshop ID 清单。
 
 > [!WARNING]
-> 重复扫描不会修改输出目录。重复处理属于更新/覆盖操作，不是严格的目录镜像清理；新包中已不存在的旧解包文件可能继续保留。需要完全干净、可比对的结果时，请选择一个新的空输出目录。
+> 重复扫描不会修改输出目录。重复处理属于更新/覆盖操作，不是严格的目录镜像清理；新包中已不存在的旧解包文件，以及旧版本曾经保留的 TEX，可能继续存在。为避免误删用户文件，本版本不会追溯清理无法证明归属的旧 TEX。需要完全干净、可比对的结果时，请选择一个新的空输出目录。
 
 ## 常见问题
 
@@ -275,13 +276,13 @@ preview 的选择优先级为 PNG → JPG → JPEG → GIF。程序直接读取�
 
 请检查 `project.json` 顶层的 `type` 是否为 `video`，`file` 是否为项目目录内存在的相对路径，并确认对应卡片已勾选。为防止路径穿越，绝对路径、包含不安全路径段或指向项目目录之外的文件会被拒绝。
 
-### `.tex` 双击后被文本或 LaTeX 程序打开
+### 为什么旧输出目录中仍然有 `.tex`？
 
-这是 Windows 的文件关联，不代表解包错误。请查看同目录生成的 PNG/JPG/GIF/MP4；原始 `.tex` 被保留用于完整性和后续处理。
+这通常是旧版本或其他工具留下的文件。本版本保证当前解包任务创建的 TEX 在提交最终结果前删除，但不会自动删除既有输出中无法确认归属的文件。需要清理旧结果时，请先备份后手动处理，或改用新的空输出目录重新解包。
 
-### GIF 为什么没有在卡片中播放？
+### GIF 为什么暂停或只显示静态帧？
 
-GIF preview 不会复制到输出目录。列表卡片直接读取源文件，但只显示首帧，以避免大量动态图片同时播放造成滚动卡顿。
+GIF preview 不会复制到输出目录。可见卡片会逐帧播放，滚出可视区域或页面隐藏后会自动暂停并在再次可见时继续。如果 Windows 启用了“减少动态效果”，程序会尊重系统设置并保持静态帧；损坏或不受支持的 GIF 会显示占位状态。
 
 ### Windows SmartScreen 提示未知发布者
 
@@ -304,14 +305,14 @@ dotnet build .\WallpaperField.slnx --configuration Release
 .\GUI_for_RePKG.exe
 ```
 
-`build-release.cmd` 会调用 `build-release.ps1`，将发布结果复制为仓库根目录的 `GUI_for_RePKG.exe`。RePKG 和 .NET 运行时会链接到该 EXE 中。
+`build-release.cmd` 会调用 `build-release.ps1`，将发布结果复制为仓库根目录的 `GUI_for_RePKG.exe`。RePKG、XamlAnimatedGif 和 .NET 运行时会链接到该 EXE 中。
 
 > [!IMPORTANT]
 > 对外分发时，请同时提供本项目的 `LICENSE`、`THIRD-PARTY-NOTICES.md`、`ThirdParty/RePKG/LICENSE.txt` 和 `ThirdParty/RePKG/THIRD-PARTY-NOTICES.txt`。最简单的做法是把 EXE 与这些文件一起放入发布 ZIP，而不是只上传一个孤立的 EXE。
 
 ## 测试
 
-运行不依赖第三方测试框架的端到端烟雾测试：
+运行不依赖第三方测试框架的端到端烟雾测试；其中包含路径设置持久化、搜索过滤、GIF 多帧播放/暂停/文件解锁和 TEX 清理边界检查：
 
 ```powershell
 dotnet run --project .\tests\WallpaperField.SmokeTests\WallpaperField.SmokeTests.csproj --configuration Release
@@ -358,11 +359,12 @@ dotnet run --project .\tests\WallpaperField.SmokeTests\WallpaperField.SmokeTests
 
 Wallpaper Field 自行创作的代码以 [MIT License](LICENSE) 发布。你可以使用、复制、修改、合并、发布和再分发，但必须保留 MIT 版权与许可声明。
 
-第三方代码和依赖仍适用其各自的许可证。RePKG 的完整许可和依赖声明位于 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)、[ThirdParty/RePKG/LICENSE.txt](ThirdParty/RePKG/LICENSE.txt) 与 [ThirdParty/RePKG/THIRD-PARTY-NOTICES.txt](ThirdParty/RePKG/THIRD-PARTY-NOTICES.txt)。本项目的 MIT 许可证不会替代这些第三方条款。
+第三方代码和依赖仍适用其各自的许可证。RePKG 与 XamlAnimatedGif 的许可和依赖声明位于 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)、[ThirdParty/RePKG/LICENSE.txt](ThirdParty/RePKG/LICENSE.txt) 与 [ThirdParty/RePKG/THIRD-PARTY-NOTICES.txt](ThirdParty/RePKG/THIRD-PARTY-NOTICES.txt)。本项目的 MIT 许可证不会替代这些第三方条款。
 
 ## 感谢
 
 - 感谢 [notscuffed/RePKG](https://github.com/notscuffed/repkg) 提供 MIT 许可的 Wallpaper Engine PKG 读取与 TEX 转换实现。本项目在保留上游许可和版权声明的前提下，将相关核心能力集成到 C# 桌面程序中。
+- 感谢 [XamlAnimatedGif/XamlAnimatedGif](https://github.com/XamlAnimatedGif/XamlAnimatedGif) 提供 Apache-2.0 许可的 WPF GIF 动画播放能力。
 - 感谢 [Brandon030722/ark-ui-skill](https://github.com/Brandon030722/ark-ui-skill) 提供 clean-room 的终末地风格 UI 设计方法与 `endfield / maximal` 工作流参考，帮助确定了界面的信息层级、色彩、网格、动效和交互方向。该仓库仅作为设计过程参考，不是本程序的运行时依赖，本项目也未打包官方游戏素材。
 
 也感谢所有愿意测试、报告问题和继续改造本项目的人。基于 MIT 许可证，欢迎自由 fork、修改和再发布；请在传播衍生版本时保留必要的版权、许可与第三方致谢。

@@ -817,6 +817,20 @@
         <Setter Property="TextWrapping" Value="NoWrap" />
     </Style>
 
+    <!-- Search is an action-first field instrument: icon and live match state
+         are composed by the view, while this style preserves the shared signal
+         focus rail and readable keyboard focus treatment. -->
+    <Style x:Key="SearchTextBox"
+           BasedOn="{StaticResource {x:Type TextBox}}"
+           TargetType="{x:Type TextBox}">
+        <Setter Property="MinHeight" Value="50" />
+        <Setter Property="Padding" Value="46,0,154,0" />
+        <Setter Property="FontFamily" Value="{StaticResource UiFontFamily}" />
+        <Setter Property="FontSize" Value="14" />
+        <Setter Property="SpellCheck.IsEnabled" Value="False" />
+        <Setter Property="TextWrapping" Value="NoWrap" />
+    </Style>
+
     <!-- Scroll bars -->
     <Style x:Key="EndfieldScrollThumb" TargetType="{x:Type Thumb}">
         <Setter Property="MinWidth" Value="8" />

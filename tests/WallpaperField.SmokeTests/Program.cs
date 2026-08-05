@@ -1,12 +1,18 @@
+using System.IO;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Security.Cryptography;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Threading;
 using WallpaperField.Contracts;
+using WallpaperField.Controls;
 using WallpaperField.Models;
 using WallpaperField.Services;
 using WallpaperField.ThirdParty.RePKG;
 using WallpaperField.ViewModels;
+using XamlAnimatedGif;
 
 var testRoot = Path.Combine(
     Path.GetTempPath(),
@@ -17,6 +23,32 @@ var outputRoot = Path.Combine(testRoot, "output");
 try
 {
     Directory.CreateDirectory(sourceRoot);
+
+    var settingsPath = Path.Combine(testRoot, "settings", "settings.json");
+    var settingsStore = new UserSettingsStore(settingsPath);
+    Assert(settingsStore.Load() == new UserSettings(),
+        "A missing settings file should load empty path preferences.");
+    var savedSettings = new UserSettings
+    {
+        SourcePath = Path.Combine(testRoot, "壁纸 source with spaces"),
+        OutputPath = Path.Combine(testRoot, "输出 output with spaces")
+    };
+    Assert(settingsStore.Save(savedSettings), "User settings could not be saved.");
+    Assert(settingsStore.Load() == savedSettings,
+        "Unicode user path settings did not round-trip.");
+    var replacementSettings = savedSettings with
+    {
+        OutputPath = Path.Combine(testRoot, "replacement-output")
+    };
+    Assert(settingsStore.Save(replacementSettings)
+           && settingsStore.Load() == replacementSettings,
+        "User settings were not atomically replaced.");
+    File.WriteAllText(settingsPath, "{ invalid settings json", Encoding.UTF8);
+    Assert(settingsStore.Load() == new UserSettings(),
+        "Corrupt user settings should fail soft and return empty paths.");
+    Assert(!Directory.EnumerateFiles(Path.GetDirectoryName(settingsPath)!, "*.tmp").Any(),
+        "User settings persistence left a temporary file behind.");
+
     CreateItem("101", "PNG + Valid PKG", "101", "preview.PNG", GetPngBytes());
     CreateItem("202", "GIF + No PKG", "202", "preview.GIF", GetGifBytes());
     CreateItem("303", "JPG + Bad Magic", "303", "preview.jpg", GetPngBytes());
@@ -43,7 +75,8 @@ try
             ("scene.json", Encoding.UTF8.GetBytes("{\"camera\":\"main\"}")),
             ("scripts/main.js", Encoding.UTF8.GetBytes("console.log('wallpaper');")),
             ("metadata.json", Encoding.UTF8.GetBytes("{\"packageOwned\":true}")),
-            ("preview.png", Encoding.UTF8.GetBytes("package preview must stay isolated"))
+            ("preview.png", Encoding.UTF8.GetBytes("package preview must stay isolated")),
+            ("materials/broken.TeX", Encoding.UTF8.GetBytes("invalid TEX fixture"))
         ]);
     WritePackage(
         Path.Combine(sourceRoot, "303", "scene.pkg"),
@@ -96,6 +129,10 @@ try
         "The video's source-relative path was not preserved.");
     Assert(PathsEqual(item101.PreviewPath, Path.Combine(sourceRoot, "101", "preview.PNG")),
         "The scan record should link directly to the source preview.");
+    Assert(PathsEqual(item202.PreviewPath, Path.Combine(sourceRoot, "202", "preview.GIF")),
+        "The animated GIF preview path was not preserved.");
+    await ValidateStaticPreviewAsync(item101.PreviewPath!);
+    await ValidateAnimatedGifPreviewAsync(item202.PreviewPath!);
 
     var libraryBeforeUnpack = await new WallpaperLibraryService().LoadAsync(outputRoot);
     Assert(libraryBeforeUnpack.Items.Count == 0,
@@ -118,6 +155,17 @@ try
         "Nested package entry was not extracted.");
     Assert(File.Exists(Path.Combine(outputRoot, "101", "unpacked", ".wallpaper-field-unpack.json")),
         "Unpack manifest was not written.");
+    Assert(unpackResult.Warnings.Any(warning => string.Equals(
+               warning.EntryPath,
+               "materials/broken.TeX",
+               StringComparison.OrdinalIgnoreCase)),
+        "The invalid TEX fixture should be reported as a non-fatal conversion warning.");
+    Assert(!Directory.EnumerateFiles(
+            Path.Combine(outputRoot, "101", "unpacked"),
+            "*",
+            SearchOption.AllDirectories)
+        .Any(path => string.Equals(Path.GetExtension(path), ".tex", StringComparison.OrdinalIgnoreCase)),
+        "A TEX intermediate from the current extraction was retained.");
     Assert(File.Exists(Path.Combine(outputRoot, "505", "unpacked", "assets", "after.bin")),
         "Processing did not continue after failed packages.");
     Assert(!Directory.Exists(Path.Combine(outputRoot, "202")),
@@ -241,6 +289,14 @@ try
         .Any(path => Path.GetFileName(path).StartsWith(".unpacked-stage-", StringComparison.Ordinal)),
         "Canceled extraction left a staging directory behind.");
 
+    var existingTexSentinelPath = Path.Combine(
+        outputRoot,
+        "101",
+        "unpacked",
+        "materials",
+        "broken.TeX");
+    var existingTexSentinelBytes = Encoding.UTF8.GetBytes("pre-existing user TEX sentinel");
+    await File.WriteAllBytesAsync(existingTexSentinelPath, existingTexSentinelBytes);
     var repeatResult = await unpackService.UnpackAsync(new WallpaperUnpackRequest
     {
         OutputDirectory = outputRoot,
@@ -248,6 +304,9 @@ try
     });
     Assert(repeatResult.SucceededCount == 1 && repeatResult.FailedCount == 0,
         "Repeated extraction should safely overwrite package-owned files.");
+    Assert((await File.ReadAllBytesAsync(existingTexSentinelPath))
+            .SequenceEqual(existingTexSentinelBytes),
+        "TEX cleanup must not delete or overwrite a pre-existing file in committed output.");
 
     var tamperedResult = await unpackService.UnpackAsync(new WallpaperUnpackRequest
     {
@@ -273,6 +332,19 @@ try
         "The scan command did not project PKG and video eligibility into the UI model.");
     Assert(!Directory.Exists(viewModelOutputRoot),
         "View-model scanning must not create its output root.");
+    shell.ScanSearchText = "  gif  ";
+    Assert(shell.FilteredScanCount == 1
+           && shell.FilteredScannedWallpapers.Single().WorkshopId == "202",
+        "Scan search should trim the query and match wallpaper titles case-insensitively.");
+    shell.ScanSearchText = "no matching wallpaper";
+    Assert(shell.HasScanResults
+           && !shell.HasVisibleScanResults
+           && shell.ScanEmptyTitle == "未找到匹配壁纸",
+        "Scan search did not expose its zero-match state.");
+    shell.ClearScanSearchCommand.Execute(null);
+    Assert(!shell.HasScanSearchText
+           && shell.FilteredScanCount == shell.ScannedWallpapers.Count,
+        "Clearing scan search did not restore every scanned wallpaper.");
     Assert(shell.SelectedUnpackCount == 0
            && shell.ScannedWallpapers.All(card => !card.IsSelectedForUnpack),
         "Scanned cards must be unchecked by default.");
@@ -283,6 +355,12 @@ try
     selectedCard.IsSelectedForUnpack = true;
     Assert(shell.SelectedUnpackCount == 1 && shell.UnpackCommand.CanExecute(null),
         "Checking item 101 did not enable unpacking for exactly one item.");
+    shell.ScanSearchText = "GIF";
+    Assert(shell.FilteredScannedWallpapers.All(card => card.WorkshopId != "101")
+           && shell.SelectedUnpackCount == 1
+           && selectedCard.IsSelectedForUnpack,
+        "Filtering must not clear a hidden wallpaper's unpack selection.");
+    shell.ClearScanSearchCommand.Execute(null);
     shell.OutputPath = Path.Combine(testRoot, "different-output");
     Assert(!shell.UnpackCommand.CanExecute(null),
         "Changing the output root after scanning must disable unpacking stale records.");
@@ -308,6 +386,29 @@ try
     selectedCard.IsSelectedForUnpack = false;
     Assert(shell.SelectedUnpackCount == 0 && !shell.UnpackCommand.CanExecute(null),
         "Clearing the final checkbox did not disable unpacking.");
+
+    var libraryShell = new ShellViewModel(
+        new WallpaperScanService(),
+        new WallpaperLibraryService(),
+        new NoOpFolderPicker(),
+        new NoOpSystemFolderService(),
+        new RePkgWallpaperUnpackService())
+    {
+        OutputPath = outputRoot
+    };
+    await libraryShell.RefreshLibraryCommand.ExecuteAsync();
+    libraryShell.LibrarySearchText = "  NESTED  ";
+    Assert(libraryShell.FilteredLibraryCount == 1
+           && libraryShell.FilteredLibraryWallpapers.Single().WorkshopId == "606",
+        "Output library search should trim and match titles case-insensitively.");
+    libraryShell.LibrarySearchText = "no matching wallpaper";
+    Assert(libraryShell.HasLibraryResults
+           && !libraryShell.HasVisibleLibraryResults
+           && libraryShell.LibraryEmptyTitle == "未找到匹配壁纸",
+        "Output library search did not expose its zero-match state.");
+    libraryShell.ClearLibrarySearchCommand.Execute(null);
+    Assert(libraryShell.FilteredLibraryCount == libraryShell.LibraryWallpapers.Count,
+        "Clearing library search did not restore every output record.");
 
     if (args.Length > 0)
     {
@@ -350,8 +451,14 @@ try
         Assert(realResult.Warnings.Count == 0,
             "Real scene.pkg produced TEX conversion warnings.");
         Assert(Directory.EnumerateFiles(realUnpackDirectory, "*", SearchOption.AllDirectories).Count()
-               == realResult.ExtractedEntryCount + (realResult.ConvertedTextureCount * 2) + 1,
-            "Real scene.pkg output count differs from raw entries, TEX products, and manifest.");
+               == realResult.ExtractedEntryCount + realResult.ConvertedTextureCount + 1,
+            "Real scene.pkg output count differs after TEX intermediates were removed.");
+        Assert(!Directory.EnumerateFiles(realUnpackDirectory, "*", SearchOption.AllDirectories)
+                .Any(path => string.Equals(
+                    Path.GetExtension(path),
+                    ".tex",
+                    StringComparison.OrdinalIgnoreCase)),
+            "Real scene.pkg output retained a TEX intermediate.");
 
         if (realResult.ExtractedEntryCount == 12)
         {
@@ -520,7 +627,284 @@ static byte[] GetPngBytes() => Convert.FromBase64String(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");
 
 static byte[] GetGifBytes() => Convert.FromBase64String(
-    "R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==");
+    "R0lGODlhBAACAIEAAP8AAAAAAAAAAAAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQIDAAAACwAAAAABAACAAAIBwABCBwoMCAAIfkECBgAAAAsAAAAAAQAAgCBAAD/AAAAAAAAAAAACAcAAQgcKDAgADs=");
+
+static async Task ValidateStaticPreviewAsync(string path)
+{
+    var completion = new TaskCompletionSource<bool>(
+        TaskCreationOptions.RunContinuationsAsynchronously);
+    var thread = new Thread(() =>
+    {
+        var dispatcher = Dispatcher.CurrentDispatcher;
+        Window? window = null;
+        DispatcherTimer? poll = null;
+        DispatcherTimer? timeout = null;
+        var finished = false;
+
+        void Finish(Exception? exception)
+        {
+            if (finished)
+            {
+                return;
+            }
+
+            finished = true;
+            poll?.Stop();
+            timeout?.Stop();
+            try
+            {
+                window?.Close();
+                using var exclusiveRead = new FileStream(
+                    path,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.None);
+            }
+            catch (Exception closeOrLockException)
+            {
+                exception ??= closeOrLockException;
+            }
+
+            if (exception is null)
+            {
+                completion.TrySetResult(true);
+            }
+            else
+            {
+                completion.TrySetException(exception);
+            }
+
+            dispatcher.BeginInvokeShutdown(DispatcherPriority.Background);
+        }
+
+        try
+        {
+            var image = new AnimatedPreviewImage
+            {
+                SourcePath = path,
+                Width = 8,
+                Height = 8
+            };
+            window = new Window
+            {
+                Content = image,
+                Width = 8,
+                Height = 8,
+                Left = -10_000,
+                Top = -10_000,
+                ShowInTaskbar = false,
+                ShowActivated = false,
+                WindowStyle = WindowStyle.None,
+                ResizeMode = ResizeMode.NoResize
+            };
+
+            poll = new DispatcherTimer(DispatcherPriority.Background, dispatcher)
+            {
+                Interval = TimeSpan.FromMilliseconds(25)
+            };
+            poll.Tick += (_, _) =>
+            {
+                if (image.Source is not null)
+                {
+                    Finish(null);
+                }
+            };
+            timeout = new DispatcherTimer(DispatcherPriority.Background, dispatcher)
+            {
+                Interval = TimeSpan.FromSeconds(4)
+            };
+            timeout.Tick += (_, _) => Finish(
+                new TimeoutException(
+                    $"Static preview did not decode and render in time: " +
+                    $"loaded={image.IsLoaded}, visible={image.IsVisible}, " +
+                    $"path='{image.SourcePath}', exists={File.Exists(image.SourcePath)}."));
+
+            window.Show();
+            poll.Start();
+            timeout.Start();
+            Dispatcher.Run();
+        }
+        catch (Exception exception)
+        {
+            Finish(exception);
+        }
+    });
+
+    thread.SetApartmentState(ApartmentState.STA);
+    thread.Start();
+    await completion.Task.WaitAsync(TimeSpan.FromSeconds(8));
+    Assert(thread.Join(TimeSpan.FromSeconds(2)),
+        "Static preview validation dispatcher did not shut down.");
+}
+
+static async Task ValidateAnimatedGifPreviewAsync(string path)
+{
+    var completion = new TaskCompletionSource<bool>(
+        TaskCreationOptions.RunContinuationsAsynchronously);
+    var thread = new Thread(() =>
+    {
+        var dispatcher = Dispatcher.CurrentDispatcher;
+        Window? window = null;
+        DispatcherTimer? timeout = null;
+        var finished = false;
+
+        void Finish(Exception? exception)
+        {
+            if (finished)
+            {
+                return;
+            }
+
+            finished = true;
+            timeout?.Stop();
+            try
+            {
+                window?.Close();
+            }
+            catch (Exception closeException)
+            {
+                exception ??= closeException;
+            }
+
+            try
+            {
+                using var exclusiveRead = new FileStream(
+                    path,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.None);
+            }
+            catch (Exception lockException)
+            {
+                exception ??= new IOException(
+                    "Animated preview retained a lock on its GIF source.",
+                    lockException);
+            }
+
+            if (exception is null)
+            {
+                completion.TrySetResult(true);
+            }
+            else
+            {
+                completion.TrySetException(exception);
+            }
+
+            dispatcher.BeginInvokeShutdown(DispatcherPriority.Background);
+        }
+
+        try
+        {
+            var image = new AnimatedPreviewImage
+            {
+                SourcePath = path,
+                AnimationEnabled = true,
+                Width = 16,
+                Height = 16
+            };
+            var previewStack = new StackPanel();
+            previewStack.Children.Add(image);
+            previewStack.Children.Add(new Border { Height = 160 });
+            var scrollViewer = new ScrollViewer
+            {
+                Content = previewStack,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Hidden,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
+            };
+            window = new Window
+            {
+                Content = scrollViewer,
+                Width = 48,
+                Height = 48,
+                Left = -10_000,
+                Top = -10_000,
+                ShowInTaskbar = false,
+                ShowActivated = false,
+                WindowStyle = WindowStyle.None,
+                ResizeMode = ResizeMode.NoResize
+            };
+
+            timeout = new DispatcherTimer(DispatcherPriority.Background, dispatcher)
+            {
+                Interval = TimeSpan.FromSeconds(6)
+            };
+            timeout.Tick += (_, _) => Finish(
+                new TimeoutException("Animated GIF preview did not advance, pause, and resume in time."));
+
+            AnimationBehavior.AddErrorHandler(image, (_, args) => Finish(
+                new InvalidOperationException("Animated GIF decoding failed.", args.Exception)));
+            AnimationBehavior.AddLoadedHandler(image, (_, _) =>
+            {
+                var animator = AnimationBehavior.GetAnimator(image);
+                if (animator is null || animator.FrameCount < 2)
+                {
+                    Finish(new InvalidOperationException(
+                        "Animated GIF preview did not expose multiple frames."));
+                    return;
+                }
+
+                var phase = 0;
+                var observedFrameChanges = 0;
+                var pausedFrame = -1;
+                animator.CurrentFrameChanged += (_, _) =>
+                {
+                    if (phase == 0)
+                    {
+                        observedFrameChanges++;
+                        if (observedFrameChanges < 2)
+                        {
+                            return;
+                        }
+
+                        phase = 1;
+                        pausedFrame = animator.CurrentFrameIndex;
+                        scrollViewer.ScrollToVerticalOffset(120);
+                        scrollViewer.UpdateLayout();
+                        var pauseCheck = new DispatcherTimer(
+                            DispatcherPriority.Background,
+                            dispatcher)
+                        {
+                            Interval = TimeSpan.FromMilliseconds(650)
+                        };
+                        pauseCheck.Tick += (_, _) =>
+                        {
+                            pauseCheck.Stop();
+                            if (animator.CurrentFrameIndex != pausedFrame)
+                            {
+                                Finish(new InvalidOperationException(
+                                    "A hidden GIF preview continued advancing frames."));
+                                return;
+                            }
+
+                            phase = 2;
+                            scrollViewer.ScrollToVerticalOffset(0);
+                            scrollViewer.UpdateLayout();
+                        };
+                        pauseCheck.Start();
+                    }
+                    else if (phase == 2 && animator.CurrentFrameIndex != pausedFrame)
+                    {
+                        Finish(null);
+                    }
+                };
+            });
+
+            window.Show();
+            timeout.Start();
+            Dispatcher.Run();
+        }
+        catch (Exception exception)
+        {
+            Finish(exception);
+        }
+    });
+
+    thread.SetApartmentState(ApartmentState.STA);
+    thread.Start();
+    await completion.Task.WaitAsync(TimeSpan.FromSeconds(10));
+    Assert(thread.Join(TimeSpan.FromSeconds(2)),
+        "Animated GIF validation dispatcher did not shut down.");
+}
 
 sealed class InlineProgress<T>(Action<T> report) : IProgress<T>
 {

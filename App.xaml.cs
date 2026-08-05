@@ -2,6 +2,8 @@ using System.Windows;
 using System.Windows.Threading;
 using WallpaperField.Composition;
 using WallpaperField.Infrastructure;
+using WallpaperField.Models;
+using WallpaperField.Services;
 
 namespace WallpaperField;
 
@@ -16,8 +18,14 @@ public partial class App : Application
         {
             var options = LaunchOptions.Parse(e.Args);
             AppLog.Write("Launch options parsed.");
+            var settingsStore = new UserSettingsStore();
+            var savedSettings = settingsStore.Load();
             var viewModel = AppComposition.CreateShellViewModel();
             AppLog.Write("Application services composed.");
+
+            viewModel.SourcePath = savedSettings.SourcePath;
+            viewModel.OutputPath = savedSettings.OutputPath;
+            AppLog.Write("User settings restored.");
 
             if (!string.IsNullOrWhiteSpace(options.SourceDirectory))
             {
@@ -51,6 +59,17 @@ public partial class App : Application
                 window.ConfigureSnapshot(options.SnapshotPath, scrollIndex: options.ScrollIndex);
             }
 
+            window.Closing += (_, _) =>
+            {
+                if (string.IsNullOrWhiteSpace(options.SnapshotPath))
+                {
+                    _ = settingsStore.Save(new UserSettings
+                    {
+                        SourcePath = viewModel.SourcePath.Trim(),
+                        OutputPath = viewModel.OutputPath.Trim()
+                    });
+                }
+            };
             window.Closed += (_, _) => viewModel.CancelPendingWork();
             MainWindow = window;
             window.Show();

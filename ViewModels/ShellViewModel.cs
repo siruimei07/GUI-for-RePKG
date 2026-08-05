@@ -24,6 +24,8 @@ public sealed class ShellViewModel : ObservableObject
     private string _sourcePath = string.Empty;
     private string _outputPath = string.Empty;
     private string _scanOutputPath = string.Empty;
+    private string _scanSearchText = string.Empty;
+    private string _librarySearchText = string.Empty;
     private bool _isBusy;
     private bool _isScanning;
     private bool _isUnpacking;
@@ -72,6 +74,12 @@ public sealed class ShellViewModel : ObservableObject
         UnpackCommand = new AsyncRelayCommand(UnpackAsync, CanStartUnpack);
         RefreshLibraryCommand = new AsyncRelayCommand(RefreshLibraryAsync, CanRefreshLibrary);
         OpenFolderCommand = new RelayCommand(OpenFolder, CanOpenFolder);
+        ClearScanSearchCommand = new RelayCommand(
+            () => ScanSearchText = string.Empty,
+            () => HasScanSearchText);
+        ClearLibrarySearchCommand = new RelayCommand(
+            () => LibrarySearchText = string.Empty,
+            () => HasLibrarySearchText);
     }
 
     public RangeObservableCollection<WallpaperCardViewModel> ScannedWallpapers { get; } = [];
@@ -103,6 +111,10 @@ public sealed class ShellViewModel : ObservableObject
 
     public RelayCommand OpenFolderCommand { get; }
 
+    public RelayCommand ClearScanSearchCommand { get; }
+
+    public RelayCommand ClearLibrarySearchCommand { get; }
+
     public string SourcePath
     {
         get => _sourcePath;
@@ -126,6 +138,52 @@ public sealed class ShellViewModel : ObservableObject
         get => OutputPath;
         set => SetOutputPath(value);
     }
+
+    public string ScanSearchText
+    {
+        get => _scanSearchText;
+        set => SetScanSearchText(value);
+    }
+
+    public string LibrarySearchText
+    {
+        get => _librarySearchText;
+        set => SetLibrarySearchText(value);
+    }
+
+    public bool HasScanSearchText => !string.IsNullOrWhiteSpace(ScanSearchText);
+
+    public bool HasLibrarySearchText => !string.IsNullOrWhiteSpace(LibrarySearchText);
+
+    public IEnumerable<WallpaperCardViewModel> FilteredScannedWallpapers
+        => FilterByTitle(ScannedWallpapers, ScanSearchText);
+
+    public IEnumerable<WallpaperCardViewModel> FilteredLibraryWallpapers
+        => FilterByTitle(LibraryWallpapers, LibrarySearchText);
+
+    public int FilteredScanCount => CountTitleMatches(ScannedWallpapers, ScanSearchText);
+
+    public int FilteredLibraryCount => CountTitleMatches(LibraryWallpapers, LibrarySearchText);
+
+    public bool HasVisibleScanResults => FilteredScanCount > 0;
+
+    public bool HasVisibleLibraryResults => FilteredLibraryCount > 0;
+
+    public string ScanEmptyTitle => HasScanResults && HasScanSearchText
+        ? "未找到匹配壁纸"
+        : "等待扫描";
+
+    public string ScanEmptyDescription => HasScanResults && HasScanSearchText
+        ? $"没有名称包含“{ScanSearchText.Trim()}”的壁纸，请尝试其他关键词"
+        : "选择源目录与输出目录后开始扫描";
+
+    public string LibraryEmptyTitle => HasLibraryResults && HasLibrarySearchText
+        ? "未找到匹配壁纸"
+        : "输出库为空";
+
+    public string LibraryEmptyDescription => HasLibraryResults && HasLibrarySearchText
+        ? $"没有名称包含“{LibrarySearchText.Trim()}”的壁纸，请尝试其他关键词"
+        : "先处理至少一个勾选项目，或选择一个已有的输出目录";
 
     public string PageCode => IsScanPage ? "01" : "02";
 
@@ -461,6 +519,26 @@ public sealed class ShellViewModel : ObservableObject
         }
     }
 
+    private void SetScanSearchText(string? value)
+    {
+        value ??= string.Empty;
+        if (SetProperty(ref _scanSearchText, value, nameof(ScanSearchText)))
+        {
+            NotifyScanFilterChanged();
+            ClearScanSearchCommand.NotifyCanExecuteChanged();
+        }
+    }
+
+    private void SetLibrarySearchText(string? value)
+    {
+        value ??= string.Empty;
+        if (SetProperty(ref _librarySearchText, value, nameof(LibrarySearchText)))
+        {
+            NotifyLibraryFilterChanged();
+            ClearLibrarySearchCommand.NotifyCanExecuteChanged();
+        }
+    }
+
     private void BrowseSource()
     {
         try
@@ -734,7 +812,7 @@ public sealed class ShellViewModel : ObservableObject
                     result.Errors
                         .Select(error => $"{error.WorkshopId}：{error.Message}")
                         .Concat(result.Warnings.Select(warning =>
-                            $"{warning.WorkshopId} · {warning.EntryPath}：TEX 转换失败，已保留原文件（{warning.Message}）")));
+                            $"{warning.WorkshopId} · {warning.EntryPath}：TEX 转换失败；原始 TEX 中间文件已清理（{warning.Message}）")));
                 SetStatus(result.Message, "Warning");
             }
             else
@@ -894,13 +972,55 @@ public sealed class ShellViewModel : ObservableObject
             nameof(UnpackButtonText),
             nameof(IsUnpackAvailable),
             nameof(UnpackToolTip));
+        NotifyScanFilterChanged();
         UnpackCommand.NotifyCanExecuteChanged();
     }
 
     private void OnLibraryCollectionChanged(object? sender, NotifyCollectionChangedEventArgs args)
-        => OnPropertiesChanged(
+    {
+        OnPropertiesChanged(
             nameof(HasLibraryResults),
             nameof(LibraryCount));
+        NotifyLibraryFilterChanged();
+    }
+
+    private void NotifyScanFilterChanged()
+        => OnPropertiesChanged(
+            nameof(HasScanSearchText),
+            nameof(FilteredScannedWallpapers),
+            nameof(FilteredScanCount),
+            nameof(HasVisibleScanResults),
+            nameof(ScanEmptyTitle),
+            nameof(ScanEmptyDescription));
+
+    private void NotifyLibraryFilterChanged()
+        => OnPropertiesChanged(
+            nameof(HasLibrarySearchText),
+            nameof(FilteredLibraryWallpapers),
+            nameof(FilteredLibraryCount),
+            nameof(HasVisibleLibraryResults),
+            nameof(LibraryEmptyTitle),
+            nameof(LibraryEmptyDescription));
+
+    private static IEnumerable<WallpaperCardViewModel> FilterByTitle(
+        IEnumerable<WallpaperCardViewModel> items,
+        string searchText)
+    {
+        var query = searchText.Trim();
+        return query.Length == 0
+            ? items
+            : items.Where(item => item.Title.Contains(query, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static int CountTitleMatches(
+        IReadOnlyCollection<WallpaperCardViewModel> items,
+        string searchText)
+    {
+        var query = searchText.Trim();
+        return query.Length == 0
+            ? items.Count
+            : items.Count(item => item.Title.Contains(query, StringComparison.OrdinalIgnoreCase));
+    }
 
     private void ClearError()
     {

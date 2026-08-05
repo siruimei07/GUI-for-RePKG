@@ -17,3 +17,10 @@ install or launch a separate RePKG executable.
 
 For security maintenance, the bundled ImageSharp dependency is updated from
 RePKG's original 2.1.9 reference to the API-compatible patched 2.1.13 release.
+
+Wallpaper Field also uses **XamlAnimatedGif 2.3.2** by Thomas Levesque to
+decode, compose, and schedule animated GIF preview frames in WPF. It is
+licensed under the Apache License 2.0. The complete Apache 2.0 terms are
+included in `ThirdParty/RePKG/THIRD-PARTY-NOTICES.txt` (under the
+`SixLabors.ImageSharp` heading); the same unmodified license terms apply to
+XamlAnimatedGif. Project source: https://github.com/XamlAnimatedGif/XamlAnimatedGif

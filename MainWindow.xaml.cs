@@ -19,7 +19,12 @@ public partial class MainWindow : Window
     private const int DwmWindowCornerPreference = 33;
     private const int DwmRoundCorners = 2;
 
-    private bool _motionEnabled = SystemParameters.ClientAreaAnimation;
+    public static readonly DependencyProperty MotionEnabledProperty = DependencyProperty.Register(
+        nameof(MotionEnabled),
+        typeof(bool),
+        typeof(MainWindow),
+        new PropertyMetadata(SystemParameters.ClientAreaAnimation));
+
     private string? _snapshotPath;
     private int _snapshotDelayMilliseconds = 1500;
     private int? _snapshotScrollIndex;
@@ -33,6 +38,12 @@ public partial class MainWindow : Window
 
     private ShellViewModel? ViewModel => DataContext as ShellViewModel;
 
+    public bool MotionEnabled
+    {
+        get => (bool)GetValue(MotionEnabledProperty);
+        private set => SetValue(MotionEnabledProperty, value);
+    }
+
     public void ConfigureSnapshot(
         string path,
         int delayMilliseconds = 1500,
@@ -45,7 +56,7 @@ public partial class MainWindow : Window
 
     public void SetReducedMotion(bool reduceMotion)
     {
-        _motionEnabled = SystemParameters.ClientAreaAnimation && !reduceMotion;
+        MotionEnabled = SystemParameters.ClientAreaAnimation && !reduceMotion;
     }
 
     private void OnDataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
@@ -94,7 +105,7 @@ public partial class MainWindow : Window
 
     private void StartAmbientMotion()
     {
-        if (!_motionEnabled)
+        if (!MotionEnabled)
         {
             BackgroundGridOffset.X = 0;
             BackgroundGridOffset.Y = 0;
@@ -125,7 +136,7 @@ public partial class MainWindow : Window
         CalibrationInstrument.Opacity = 0.17;
         CalibrationRotation.BeginAnimation(RotateTransform.AngleProperty, null);
 
-        if (!_motionEnabled)
+        if (!MotionEnabled)
         {
             CalibrationRotation.Angle = ViewModel?.IsLibraryPage == true ? 24 : 0;
             return;
@@ -143,7 +154,7 @@ public partial class MainWindow : Window
 
     private void SetBusyAnimation(bool isBusy)
     {
-        if (!isBusy || !_motionEnabled)
+        if (!isBusy || !MotionEnabled)
         {
             StartCalibrationLoop();
             return;
@@ -177,7 +188,7 @@ public partial class MainWindow : Window
         other.BeginAnimation(OpacityProperty, null);
         otherStage.BeginAnimation(OpacityProperty, null);
 
-        if (!_motionEnabled)
+        if (!MotionEnabled)
         {
             target.Opacity = 1;
             target.RenderTransform = Transform.Identity;
@@ -248,6 +259,8 @@ public partial class MainWindow : Window
         ScanStats.Visibility = narrow ? Visibility.Collapsed : Visibility.Visible;
         LibraryStats.Visibility = narrow ? Visibility.Collapsed : Visibility.Visible;
         CalibrationInstrument.Visibility = narrow ? Visibility.Collapsed : Visibility.Visible;
+        ScanSearchPanel.Width = narrow ? 350 : 430;
+        LibrarySearchPanel.Width = narrow ? 350 : 430;
         ScanDescription.Visibility = shortWide ? Visibility.Collapsed : Visibility.Visible;
         LibraryDescription.Visibility = shortWide ? Visibility.Collapsed : Visibility.Visible;
         ScanResultsList.Height = shortWide ? 282 : 350;

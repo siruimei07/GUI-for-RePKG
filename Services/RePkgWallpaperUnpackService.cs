@@ -229,61 +229,76 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     var plannedEntry = extractionPlan[index];
+                    var isTextureIntermediate = string.Equals(
+                        Path.GetExtension(plannedEntry.OutputPath),
+                        ".tex",
+                        StringComparison.OrdinalIgnoreCase);
+                    var textureIntermediateCreated = false;
                     var parentDirectory = Path.GetDirectoryName(plannedEntry.OutputPath)
                         ?? throw new InvalidDataException(
                             $"无法确定包内文件的输出目录：{plannedEntry.Entry.FullPath}");
                     Directory.CreateDirectory(parentDirectory);
 
-                    packageStream.Seek(
-                        checked(package.DataStart + plannedEntry.Entry.DataOffset),
-                        SeekOrigin.Begin);
-                    await using (var outputStream = new FileStream(
-                                     plannedEntry.OutputPath,
-                                     FileMode.CreateNew,
-                                     FileAccess.Write,
-                                     FileShare.None,
-                                     CopyBufferSize,
-                                     FileOptions.Asynchronous | FileOptions.SequentialScan))
+                    try
                     {
-                        await CopyExactlyAsync(
-                            packageStream,
-                            outputStream,
-                            plannedEntry.Entry.DataLength,
-                            buffer,
-                            cancellationToken).ConfigureAwait(false);
-                        await outputStream.FlushAsync(cancellationToken).ConfigureAwait(false);
-                    }
+                        packageStream.Seek(
+                            checked(package.DataStart + plannedEntry.Entry.DataOffset),
+                            SeekOrigin.Begin);
+                        await using (var outputStream = new FileStream(
+                                         plannedEntry.OutputPath,
+                                         FileMode.CreateNew,
+                                         FileAccess.Write,
+                                         FileShare.None,
+                                         CopyBufferSize,
+                                         FileOptions.Asynchronous | FileOptions.SequentialScan))
+                        {
+                            textureIntermediateCreated = isTextureIntermediate;
+                            await CopyExactlyAsync(
+                                packageStream,
+                                outputStream,
+                                plannedEntry.Entry.DataLength,
+                                buffer,
+                                cancellationToken).ConfigureAwait(false);
+                            await outputStream.FlushAsync(cancellationToken).ConfigureAwait(false);
+                        }
 
-                    if (string.Equals(
-                            Path.GetExtension(plannedEntry.OutputPath),
-                            ".tex",
-                            StringComparison.OrdinalIgnoreCase))
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        try
+                        if (isTextureIntermediate)
                         {
-                            _ = await Task.Run(
-                                    () => RePkgTextureConverter.Convert(plannedEntry.OutputPath),
-                                    cancellationToken)
-                                .ConfigureAwait(false);
-                            convertedTextureCount++;
-                        }
-                        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                        {
-                            throw;
-                        }
-                        catch (Exception exception)
-                        {
-                            warnings.Add(new WallpaperUnpackWarning
+                            cancellationToken.ThrowIfCancellationRequested();
+                            try
                             {
-                                WorkshopId = item.WorkshopId,
-                                EntryPath = plannedEntry.Entry.FullPath,
-                                Message = exception.Message,
-                                ExceptionType = exception.GetType().Name
-                            });
-                        }
+                                _ = await Task.Run(
+                                        () => RePkgTextureConverter.Convert(plannedEntry.OutputPath),
+                                        cancellationToken)
+                                    .ConfigureAwait(false);
+                                convertedTextureCount++;
+                            }
+                            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                            {
+                                throw;
+                            }
+                            catch (Exception exception)
+                            {
+                                warnings.Add(new WallpaperUnpackWarning
+                                {
+                                    WorkshopId = item.WorkshopId,
+                                    EntryPath = plannedEntry.Entry.FullPath,
+                                    Message = exception.Message,
+                                    ExceptionType = exception.GetType().Name
+                                });
+                            }
 
-                        cancellationToken.ThrowIfCancellationRequested();
+                            cancellationToken.ThrowIfCancellationRequested();
+                        }
+                    }
+                    finally
+                    {
+                        if (textureIntermediateCreated)
+                        {
+                            DeleteOwnedTextureIntermediate(
+                                plannedEntry.OutputPath,
+                                stagingDirectory);
+                        }
                     }
 
                     entryProgress(plannedEntry.Entry.FullPath, index + 1, extractionPlan.Count);
@@ -663,6 +678,34 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
                 .ConfigureAwait(false);
             remaining -= read;
         }
+    }
+
+    private static void DeleteOwnedTextureIntermediate(
+        string texturePath,
+        string stagingDirectory)
+    {
+        var fullTexturePath = Path.GetFullPath(texturePath);
+        var fullStagingDirectory = Path.TrimEndingDirectorySeparator(
+            Path.GetFullPath(stagingDirectory));
+        var stagingPrefix = fullStagingDirectory + Path.DirectorySeparatorChar;
+
+        if (!string.Equals(
+                Path.GetExtension(fullTexturePath),
+                ".tex",
+                StringComparison.OrdinalIgnoreCase)
+            || !fullTexturePath.StartsWith(stagingPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException(
+                $"Refusing to delete a TEX file outside the current extraction staging directory: {texturePath}");
+        }
+
+        if (!File.Exists(fullTexturePath))
+        {
+            return;
+        }
+
+        RejectReparsePoint(fullTexturePath, "TEX extraction intermediate");
+        File.Delete(fullTexturePath);
     }
 
     private static void CommitStagingDirectory(string stagingDirectory, string itemOutputDirectory)
