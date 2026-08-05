@@ -132,7 +132,7 @@ public sealed class ShellViewModel : ObservableObject
     public string CurrentPageTitle => IsScanPage ? "扫描中心" : "输出壁纸库";
 
     public string CurrentPageSubtitle => IsScanPage
-        ? "读取 Workshop 项目元数据并建立本地预览索引"
+        ? "读取 Workshop 项目元数据，并在内存中选择待处理内容"
         : "浏览已写入输出目录的壁纸记录";
 
     public bool IsScanPage => string.Equals(_currentPage, ScanPage, StringComparison.Ordinal);
@@ -213,13 +213,15 @@ public sealed class ShellViewModel : ObservableObject
 
     public string UnpackButtonText => IsUnpacking
         ? "正在解包…"
-        : $"开始解包 · {PackageReadyCount:00}";
+        : $"解包选中项 · {SelectedUnpackCount:00}";
 
     public string UnpackToolTip => ScannedWallpapers.Count == 0
         ? "请先扫描 Workshop 项目。"
         : !IsCurrentOutputScanRoot()
             ? "输出目录已在扫描后更改；请恢复扫描时的输出目录或重新扫描。"
-            : "仅处理扫描时发现 scene.pkg 的项目；其余项目会直接跳过。";
+            : SelectedUnpackCount == 0
+                ? "请先勾选至少一个 PKG 或视频项目。"
+                : $"仅处理已勾选的 {SelectedUnpackCount} 个项目。";
 
     public string StateLabel => IsScanning
         ? "SCANNING"
@@ -279,7 +281,9 @@ public sealed class ShellViewModel : ObservableObject
 
     public int MissingPreviewCount => ScannedWallpapers.Count(item => !item.HasPreview);
 
-    public int PackageReadyCount => ScannedWallpapers.Count(item => item.HasScenePackage);
+    public int PackageReadyCount => ScannedWallpapers.Count(item => item.HasUnpackableContent);
+
+    public int SelectedUnpackCount => ScannedWallpapers.Count(item => item.IsSelectedForUnpack);
 
     public int LibraryCount => LibraryWallpapers.Count;
 
@@ -481,7 +485,7 @@ public sealed class ShellViewModel : ObservableObject
         try
         {
             var selectedPath = _folderPickerService.PickFolder(
-                "选择扫描结果输出目录",
+                "选择解包结果输出目录",
                 OutputPath);
             if (string.IsNullOrWhiteSpace(selectedPath))
             {
@@ -509,7 +513,7 @@ public sealed class ShellViewModel : ObservableObject
 
     private bool CanStartUnpack()
         => !IsBusy
-           && ScannedWallpapers.Count > 0
+           && SelectedUnpackCount > 0
            && IsCurrentOutputScanRoot();
 
     private bool IsCurrentOutputScanRoot()
@@ -556,7 +560,7 @@ public sealed class ShellViewModel : ObservableObject
                 .ScanAsync(request, progress, cancellationToken)
                 .ConfigureAwait(true);
 
-            ReplaceItems(ScannedWallpapers, result.Items);
+            ReplaceScanItems(result.Items);
             _scanOutputPath = Path.GetFullPath(request.OutputDirectory);
             OnPropertiesChanged(nameof(IsUnpackAvailable), nameof(UnpackToolTip));
             UnpackCommand.NotifyCanExecuteChanged();
@@ -578,7 +582,7 @@ public sealed class ShellViewModel : ObservableObject
             }
             else
             {
-                SetStatus($"扫描完成 · 已建立 {SuccessCount} 条壁纸记录", "Success");
+                SetStatus($"扫描完成 · 已发现 {SuccessCount} 条壁纸记录", "Success");
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -686,14 +690,24 @@ public sealed class ShellViewModel : ObservableObject
 
     private async Task UnpackAsync(CancellationToken cancellationToken)
     {
+        var selectedItems = ScannedWallpapers
+            .Where(card => card.IsSelectedForUnpack && card.CanSelectForUnpack)
+            .Select(card => card.Record)
+            .ToArray();
+        if (selectedItems.Length == 0)
+        {
+            SetStatus("请先勾选至少一个可处理项目", "Neutral");
+            return;
+        }
+
         ClearError();
         IsBusy = true;
         IsUnpacking = true;
         CurrentStage = "UNPACK";
         ScannedCount = 0;
-        TotalCount = ScannedWallpapers.Count;
+        TotalCount = selectedItems.Length;
         ProgressValue = 0;
-        SetStatus($"准备解包 · {PackageReadyCount} 个项目包含 scene.pkg", "Working");
+        SetStatus($"准备处理 · 已选择 {selectedItems.Length} 个项目", "Working");
 
         var progress = new Progress<WallpaperUnpackProgress>(UpdateUnpackProgress);
 
@@ -702,7 +716,7 @@ public sealed class ShellViewModel : ObservableObject
             var request = new WallpaperUnpackRequest
             {
                 OutputDirectory = OutputPath.Trim(),
-                Items = ScannedWallpapers.Select(card => card.Record).ToArray()
+                Items = selectedItems
             };
             var result = await _unpackService
                 .UnpackAsync(request, progress, cancellationToken)
@@ -786,7 +800,9 @@ public sealed class ShellViewModel : ObservableObject
         => parameter switch
         {
             string path => path,
-            WallpaperCardViewModel card => card.OutputFolder,
+            WallpaperCardViewModel card => Directory.Exists(card.OutputFolder)
+                ? card.OutputFolder
+                : card.SourceFolder,
             WallpaperRecord record => record.OutputDirectory,
             _ => SelectedLibraryWallpaper?.OutputFolder
         };
@@ -854,12 +870,27 @@ public sealed class ShellViewModel : ObservableObject
         IEnumerable<WallpaperRecord> records)
         => target.ReplaceRange(records.Select(record => new WallpaperCardViewModel(record)));
 
+    private void ReplaceScanItems(IEnumerable<WallpaperRecord> records)
+        => ScannedWallpapers.ReplaceRange(records.Select(
+            record => new WallpaperCardViewModel(record, OnUnpackSelectionChanged)));
+
+    private void OnUnpackSelectionChanged()
+    {
+        OnPropertiesChanged(
+            nameof(SelectedUnpackCount),
+            nameof(UnpackButtonText),
+            nameof(IsUnpackAvailable),
+            nameof(UnpackToolTip));
+        UnpackCommand.NotifyCanExecuteChanged();
+    }
+
     private void OnScanCollectionChanged(object? sender, NotifyCollectionChangedEventArgs args)
     {
         OnPropertiesChanged(
             nameof(HasScanResults),
             nameof(MissingPreviewCount),
             nameof(PackageReadyCount),
+            nameof(SelectedUnpackCount),
             nameof(UnpackButtonText),
             nameof(IsUnpackAvailable),
             nameof(UnpackToolTip));

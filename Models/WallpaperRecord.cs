@@ -28,6 +28,25 @@ public sealed record WallpaperRecord
 
     public string? ScenePackagePath { get; init; }
 
+    /// <summary>
+    /// Wallpaper Engine project type reported by project.json (for example,
+    /// "scene" or "video").
+    /// </summary>
+    public string? WallpaperType { get; init; }
+
+    /// <summary>
+    /// True when a video wallpaper's referenced media file was present during
+    /// the scan.
+    /// </summary>
+    public bool HasVideoFile { get; init; }
+
+    public string? VideoFilePath { get; init; }
+
+    /// <summary>
+    /// Safe source-relative destination used when copying a video wallpaper.
+    /// </summary>
+    public string? VideoRelativePath { get; init; }
+
     public bool UsedFolderNameAsWorkshopId { get; init; }
 
     public DateTimeOffset ScannedAtUtc { get; init; }
@@ -41,4 +60,12 @@ public sealed record WallpaperRecord
     public bool IsScenePackageAvailable => HasScenePackage
         && !string.IsNullOrWhiteSpace(ScenePackagePath)
         && File.Exists(ScenePackagePath);
+
+    [JsonIgnore]
+    public bool IsVideoFileAvailable => HasVideoFile
+        && !string.IsNullOrWhiteSpace(VideoFilePath)
+        && File.Exists(VideoFilePath);
+
+    [JsonIgnore]
+    public bool HasUnpackableContent => HasScenePackage || HasVideoFile;
 }

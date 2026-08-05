@@ -59,9 +59,9 @@
                     VerticalContentAlignment="Stretch"
                     Style="{StaticResource CardButton}"
                     Command="{Binding DataContext.OpenFolderCommand, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                    CommandParameter="{Binding OutputFolder}"
-                    AutomationProperties.Name="{Binding Title, StringFormat=打开输出目录：{0}}"
-                    ToolTip="打开对应输出目录">
+                    CommandParameter="{Binding}"
+                    AutomationProperties.Name="{Binding Title, StringFormat=打开项目目录：{0}}"
+                    ToolTip="打开已有输出目录；尚未解包时打开源目录">
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="236" />
@@ -166,7 +166,7 @@
                                         <Setter Property="BorderBrush" Value="#40191919" />
                                         <Setter Property="BorderThickness" Value="1" />
                                         <Style.Triggers>
-                                            <DataTrigger Binding="{Binding HasScenePackage}" Value="True">
+                                            <DataTrigger Binding="{Binding HasUnpackableContent}" Value="True">
                                                 <Setter Property="Background" Value="{DynamicResource SignalBrush}" />
                                                 <Setter Property="BorderThickness" Value="0" />
                                             </DataTrigger>
@@ -247,6 +247,16 @@
                             VerticalAlignment="Center"
                             Background="{DynamicResource InkBrush}"
                             CornerRadius="19">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Visibility" Value="Visible" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding ShowsUnpackSelection}" Value="True">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
                         <TextBlock HorizontalAlignment="Center"
                                    VerticalAlignment="Center"
                                    FontFamily="Segoe Fluent Icons"
@@ -670,13 +680,13 @@
                                                    Text="FIELD INDEX / 01 · SOURCE INTAKE" />
                                         <TextBlock Margin="0,8,0,0"
                                                    Style="{StaticResource SectionTitle}"
-                                                   Text="建立壁纸索引" />
+                                                   Text="扫描壁纸项目" />
                                         <TextBlock x:Name="ScanDescription"
                                                    Margin="2,9,0,0"
                                                    MaxWidth="630"
                                                    FontSize="13"
                                                    Foreground="{DynamicResource TextMutedBrush}"
-                                                   Text="读取 Workshop 子目录中的 project.json 与 preview 图片，并整理为可扩展的本地输出库。"
+                                                   Text="读取 Workshop 子目录中的 project.json 与 preview；扫描结果保留在内存中，不向输出目录写入文件。"
                                                    TextWrapping="Wrap" />
                                     </StackPanel>
 
@@ -699,7 +709,7 @@
                                         </StackPanel>
                                         <Border Grid.Column="3" Width="1" Height="42" Margin="18,0" Background="{DynamicResource BorderBrush}" />
                                         <StackPanel Grid.Column="4" Width="90">
-                                            <TextBlock Style="{StaticResource TechnicalLabel}" Text="PKG READY" />
+                                            <TextBlock Style="{StaticResource TechnicalLabel}" Text="READY" />
                                             <TextBlock Margin="0,4,0,0" FontFamily="Arial Narrow" FontSize="29" FontWeight="Bold" Text="{Binding PackageReadyCount, StringFormat={}{0:00}}" />
                                         </StackPanel>
                                     </Grid>
@@ -755,7 +765,7 @@
                                                      Style="{StaticResource PathTextBox}"
                                                      AutomationProperties.Name="扫描输出目录"
                                                      Text="{Binding OutputPath, UpdateSourceTrigger=PropertyChanged}"
-                                                     ToolTip="索引、ID 清单、元数据和 preview 副本将存放在此" />
+                                                     ToolTip="扫描不会写入此目录；仅在解包选中项目时创建对应输出" />
                                             <Button Grid.Column="2"
                                                     Style="{StaticResource GhostButton}"
                                                     Foreground="White"
@@ -783,7 +793,7 @@
                                                     Margin="12,0,0,0"
                                                     Style="{StaticResource SecondaryButton}"
                                                     Command="{Binding UnpackCommand}"
-                                                    AutomationProperties.Name="解包所有包含 scene.pkg 的扫描项目"
+                                                    AutomationProperties.Name="解包勾选的 PKG 或视频项目"
                                                     ToolTip="{Binding UnpackToolTip}">
                                                 <StackPanel Orientation="Horizontal">
                                                     <TextBlock Margin="0,0,9,0" FontFamily="Segoe Fluent Icons" Text="&#xE7B8;" />
@@ -879,7 +889,54 @@
                                                 <Setter Property="Template">
                                                     <Setter.Value>
                                                         <ControlTemplate TargetType="ListBoxItem">
-                                                            <ContentPresenter />
+                                                            <Grid>
+                                                                <ContentPresenter />
+                                                                <CheckBox Width="38"
+                                                                          Height="38"
+                                                                          Margin="0,0,22,12"
+                                                                          HorizontalAlignment="Right"
+                                                                          VerticalAlignment="Center"
+                                                                          Panel.ZIndex="5"
+                                                                          IsChecked="{Binding IsSelectedForUnpack, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                                          IsEnabled="{Binding CanSelectForUnpack}"
+                                                                          AutomationProperties.Name="{Binding Title, StringFormat=选择解包：{0}}"
+                                                                          ToolTip="勾选后才会解包或复制此项目">
+                                                                    <CheckBox.Template>
+                                                                        <ControlTemplate TargetType="CheckBox">
+                                                                            <Border x:Name="SelectionBox"
+                                                                                    Width="38"
+                                                                                    Height="38"
+                                                                                    Background="#FFF2F2F0"
+                                                                                    BorderBrush="#99191919"
+                                                                                    BorderThickness="2"
+                                                                                    CornerRadius="10">
+                                                                                <TextBlock x:Name="SelectionGlyph"
+                                                                                           HorizontalAlignment="Center"
+                                                                                           VerticalAlignment="Center"
+                                                                                           FontFamily="Segoe UI Symbol"
+                                                                                           FontSize="17"
+                                                                                           FontWeight="Bold"
+                                                                                           Foreground="#FF191919"
+                                                                                           Text="✓"
+                                                                                           Visibility="Collapsed" />
+                                                                            </Border>
+                                                                            <ControlTemplate.Triggers>
+                                                                                <Trigger Property="IsMouseOver" Value="True">
+                                                                                    <Setter TargetName="SelectionBox" Property="BorderBrush" Value="#FF191919" />
+                                                                                </Trigger>
+                                                                                <Trigger Property="IsChecked" Value="True">
+                                                                                    <Setter TargetName="SelectionBox" Property="Background" Value="{DynamicResource SignalBrush}" />
+                                                                                    <Setter TargetName="SelectionBox" Property="BorderBrush" Value="{DynamicResource SignalBrush}" />
+                                                                                    <Setter TargetName="SelectionGlyph" Property="Visibility" Value="Visible" />
+                                                                                </Trigger>
+                                                                                <Trigger Property="IsEnabled" Value="False">
+                                                                                    <Setter TargetName="SelectionBox" Property="Opacity" Value="0.35" />
+                                                                                </Trigger>
+                                                                            </ControlTemplate.Triggers>
+                                                                        </ControlTemplate>
+                                                                    </CheckBox.Template>
+                                                                </CheckBox>
+                                                            </Grid>
                                                         </ControlTemplate>
                                                     </Setter.Value>
                                                 </Setter>
@@ -910,7 +967,7 @@
                                         <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
                                             <TextBlock HorizontalAlignment="Center" FontFamily="Segoe Fluent Icons" FontSize="29" Foreground="{DynamicResource TextMutedBrush}" Text="&#xEC31;" />
                                             <TextBlock Margin="0,12,0,0" HorizontalAlignment="Center" FontSize="15" FontWeight="SemiBold" Text="等待扫描" />
-                                            <TextBlock Margin="0,5,0,0" HorizontalAlignment="Center" FontSize="12" Foreground="{DynamicResource TextMutedBrush}" Text="选择两个目录后开始建立本地索引" />
+                                            <TextBlock Margin="0,5,0,0" HorizontalAlignment="Center" FontSize="12" Foreground="{DynamicResource TextMutedBrush}" Text="选择源目录与输出目录后开始扫描" />
                                         </StackPanel>
                                     </Border>
                                 </Grid>
@@ -1091,7 +1148,7 @@
                                                     <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" FontFamily="Segoe Fluent Icons" FontSize="25" Foreground="{DynamicResource TextMutedBrush}" Text="&#xE838;" />
                                             </Border>
                                             <TextBlock Margin="0,16,0,0" HorizontalAlignment="Center" FontSize="16" FontWeight="SemiBold" Text="输出库为空" />
-                                            <TextBlock Margin="0,6,0,0" HorizontalAlignment="Center" FontSize="12" Foreground="{DynamicResource TextMutedBrush}" Text="完成一次扫描，或选择一个已有的输出目录" />
+                                            <TextBlock Margin="0,6,0,0" HorizontalAlignment="Center" FontSize="12" Foreground="{DynamicResource TextMutedBrush}" Text="先处理至少一个勾选项目，或选择一个已有的输出目录" />
                                         </StackPanel>
                                     </Border>
                                 </Grid>

@@ -31,8 +31,6 @@ public sealed class WallpaperScanService : IWallpaperScanService
             .OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
-        Directory.CreateDirectory(outputRoot);
-
         var items = new List<WallpaperRecord>(sourceFolders.Length);
         var errors = new List<ScanError>();
         var knownIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -61,21 +59,7 @@ public sealed class WallpaperScanService : IWallpaperScanService
                         $"workshopid“{candidate.WorkshopId}”重复，已保留先扫描到的目录。");
                 }
 
-                progress?.Report(CreateProgress(
-                    index,
-                    sourceFolders.Length,
-                    sourceFolder,
-                    candidate.Title,
-                    ScanStage.CopyingPreview,
-                    candidate.PreviewSourcePath is null ? "没有可用的预览图。" : "正在复制预览图…"));
-
-                var record = await SaveCandidateAsync(
-                    candidate,
-                    outputRoot,
-                    progress,
-                    index,
-                    sourceFolders.Length,
-                    cancellationToken).ConfigureAwait(false);
+                var record = CreateRecord(candidate, outputRoot);
 
                 items.Add(record);
                 knownIds.Add(candidate.WorkshopId);
@@ -117,41 +101,13 @@ public sealed class WallpaperScanService : IWallpaperScanService
             sourceFolders.Length,
             outputRoot,
             null,
-            ScanStage.WritingIndex,
-            "正在写入壁纸索引…"));
+            ScanStage.Finalizing,
+            "正在整理扫描结果…"));
 
         var orderedItems = items
             .OrderBy(item => item.Title, StringComparer.CurrentCultureIgnoreCase)
             .ThenBy(item => item.WorkshopId, StringComparer.OrdinalIgnoreCase)
             .ToArray();
-
-        var indexFile = new WallpaperIndex
-        {
-            GeneratedAtUtc = DateTimeOffset.UtcNow,
-            Items = orderedItems
-        };
-
-        await WallpaperStorage.WriteJsonAtomicallyAsync(
-            Path.Combine(outputRoot, WallpaperStorage.IndexFileName),
-            indexFile,
-            cancellationToken).ConfigureAwait(false);
-
-        var idFileContent = string.Join(
-            Environment.NewLine,
-            orderedItems
-                .Select(item => item.WorkshopId)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .OrderBy(id => id, StringComparer.OrdinalIgnoreCase));
-
-        if (idFileContent.Length > 0)
-        {
-            idFileContent += Environment.NewLine;
-        }
-
-        await WallpaperStorage.WriteTextAtomicallyAsync(
-            Path.Combine(outputRoot, WallpaperStorage.IdListFileName),
-            idFileContent,
-            cancellationToken).ConfigureAwait(false);
 
         var completedAtUtc = DateTimeOffset.UtcNow;
         progress?.Report(CreateProgress(
@@ -180,6 +136,8 @@ public sealed class WallpaperScanService : IWallpaperScanService
         var projectPath = FindProjectFile(sourceFolder);
         string? title = null;
         string? workshopId = null;
+        string? wallpaperType = null;
+        string? projectFile = null;
 
         if (projectPath is null)
         {
@@ -208,6 +166,8 @@ public sealed class WallpaperScanService : IWallpaperScanService
                 {
                     title = ReadScalarProperty(document.RootElement, "title");
                     workshopId = ReadScalarProperty(document.RootElement, "workshopid");
+                    wallpaperType = ReadScalarProperty(document.RootElement, "type");
+                    projectFile = ReadScalarProperty(document.RootElement, "file");
                 }
             }
             catch (OperationCanceledException)
@@ -247,6 +207,11 @@ public sealed class WallpaperScanService : IWallpaperScanService
         }
 
         var scenePackagePath = FindScenePackage(sourceFolder);
+        var (videoFilePath, videoRelativePath) = ResolveVideoFile(
+            sourceFolder,
+            wallpaperType,
+            projectFile,
+            warnings);
 
         return new ScanCandidate(
             workshopId!,
@@ -254,115 +219,94 @@ public sealed class WallpaperScanService : IWallpaperScanService
             Path.GetFullPath(sourceFolder),
             previewPath,
             scenePackagePath,
+            wallpaperType,
+            videoFilePath,
+            videoRelativePath,
             usedFolderNameAsWorkshopId,
             warnings);
     }
 
-    private static async Task<WallpaperRecord> SaveCandidateAsync(
+    private static WallpaperRecord CreateRecord(
         ScanCandidate candidate,
-        string outputRoot,
-        IProgress<ScanProgress>? progress,
-        int scannedCount,
-        int totalCount,
-        CancellationToken cancellationToken)
+        string outputRoot)
     {
         var itemOutputDirectory = Path.Combine(outputRoot, candidate.WorkshopId);
-        Directory.CreateDirectory(itemOutputDirectory);
 
-        string? previewPath = null;
-        string? previewFileName = null;
-
-        if (candidate.PreviewSourcePath is not null)
-        {
-            var extension = Path.GetExtension(candidate.PreviewSourcePath).ToLowerInvariant();
-            previewFileName = $"preview{extension}";
-            previewPath = Path.Combine(itemOutputDirectory, previewFileName);
-
-            if (!PathsEqual(candidate.PreviewSourcePath, previewPath))
-            {
-                await CopyFileAtomicallyAsync(
-                    candidate.PreviewSourcePath,
-                    previewPath,
-                    cancellationToken).ConfigureAwait(false);
-            }
-
-        }
-
-        var record = new WallpaperRecord
+        return new WallpaperRecord
         {
             WorkshopId = candidate.WorkshopId,
             Title = candidate.Title,
             SourceDirectory = candidate.SourceDirectory,
             OutputDirectory = Path.GetFullPath(itemOutputDirectory),
-            PreviewPath = previewPath is null ? null : Path.GetFullPath(previewPath),
-            PreviewFileName = previewFileName,
+            PreviewPath = candidate.PreviewSourcePath is null
+                ? null
+                : Path.GetFullPath(candidate.PreviewSourcePath),
+            PreviewFileName = candidate.PreviewSourcePath is null
+                ? null
+                : Path.GetFileName(candidate.PreviewSourcePath),
             HasScenePackage = candidate.ScenePackagePath is not null,
             ScenePackagePath = candidate.ScenePackagePath is null
                 ? null
                 : Path.GetFullPath(candidate.ScenePackagePath),
+            WallpaperType = candidate.WallpaperType,
+            HasVideoFile = candidate.VideoFilePath is not null,
+            VideoFilePath = candidate.VideoFilePath,
+            VideoRelativePath = candidate.VideoRelativePath,
             UsedFolderNameAsWorkshopId = candidate.UsedFolderNameAsWorkshopId,
             ScannedAtUtc = DateTimeOffset.UtcNow,
             Warnings = candidate.Warnings.ToArray()
         };
-
-        progress?.Report(CreateProgress(
-            scannedCount,
-            totalCount,
-            candidate.SourceDirectory,
-            candidate.Title,
-            ScanStage.SavingMetadata,
-            "正在保存 metadata.json…"));
-
-        await WallpaperStorage.WriteJsonAtomicallyAsync(
-            Path.Combine(itemOutputDirectory, WallpaperStorage.MetadataFileName),
-            record,
-            cancellationToken).ConfigureAwait(false);
-
-        return record;
     }
 
-    private static async Task CopyFileAtomicallyAsync(
-        string sourcePath,
-        string destinationPath,
-        CancellationToken cancellationToken)
+    private static (string? FullPath, string? RelativePath) ResolveVideoFile(
+        string sourceFolder,
+        string? wallpaperType,
+        string? projectFile,
+        ICollection<string> warnings)
     {
-        var destinationDirectory = Path.GetDirectoryName(destinationPath)
-            ?? throw new InvalidOperationException($"无法确定预览图的输出目录：{destinationPath}");
-        Directory.CreateDirectory(destinationDirectory);
-        var temporaryPath = Path.Combine(
-            destinationDirectory,
-            $".{Path.GetFileName(destinationPath)}.{Guid.NewGuid():N}.tmp");
+        var declaresVideo = string.Equals(wallpaperType, "video", StringComparison.OrdinalIgnoreCase);
+        if (!declaresVideo)
+        {
+            return (null, null);
+        }
+
+        if (string.IsNullOrWhiteSpace(projectFile))
+        {
+            warnings.Add("视频壁纸的 project.json 缺少 file 字段，无法复制视频。");
+            return (null, null);
+        }
 
         try
         {
-            await using (var source = new FileStream(
-                sourcePath,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.ReadWrite | FileShare.Delete,
-                64 * 1024,
-                FileOptions.Asynchronous | FileOptions.SequentialScan))
-            await using (var destination = new FileStream(
-                temporaryPath,
-                FileMode.CreateNew,
-                FileAccess.Write,
-                FileShare.None,
-                64 * 1024,
-                FileOptions.Asynchronous | FileOptions.SequentialScan))
+            var normalizedReference = projectFile
+                .Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar)
+                .Replace('/', Path.DirectorySeparatorChar);
+            if (Path.IsPathRooted(normalizedReference))
             {
-                await source.CopyToAsync(destination, 64 * 1024, cancellationToken)
-                    .ConfigureAwait(false);
-                await destination.FlushAsync(cancellationToken).ConfigureAwait(false);
+                throw new InvalidDataException("视频 file 字段不能使用绝对路径。");
             }
 
-            File.Move(temporaryPath, destinationPath, overwrite: true);
-        }
-        finally
-        {
-            if (File.Exists(temporaryPath))
+            var fullPath = Path.GetFullPath(Path.Combine(sourceFolder, normalizedReference));
+            var normalizedSource = Path.TrimEndingDirectorySeparator(Path.GetFullPath(sourceFolder));
+            var sourcePrefix = normalizedSource + Path.DirectorySeparatorChar;
+            if (!fullPath.StartsWith(sourcePrefix, StringComparison.OrdinalIgnoreCase))
             {
-                File.Delete(temporaryPath);
+                throw new InvalidDataException("视频 file 字段指向了壁纸目录之外的位置。");
             }
+
+            if (!File.Exists(fullPath))
+            {
+                warnings.Add($"视频文件不存在：{projectFile}");
+                return (null, null);
+            }
+
+            var relativePath = Path.GetRelativePath(normalizedSource, fullPath);
+            return (fullPath, relativePath);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            warnings.Add($"视频文件路径无效：{exception.Message}");
+            return (null, null);
         }
     }
 
@@ -494,6 +438,9 @@ public sealed class WallpaperScanService : IWallpaperScanService
         string SourceDirectory,
         string? PreviewSourcePath,
         string? ScenePackagePath,
+        string? WallpaperType,
+        string? VideoFilePath,
+        string? VideoRelativePath,
         bool UsedFolderNameAsWorkshopId,
         IReadOnlyList<string> Warnings);
 }

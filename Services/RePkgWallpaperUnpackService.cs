@@ -30,15 +30,15 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
         }
 
         var outputRoot = Path.GetFullPath(request.OutputDirectory.Trim());
-        Directory.CreateDirectory(outputRoot);
         var items = request.Items?.ToArray() ?? Array.Empty<WallpaperRecord>();
-        var eligibleCount = items.Count(item => item.HasScenePackage);
+        var eligibleCount = items.Count(item => item.HasUnpackableContent);
         var errors = new List<WallpaperUnpackError>();
         var processedCount = 0;
         var succeededCount = 0;
         var skippedCount = 0;
         var extractedEntryCount = 0;
         var convertedTextureCount = 0;
+        var copiedVideoCount = 0;
         var warnings = new List<WallpaperUnpackWarning>();
 
         ReportProgress(
@@ -53,14 +53,14 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
             null,
             0,
             eligibleCount == 0
-                ? "扫描记录中没有 scene.pkg；将全部跳过。"
-                : $"已识别 {eligibleCount} 个可解包项目。 ");
+                ? "所选记录中没有可处理的 PKG 或视频；将全部跳过。"
+                : $"已识别 {eligibleCount} 个可处理项目。 ");
 
         foreach (var item in items)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            if (!item.HasScenePackage)
+            if (!item.HasUnpackableContent)
             {
                 skippedCount++;
                 processedCount++;
@@ -75,15 +75,13 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
                     item.WorkshopId,
                     null,
                     0,
-                    $"{item.WorkshopId} 未标记 scene.pkg，已跳过。");
+                    $"{item.WorkshopId} 没有可处理的 PKG 或视频，已跳过。");
                 continue;
             }
 
             try
             {
-                var itemResult = await ExtractItemAsync(
-                    item,
-                    outputRoot,
+                var entryProgress = new Action<string, int, int>(
                     (entryName, currentEntry, totalEntries) => ReportProgress(
                         progress,
                         processedCount,
@@ -95,11 +93,27 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
                         item.WorkshopId,
                         entryName,
                         totalEntries,
-                        $"正在解包 {item.WorkshopId} · {currentEntry}/{totalEntries}"),
-                    cancellationToken).ConfigureAwait(false);
+                        item.HasVideoFile
+                            ? $"正在复制视频 {item.WorkshopId}"
+                            : $"正在解包 {item.WorkshopId} · {currentEntry}/{totalEntries}"));
+
+                var itemResult = item.HasVideoFile
+                    ? await CopyVideoItemAsync(
+                        item,
+                        outputRoot,
+                        entryProgress,
+                        cancellationToken).ConfigureAwait(false)
+                    : await ExtractItemAsync(
+                        item,
+                        outputRoot,
+                        entryProgress,
+                        cancellationToken).ConfigureAwait(false);
+
+                await SaveCatalogRecordAsync(item, outputRoot).ConfigureAwait(false);
 
                 extractedEntryCount += itemResult.EntryCount;
                 convertedTextureCount += itemResult.ConvertedTextureCount;
+                copiedVideoCount += itemResult.CopiedVideoCount;
                 warnings.AddRange(itemResult.Warnings);
                 succeededCount++;
             }
@@ -112,7 +126,7 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
                 errors.Add(new WallpaperUnpackError
                 {
                     WorkshopId = item.WorkshopId,
-                    ScenePackagePath = item.ScenePackagePath,
+                    ScenePackagePath = item.ScenePackagePath ?? item.VideoFilePath,
                     Message = exception.Message,
                     ExceptionType = exception.GetType().Name
                 });
@@ -132,15 +146,18 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
                 0,
                 errors.LastOrDefault()?.WorkshopId == item.WorkshopId
                     ? $"{item.WorkshopId} 解包失败，继续处理下一项。"
-                    : $"{item.WorkshopId} 解包完成。");
+                    : $"{item.WorkshopId} 处理完成。");
         }
 
         var warningSuffix = warnings.Count == 0
             ? string.Empty
             : $"，{warnings.Count} 个 TEX 转换警告";
+        var videoSuffix = copiedVideoCount == 0
+            ? string.Empty
+            : $"，复制 {copiedVideoCount} 个视频";
         var message = errors.Count == 0
-            ? $"解包完成：{succeededCount} 个成功，转换 {convertedTextureCount} 个 TEX，{skippedCount} 个无 PKG 项目已跳过{warningSuffix}。"
-            : $"解包完成：{succeededCount} 个成功，{skippedCount} 个跳过，{errors.Count} 个失败。";
+            ? $"处理完成：{succeededCount} 个成功，转换 {convertedTextureCount} 个 TEX{videoSuffix}，{skippedCount} 个项目已跳过{warningSuffix}。"
+            : $"处理完成：{succeededCount} 个成功，{skippedCount} 个跳过，{errors.Count} 个失败。";
 
         return new WallpaperUnpackResult
         {
@@ -153,6 +170,7 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
             FailedCount = errors.Count,
             ExtractedEntryCount = extractedEntryCount,
             ConvertedTextureCount = convertedTextureCount,
+            CopiedVideoCount = copiedVideoCount,
             Message = message,
             Errors = errors.ToArray(),
             Warnings = warnings.ToArray()
@@ -167,8 +185,6 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
     {
         var scenePackagePath = ValidateScenePackage(item);
         var itemOutputDirectory = ResolveItemOutputDirectory(item, outputRoot);
-        Directory.CreateDirectory(itemOutputDirectory);
-        RejectReparsePoint(itemOutputDirectory, "壁纸输出目录");
 
         var package = await Task.Run(
             () =>
@@ -191,9 +207,12 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
         var extractionPlan = BuildExtractionPlan(package, stagingDirectory);
         var convertedTextureCount = 0;
         var warnings = new List<WallpaperUnpackWarning>();
+        var createdItemOutputDirectory = !Directory.Exists(itemOutputDirectory);
 
         try
         {
+            Directory.CreateDirectory(itemOutputDirectory);
+            RejectReparsePoint(itemOutputDirectory, "壁纸输出目录");
             Directory.CreateDirectory(stagingDirectory);
             var buffer = ArrayPool<byte>.Shared.Rent(CopyBufferSize);
             try
@@ -298,11 +317,181 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
             return new ItemExtractionResult(
                 extractionPlan.Count,
                 convertedTextureCount,
+                0,
                 warnings.ToArray());
         }
         finally
         {
             TryDeleteOwnedStagingDirectory(stagingDirectory, itemOutputDirectory);
+            TryDeleteEmptyItemDirectory(itemOutputDirectory, createdItemOutputDirectory);
+        }
+    }
+
+    private static async Task<ItemExtractionResult> CopyVideoItemAsync(
+        WallpaperRecord item,
+        string outputRoot,
+        Action<string, int, int> entryProgress,
+        CancellationToken cancellationToken)
+    {
+        var (videoFilePath, videoRelativePath) = ValidateVideoFile(item);
+        var itemOutputDirectory = ResolveItemOutputDirectory(item, outputRoot);
+        var stagingDirectory = Path.Combine(
+            itemOutputDirectory,
+            $"{StagingPrefix}{Guid.NewGuid():N}");
+        var destinationPath = ResolveSafeEntryPath(stagingDirectory, videoRelativePath);
+        var destinationDirectory = Path.GetDirectoryName(destinationPath)
+            ?? throw new InvalidDataException("无法确定视频文件的输出目录。");
+        var createdItemOutputDirectory = !Directory.Exists(itemOutputDirectory);
+
+        try
+        {
+            Directory.CreateDirectory(itemOutputDirectory);
+            RejectReparsePoint(itemOutputDirectory, "壁纸输出目录");
+            Directory.CreateDirectory(destinationDirectory);
+
+            await using (var sourceStream = new FileStream(
+                videoFilePath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                CopyBufferSize,
+                FileOptions.Asynchronous | FileOptions.SequentialScan))
+            await using (var destinationStream = new FileStream(
+                destinationPath,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                CopyBufferSize,
+                FileOptions.Asynchronous | FileOptions.SequentialScan))
+            {
+                await sourceStream.CopyToAsync(
+                    destinationStream,
+                    CopyBufferSize,
+                    cancellationToken).ConfigureAwait(false);
+                await destinationStream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            entryProgress(videoRelativePath, 1, 1);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var videoInfo = new FileInfo(videoFilePath);
+            await WallpaperStorage.WriteJsonAtomicallyAsync(
+                Path.Combine(stagingDirectory, ManifestFileName),
+                new VideoCopyManifest
+                {
+                    WorkshopId = item.WorkshopId,
+                    SourceVideo = videoFilePath,
+                    VideoRelativePath = videoRelativePath,
+                    VideoLength = videoInfo.Length,
+                    VideoLastWriteTimeUtc = videoInfo.LastWriteTimeUtc,
+                    CompletedAtUtc = DateTimeOffset.UtcNow
+                },
+                cancellationToken).ConfigureAwait(false);
+
+            cancellationToken.ThrowIfCancellationRequested();
+            CommitStagingDirectory(stagingDirectory, itemOutputDirectory);
+            return new ItemExtractionResult(1, 0, 1, Array.Empty<WallpaperUnpackWarning>());
+        }
+        finally
+        {
+            TryDeleteOwnedStagingDirectory(stagingDirectory, itemOutputDirectory);
+            TryDeleteEmptyItemDirectory(itemOutputDirectory, createdItemOutputDirectory);
+        }
+    }
+
+    private static async Task SaveCatalogRecordAsync(
+        WallpaperRecord item,
+        string outputRoot)
+    {
+        var itemOutputDirectory = ResolveItemOutputDirectory(item, outputRoot);
+        if (!Directory.Exists(itemOutputDirectory))
+        {
+            throw new DirectoryNotFoundException(
+                $"处理完成后找不到项目输出目录：{itemOutputDirectory}");
+        }
+
+        RejectReparsePoint(itemOutputDirectory, "壁纸输出目录");
+        var previewPath = !string.IsNullOrWhiteSpace(item.PreviewPath)
+                          && File.Exists(item.PreviewPath)
+            ? Path.GetFullPath(item.PreviewPath)
+            : null;
+        var storedRecord = item with
+        {
+            OutputDirectory = itemOutputDirectory,
+            PreviewPath = previewPath,
+            PreviewFileName = previewPath is null ? null : Path.GetFileName(previewPath)
+        };
+
+        // The content has already been committed. Do not let a last-moment
+        // cancellation interrupt this small catalog write; genuine I/O errors
+        // are still surfaced to the caller.
+        await WallpaperStorage.WriteJsonAtomicallyAsync(
+            Path.Combine(itemOutputDirectory, WallpaperStorage.MetadataFileName),
+            storedRecord,
+            CancellationToken.None).ConfigureAwait(false);
+    }
+
+    private static (string FullPath, string RelativePath) ValidateVideoFile(
+        WallpaperRecord item)
+    {
+        if (string.IsNullOrWhiteSpace(item.SourceDirectory))
+        {
+            throw new InvalidDataException("扫描记录缺少视频壁纸源目录。");
+        }
+
+        if (string.IsNullOrWhiteSpace(item.VideoFilePath)
+            || string.IsNullOrWhiteSpace(item.VideoRelativePath))
+        {
+            throw new FileNotFoundException("扫描记录已标记视频，但没有保存有效的视频路径。");
+        }
+
+        var sourceDirectory = Path.TrimEndingDirectorySeparator(
+            Path.GetFullPath(item.SourceDirectory));
+        if (!Directory.Exists(sourceDirectory))
+        {
+            throw new DirectoryNotFoundException($"视频壁纸源目录已不存在：{sourceDirectory}");
+        }
+
+        RejectReparsePoint(sourceDirectory, "视频壁纸源目录");
+        var recordedPath = Path.GetFullPath(item.VideoFilePath);
+        var resolvedPath = ResolveSafeEntryPath(sourceDirectory, item.VideoRelativePath);
+        if (!PathsEqual(recordedPath, resolvedPath))
+        {
+            throw new InvalidDataException("视频路径与扫描时保存的相对位置不一致。");
+        }
+
+        if (!File.Exists(resolvedPath))
+        {
+            throw new FileNotFoundException("扫描时发现的视频文件已不存在。", resolvedPath);
+        }
+
+        RejectReparsePointsBelowSource(sourceDirectory, item.VideoRelativePath);
+        RejectReparsePoint(resolvedPath, "视频文件");
+        return (resolvedPath, item.VideoRelativePath);
+    }
+
+    private static void RejectReparsePointsBelowSource(
+        string sourceDirectory,
+        string relativeFilePath)
+    {
+        var relativeDirectory = Path.GetDirectoryName(relativeFilePath);
+        if (string.IsNullOrWhiteSpace(relativeDirectory))
+        {
+            return;
+        }
+
+        var current = sourceDirectory;
+        foreach (var segment in relativeDirectory.Split(
+                     [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+                     StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.Combine(current, segment);
+            if (!Directory.Exists(current))
+            {
+                throw new DirectoryNotFoundException($"视频文件的父目录已不存在：{current}");
+            }
+
+            RejectReparsePoint(current, "视频文件的父目录");
         }
     }
 
@@ -326,6 +515,12 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
 
         var sourceDirectory = Path.TrimEndingDirectorySeparator(
             Path.GetFullPath(item.SourceDirectory));
+        if (!Directory.Exists(sourceDirectory))
+        {
+            throw new DirectoryNotFoundException($"壁纸源目录已不存在：{sourceDirectory}");
+        }
+
+        RejectReparsePoint(sourceDirectory, "壁纸源目录");
         var packageDirectory = Path.GetDirectoryName(packagePath);
         if (packageDirectory is null || !PathsEqual(sourceDirectory, packageDirectory))
         {
@@ -573,6 +768,30 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
         }
     }
 
+    private static void TryDeleteEmptyItemDirectory(
+        string itemOutputDirectory,
+        bool createdByCurrentOperation)
+    {
+        if (!createdByCurrentOperation)
+        {
+            return;
+        }
+
+        try
+        {
+            if (Directory.Exists(itemOutputDirectory)
+                && !Directory.EnumerateFileSystemEntries(itemOutputDirectory).Any())
+            {
+                Directory.Delete(itemOutputDirectory);
+            }
+        }
+        catch
+        {
+            // Empty-directory cleanup is best effort and must not hide the
+            // original extraction or copy failure.
+        }
+    }
+
     private static bool PathsEqual(string left, string right)
         => string.Equals(
             Path.TrimEndingDirectorySeparator(Path.GetFullPath(left)),
@@ -612,6 +831,7 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
     private sealed record ItemExtractionResult(
         int EntryCount,
         int ConvertedTextureCount,
+        int CopiedVideoCount,
         IReadOnlyList<WallpaperUnpackWarning> Warnings);
 
     private sealed record UnpackManifest
@@ -638,6 +858,27 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
 
         public IReadOnlyList<WallpaperUnpackWarning> TextureWarnings { get; init; }
             = Array.Empty<WallpaperUnpackWarning>();
+
+        public DateTimeOffset CompletedAtUtc { get; init; }
+    }
+
+    private sealed record VideoCopyManifest
+    {
+        public int SchemaVersion { get; init; } = 3;
+
+        public string Engine { get; init; } = "Wallpaper Field video copier";
+
+        public string Operation { get; init; } = "video-copy";
+
+        public string WorkshopId { get; init; } = string.Empty;
+
+        public string SourceVideo { get; init; } = string.Empty;
+
+        public string VideoRelativePath { get; init; } = string.Empty;
+
+        public long VideoLength { get; init; }
+
+        public DateTime VideoLastWriteTimeUtc { get; init; }
 
         public DateTimeOffset CompletedAtUtc { get; init; }
     }

@@ -5,15 +5,24 @@ namespace WallpaperField.ViewModels;
 /// <summary>
 /// Stable, XAML-friendly projection of a catalog record.
 /// </summary>
-public sealed class WallpaperCardViewModel
+public sealed class WallpaperCardViewModel : ObservableObject
 {
-    public WallpaperCardViewModel(WallpaperRecord record)
+    private readonly Action? _unpackSelectionChanged;
+    private bool _isSelectedForUnpack;
+
+    public WallpaperCardViewModel(
+        WallpaperRecord record,
+        Action? unpackSelectionChanged = null)
     {
         ArgumentNullException.ThrowIfNull(record);
         Record = record;
+        _unpackSelectionChanged = unpackSelectionChanged;
+        ShowsUnpackSelection = unpackSelectionChanged is not null;
     }
 
     public WallpaperRecord Record { get; }
+
+    public bool ShowsUnpackSelection { get; }
 
     public string WorkshopId => Record.WorkshopId;
 
@@ -31,11 +40,36 @@ public sealed class WallpaperCardViewModel
 
     public bool HasScenePackage => Record.HasScenePackage;
 
-    public string PackageStatus => HasScenePackage ? "PKG READY" : "NO PKG";
+    public bool HasVideoFile => Record.HasVideoFile;
 
-    public string PackageStatusDetail => HasScenePackage
-        ? $"已发现 scene.pkg\n{Record.ScenePackagePath}"
-        : "扫描时未发现 scene.pkg；批量解包会跳过此项目。";
+    public bool HasUnpackableContent => Record.HasUnpackableContent;
+
+    public bool CanSelectForUnpack => HasUnpackableContent;
+
+    public bool IsSelectedForUnpack
+    {
+        get => _isSelectedForUnpack;
+        set
+        {
+            var normalizedValue = value && CanSelectForUnpack;
+            if (SetProperty(ref _isSelectedForUnpack, normalizedValue))
+            {
+                _unpackSelectionChanged?.Invoke();
+            }
+        }
+    }
+
+    public string PackageStatus => HasVideoFile
+        ? "VIDEO READY"
+        : HasScenePackage
+            ? "PKG READY"
+            : "NO CONTENT";
+
+    public string PackageStatusDetail => HasVideoFile
+        ? $"已发现视频壁纸\n{Record.VideoFilePath}"
+        : HasScenePackage
+            ? $"已发现 scene.pkg\n{Record.ScenePackagePath}"
+            : "扫描时未发现 scene.pkg 或有效视频文件，无法处理此项目。";
 
     public int WarningCount => Record.Warnings.Count;
 

@@ -9,6 +9,7 @@ public enum ScanStage
     CopyingPreview,
     SavingMetadata,
     WritingIndex,
+    Finalizing,
     Completed,
     Failed
 }

@@ -22,6 +22,19 @@ try
     CreateItem("303", "JPG + Bad Magic", "303", "preview.jpg", GetPngBytes());
     CreateItem("404", "No Preview + Traversal", "404", null, null);
     CreateItem("505", "Valid After Failures", "505", "preview.png", GetPngBytes());
+    CreateItem(
+        "606",
+        "Nested Video",
+        "606",
+        "preview.jpg",
+        GetPngBytes(),
+        wallpaperType: "video",
+        projectFile: "media/clip.mp4");
+
+    var videoBytes = Encoding.UTF8.GetBytes("wallpaper-field-video-fixture");
+    var videoSourcePath = Path.Combine(sourceRoot, "606", "media", "clip.mp4");
+    Directory.CreateDirectory(Path.GetDirectoryName(videoSourcePath)!);
+    File.WriteAllBytes(videoSourcePath, videoBytes);
 
     WritePackage(
         Path.Combine(sourceRoot, "101", "scene.pkg"),
@@ -44,49 +57,55 @@ try
         Path.Combine(sourceRoot, "505", "SCENE.PKG"),
         "PKGV0018",
         [("assets/after.bin", [0, 1, 2, 3, 255])]);
+    WritePackage(
+        Path.Combine(sourceRoot, "606", "scene.pkg"),
+        "PKGV0018",
+        [("must-not-unpack.txt", Encoding.UTF8.GetBytes("video projects prefer their media file"))]);
 
     var scanService = new WallpaperScanService();
     var scanResult = await scanService.ScanAsync(new WallpaperScanRequest(sourceRoot, outputRoot));
 
-    Assert(scanResult.SuccessCount == 5, "Expected five successful scan records.");
+    Assert(scanResult.SuccessCount == 6, "Expected six successful scan records.");
     Assert(scanResult.FailedCount == 0, "Expected no fatal item scan failures.");
-    Assert(File.Exists(Path.Combine(outputRoot, "wallpaper-index.json")), "Missing root index.");
-    Assert(File.Exists(Path.Combine(outputRoot, "workshop-ids.txt")), "Missing ID list.");
-    Assert(File.Exists(Path.Combine(outputRoot, "101", "preview.png")), "PNG was not copied.");
-    Assert(File.Exists(Path.Combine(outputRoot, "202", "preview.gif")), "GIF was not copied.");
-    Assert(File.Exists(Path.Combine(outputRoot, "303", "preview.jpg")), "JPG was not copied.");
+    Assert(!Directory.Exists(outputRoot),
+        "Scanning must not create the output root or any catalog artifacts.");
+
+    var item101 = scanResult.Items.Single(item => item.WorkshopId == "101");
+    var item202 = scanResult.Items.Single(item => item.WorkshopId == "202");
+    var item303 = scanResult.Items.Single(item => item.WorkshopId == "303");
+    var item404 = scanResult.Items.Single(item => item.WorkshopId == "404");
+    var item505 = scanResult.Items.Single(item => item.WorkshopId == "505");
+    var item606 = scanResult.Items.Single(item => item.WorkshopId == "606");
+
     Assert(!scanResult.Items.Single(item => item.WorkshopId == "404").HasPreview,
         "Missing preview was not reported.");
-    Assert(scanResult.Items.Count(item => item.HasScenePackage) == 4,
+    Assert(scanResult.Items.Count(item => item.HasScenePackage) == 5,
         "scene.pkg eligibility was not captured during scanning.");
-    Assert(!scanResult.Items.Single(item => item.WorkshopId == "202").HasScenePackage,
+    Assert(!item202.HasUnpackableContent,
         "A folder without scene.pkg was incorrectly marked eligible.");
+    Assert(item606.HasVideoFile && item606.HasUnpackableContent,
+        "The video fixture was not marked eligible.");
+    Assert(string.Equals(item606.WallpaperType, "video", StringComparison.OrdinalIgnoreCase),
+        "The video wallpaper type was not captured.");
+    Assert(PathsEqual(item606.VideoFilePath, videoSourcePath),
+        "The video source path was not resolved from project.json.");
+    Assert(string.Equals(
+            item606.VideoRelativePath,
+            Path.Combine("media", "clip.mp4"),
+            StringComparison.OrdinalIgnoreCase),
+        "The video's source-relative path was not preserved.");
+    Assert(PathsEqual(item101.PreviewPath, Path.Combine(sourceRoot, "101", "preview.PNG")),
+        "The scan record should link directly to the source preview.");
 
-    var ids = await File.ReadAllLinesAsync(Path.Combine(outputRoot, "workshop-ids.txt"));
-    Assert(ids.Order().SequenceEqual(["101", "202", "303", "404", "505"]),
-        "ID list contents differ.");
-
-    var legacyMetadataPath = Path.Combine(outputRoot, "101", "metadata.json");
-    var legacyMetadata = JsonNode.Parse(await File.ReadAllTextAsync(legacyMetadataPath))?.AsObject()
-        ?? throw new InvalidDataException("Could not prepare legacy metadata fixture.");
-    legacyMetadata.Remove("hasScenePackage");
-    legacyMetadata.Remove("scenePackagePath");
-    await File.WriteAllTextAsync(
-        legacyMetadataPath,
-        legacyMetadata.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
-
-    var library = await new WallpaperLibraryService().LoadAsync(outputRoot);
-    Assert(library.Items.Count == 5, "Library did not reload all records.");
-    Assert(library.Items.Any(item => item.Title == "GIF + No PKG"),
-        "Stored title did not round-trip.");
-    Assert(library.Items.Single(item => item.WorkshopId == "101").HasScenePackage,
-        "Legacy metadata did not backfill scene.pkg state from the source folder.");
+    var libraryBeforeUnpack = await new WallpaperLibraryService().LoadAsync(outputRoot);
+    Assert(libraryBeforeUnpack.Items.Count == 0,
+        "A scan-only result must not appear in the output library.");
 
     var unpackService = new RePkgWallpaperUnpackService();
     var unpackResult = await unpackService.UnpackAsync(new WallpaperUnpackRequest
     {
         OutputDirectory = outputRoot,
-        Items = scanResult.Items
+        Items = [item101, item202, item303, item404, item505]
     });
 
     Assert(unpackResult.TotalCount == 5, "Unpack total count differs.");
@@ -101,21 +120,90 @@ try
         "Unpack manifest was not written.");
     Assert(File.Exists(Path.Combine(outputRoot, "505", "unpacked", "assets", "after.bin")),
         "Processing did not continue after failed packages.");
-    Assert(!Directory.Exists(Path.Combine(outputRoot, "202", "unpacked")),
-        "A skipped item unexpectedly created an unpack directory.");
+    Assert(!Directory.Exists(Path.Combine(outputRoot, "202")),
+        "A passed but ineligible item unexpectedly created output.");
+    Assert(!Directory.Exists(Path.Combine(outputRoot, "606")),
+        "A valid item omitted from the service request unexpectedly created output.");
+    foreach (var successfulId in new[] { "101", "505" })
+    {
+        Assert(File.Exists(Path.Combine(outputRoot, successfulId, "metadata.json")),
+            $"Successful item {successfulId} is missing catalog metadata.");
+    }
+
+    foreach (var unsuccessfulOrOmittedId in new[] { "202", "303", "404", "606" })
+    {
+        Assert(!File.Exists(Path.Combine(outputRoot, unsuccessfulOrOmittedId, "metadata.json")),
+            $"Item {unsuccessfulOrOmittedId} must not have catalog metadata.");
+    }
+
     Assert(!File.Exists(Path.Combine(outputRoot, "escape.txt"))
            && !File.Exists(Path.Combine(testRoot, "escape.txt")),
         "A traversal package wrote outside its isolated unpack directory.");
-    Assert(!Directory.EnumerateDirectories(Path.Combine(outputRoot, "404"))
-        .Any(path => Path.GetFileName(path).StartsWith(".unpacked-stage-", StringComparison.Ordinal)),
+    Assert(!Directory.Exists(Path.Combine(outputRoot, "404"))
+           || !Directory.EnumerateDirectories(Path.Combine(outputRoot, "404"))
+               .Any(path => Path.GetFileName(path).StartsWith(".unpacked-stage-", StringComparison.Ordinal)),
         "Failed unpack left a staging directory behind.");
-    Assert((await File.ReadAllBytesAsync(Path.Combine(outputRoot, "101", "preview.png")))
-            .SequenceEqual(GetPngBytes()),
-        "A package entry overwrote the catalog preview.");
+    Assert(!Directory.EnumerateFiles(
+            Path.Combine(outputRoot, "101"),
+            "preview.*",
+            SearchOption.TopDirectoryOnly).Any(),
+        "Successful processing should not copy a catalog preview.");
+    Assert((await File.ReadAllBytesAsync(Path.Combine(sourceRoot, "101", "preview.PNG")))
+        .SequenceEqual(GetPngBytes()),
+        "Package extraction changed the linked source preview.");
 
-    var libraryAfterUnpack = await new WallpaperLibraryService().LoadAsync(outputRoot);
-    Assert(libraryAfterUnpack.Items.Count == 5,
-        "Library discovery entered unpacked package content and loaded false metadata.");
+    var libraryAfterPackages = await new WallpaperLibraryService().LoadAsync(outputRoot);
+    Assert(new HashSet<string>(libraryAfterPackages.Items.Select(item => item.WorkshopId))
+            .SetEquals(["101", "505"]),
+        "The output library must contain only successfully processed package items.");
+    Assert(PathsEqual(
+            libraryAfterPackages.Items.Single(item => item.WorkshopId == "101").PreviewPath,
+            Path.Combine(sourceRoot, "101", "preview.PNG")),
+        "The output library did not retain the source preview link.");
+
+    var legacyMetadataPath = Path.Combine(outputRoot, "101", "metadata.json");
+    var legacyMetadata = JsonNode.Parse(await File.ReadAllTextAsync(legacyMetadataPath))?.AsObject()
+        ?? throw new InvalidDataException("Could not prepare legacy metadata fixture.");
+    legacyMetadata.Remove("hasScenePackage");
+    legacyMetadata.Remove("scenePackagePath");
+    await File.WriteAllTextAsync(
+        legacyMetadataPath,
+        legacyMetadata.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+
+    var legacyLibrary = await new WallpaperLibraryService().LoadAsync(outputRoot);
+    Assert(legacyLibrary.Items.Count == 2,
+        "Legacy metadata reload included an item without successful output.");
+    Assert(legacyLibrary.Items.Single(item => item.WorkshopId == "101").HasScenePackage,
+        "Legacy metadata did not backfill scene.pkg state from the source folder.");
+
+    var videoResult = await unpackService.UnpackAsync(new WallpaperUnpackRequest
+    {
+        OutputDirectory = outputRoot,
+        Items = [item606]
+    });
+    Assert(videoResult.TotalCount == 1 && videoResult.EligibleCount == 1,
+        "The video-only request was not counted correctly.");
+    Assert(videoResult.SucceededCount == 1
+           && videoResult.FailedCount == 0
+           && videoResult.SkippedCount == 0
+           && videoResult.CopiedVideoCount == 1,
+        "The video-only request did not complete successfully.");
+    var copiedVideoPath = Path.Combine(outputRoot, "606", "unpacked", "media", "clip.mp4");
+    Assert(File.Exists(copiedVideoPath),
+        "The video was not copied to its source-relative output position.");
+    Assert((await File.ReadAllBytesAsync(copiedVideoPath)).SequenceEqual(videoBytes),
+        "The copied video differs from the source file.");
+    Assert(!File.Exists(Path.Combine(outputRoot, "606", "unpacked", "must-not-unpack.txt")),
+        "A video project with a stray scene.pkg should copy its video instead of unpacking the PKG.");
+    Assert(File.Exists(Path.Combine(outputRoot, "606", "metadata.json")),
+        "A successfully copied video is missing catalog metadata.");
+
+    var libraryAfterVideo = await new WallpaperLibraryService().LoadAsync(outputRoot);
+    Assert(new HashSet<string>(libraryAfterVideo.Items.Select(item => item.WorkshopId))
+            .SetEquals(["101", "505", "606"]),
+        "The output library must contain only successfully processed packages and videos.");
+    Assert(libraryAfterVideo.Items.Single(item => item.WorkshopId == "606").HasVideoFile,
+        "Video metadata did not round-trip through the output library.");
 
     var existingMainPath = Path.Combine(outputRoot, "101", "unpacked", "scripts", "main.js");
     var existingMainBytes = await File.ReadAllBytesAsync(existingMainPath);
@@ -161,8 +249,6 @@ try
     Assert(repeatResult.SucceededCount == 1 && repeatResult.FailedCount == 0,
         "Repeated extraction should safely overwrite package-owned files.");
 
-    var item101 = scanResult.Items.Single(item => item.WorkshopId == "101");
-    var item505 = scanResult.Items.Single(item => item.WorkshopId == "505");
     var tamperedResult = await unpackService.UnpackAsync(new WallpaperUnpackRequest
     {
         OutputDirectory = outputRoot,
@@ -183,16 +269,26 @@ try
         OutputPath = viewModelOutputRoot
     };
     await shell.ScanCommand.ExecuteAsync();
-    Assert(shell.ScannedWallpapers.Count == 5 && shell.PackageReadyCount == 4,
-        "The scan command did not project scene.pkg state into the UI model.");
-    Assert(shell.UnpackCommand.CanExecute(null),
-        "The unpack button command was not enabled after a successful scan.");
+    Assert(shell.ScannedWallpapers.Count == 6 && shell.PackageReadyCount == 5,
+        "The scan command did not project PKG and video eligibility into the UI model.");
+    Assert(!Directory.Exists(viewModelOutputRoot),
+        "View-model scanning must not create its output root.");
+    Assert(shell.SelectedUnpackCount == 0
+           && shell.ScannedWallpapers.All(card => !card.IsSelectedForUnpack),
+        "Scanned cards must be unchecked by default.");
+    Assert(!shell.UnpackCommand.CanExecute(null),
+        "The unpack button must stay disabled until a card is checked.");
+
+    var selectedCard = shell.ScannedWallpapers.Single(card => card.WorkshopId == "101");
+    selectedCard.IsSelectedForUnpack = true;
+    Assert(shell.SelectedUnpackCount == 1 && shell.UnpackCommand.CanExecute(null),
+        "Checking item 101 did not enable unpacking for exactly one item.");
     shell.OutputPath = Path.Combine(testRoot, "different-output");
     Assert(!shell.UnpackCommand.CanExecute(null),
         "Changing the output root after scanning must disable unpacking stale records.");
     shell.OutputPath = viewModelOutputRoot;
     Assert(shell.UnpackCommand.CanExecute(null),
-        "Restoring the scan output root did not re-enable unpacking.");
+        "Restoring the scan output root did not re-enable the selected item.");
     await shell.UnpackCommand.ExecuteAsync();
     Assert(File.Exists(Path.Combine(
             viewModelOutputRoot,
@@ -201,10 +297,17 @@ try
             "scripts",
             "main.js")),
         "The unpack button command did not invoke the RePKG backend.");
-    Assert(!Directory.Exists(Path.Combine(viewModelOutputRoot, "202", "unpacked")),
-        "The unpack button command did not skip an item without scene.pkg.");
+    Assert(File.Exists(Path.Combine(viewModelOutputRoot, "101", "metadata.json")),
+        "The selected item is missing catalog metadata.");
+    Assert(Directory.EnumerateDirectories(viewModelOutputRoot)
+            .Select(Path.GetFileName)
+            .SequenceEqual(["101"]),
+        "The view model processed an item that was not checked.");
     Assert(!shell.IsBusy && !shell.IsUnpacking,
         "The UI model remained busy after the unpack command completed.");
+    selectedCard.IsSelectedForUnpack = false;
+    Assert(shell.SelectedUnpackCount == 0 && !shell.UnpackCommand.CanExecute(null),
+        "Clearing the final checkbox did not disable unpacking.");
 
     if (args.Length > 0)
     {
@@ -297,18 +400,30 @@ void CreateItem(
     string title,
     string workshopId,
     string? previewName,
-    byte[]? previewBytes)
+    byte[]? previewBytes,
+    string? wallpaperType = null,
+    string? projectFile = null)
 {
     var directory = Path.Combine(sourceRoot, folderName);
     Directory.CreateDirectory(directory);
+    var project = new JsonObject
+    {
+        ["title"] = title,
+        ["workshopid"] = workshopId
+    };
+    if (!string.IsNullOrWhiteSpace(wallpaperType))
+    {
+        project["type"] = wallpaperType;
+    }
+
+    if (!string.IsNullOrWhiteSpace(projectFile))
+    {
+        project["file"] = projectFile;
+    }
+
     File.WriteAllText(
         Path.Combine(directory, "project.json"),
-        $$"""
-        {
-          "title": "{{title}}",
-          "workshopid": "{{workshopId}}"
-        }
-        """,
+        project.ToJsonString(new JsonSerializerOptions { WriteIndented = true }),
         Encoding.UTF8);
 
     if (previewName is not null && previewBytes is not null)
@@ -392,6 +507,14 @@ static void Assert(bool condition, string message)
         throw new InvalidOperationException(message);
     }
 }
+
+static bool PathsEqual(string? left, string? right)
+    => !string.IsNullOrWhiteSpace(left)
+       && !string.IsNullOrWhiteSpace(right)
+       && string.Equals(
+           Path.GetFullPath(left),
+           Path.GetFullPath(right),
+           StringComparison.OrdinalIgnoreCase);
 
 static byte[] GetPngBytes() => Convert.FromBase64String(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");

@@ -78,6 +78,8 @@ public sealed record WallpaperUnpackResult
 
     public int ConvertedTextureCount { get; init; }
 
+    public int CopiedVideoCount { get; init; }
+
     public string Message { get; init; } = string.Empty;
 
     public IReadOnlyList<WallpaperUnpackError> Errors { get; init; } = Array.Empty<WallpaperUnpackError>();
