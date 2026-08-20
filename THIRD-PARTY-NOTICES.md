@@ -9,6 +9,9 @@ RePKG is licensed under the MIT License. Its complete license is distributed at
 `ThirdParty/RePKG/LICENSE.txt`. The dependency and incorporated-code notices
 from the upstream RePKG repository are distributed at
 `ThirdParty/RePKG/THIRD-PARTY-NOTICES.txt`.
+Wallpaper Field's bounded-reader, decode-budget, ownership, C-string, and RG88
+changes relative to RePKG 0.4.0 are listed in
+`ThirdParty/RePKG/UPSTREAM-PATCHES.md`.
 
 Wallpaper Field uses the same RePKG texture reader, LZ4 decompressor, image
 converter, and TEX metadata generator as the upstream command-line program.

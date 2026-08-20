@@ -7,6 +7,18 @@ namespace RePKG.Application.Texture
 {
     public class TexHeaderReader : ITexHeaderReader
     {
+        private readonly TexDecodeBudget.FileScope _budget;
+
+        public TexHeaderReader()
+            : this(new TexDecodeBudget().BeginFile(1))
+        {
+        }
+
+        public TexHeaderReader(TexDecodeBudget.FileScope budget)
+        {
+            _budget = budget ?? throw new ArgumentNullException(nameof(budget));
+        }
+
         public ITexHeader ReadFrom(BinaryReader reader)
         {
             if (reader == null) throw new ArgumentNullException(nameof(reader));
@@ -24,6 +36,15 @@ namespace RePKG.Application.Texture
 
             if (!header.Format.IsValid())
                 throw new EnumNotValidException<TexFormat>(header.Format);
+
+            _budget.ValidateDimensions(
+                header.TextureWidth,
+                header.TextureHeight,
+                "Texture dimensions");
+            _budget.ValidateDimensions(
+                header.ImageWidth,
+                header.ImageHeight,
+                "Image dimensions");
             
             return header;
         }

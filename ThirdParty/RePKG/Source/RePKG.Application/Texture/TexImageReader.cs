@@ -8,12 +8,22 @@ namespace RePKG.Application.Texture
     public class TexImageReader : ITexImageReader
     {
         protected readonly ITexMipmapDecompressor _texMipmapDecompressor;
+        private readonly TexDecodeBudget.FileScope _budget;
         public bool ReadMipmapBytes { get; set; } = true;
         public bool DecompressMipmapBytes { get; set; } = true;
 
         public TexImageReader(ITexMipmapDecompressor texMipmapDecompressor)
+            : this(texMipmapDecompressor, new TexDecodeBudget().BeginFile(1))
         {
-            _texMipmapDecompressor = texMipmapDecompressor;
+        }
+
+        public TexImageReader(
+            ITexMipmapDecompressor texMipmapDecompressor,
+            TexDecodeBudget.FileScope budget)
+        {
+            _texMipmapDecompressor = texMipmapDecompressor
+                ?? throw new ArgumentNullException(nameof(texMipmapDecompressor));
+            _budget = budget ?? throw new ArgumentNullException(nameof(budget));
         }
 
         public ITexImage ReadFrom(
@@ -28,19 +38,14 @@ namespace RePKG.Application.Texture
                 throw new EnumNotValidException<TexFormat>(texFormat);
 
             var mipmapCount = reader.ReadInt32();
-            
-            if (mipmapCount > Constants.MaximumMipmapCount)
-                throw new UnsafeTexException(
-                    $"Mipmap count exceeds limit: {mipmapCount}/{Constants.MaximumMipmapCount}");
-            
-            var readFunction = PickMipmapReader(container.ImageContainerVersion);
+            _budget.ReserveMipmapCount(mipmapCount);
+
             var format = TexMipmapFormatGetter.GetFormatForTex(container.ImageFormat, texFormat);
             var image = new TexImage();
             
             for (var i = 0; i < mipmapCount; i++)
             {
-                var mipmap = readFunction(reader);
-                mipmap.Format = format;
+                var mipmap = ReadMipmap(reader, container.ImageContainerVersion, format);
 
                 if (DecompressMipmapBytes)
                     _texMipmapDecompressor.DecompressMipmap(mipmap);
@@ -51,28 +56,49 @@ namespace RePKG.Application.Texture
             return image;
         }
 
-        private TexMipmap ReadMipmapV1(BinaryReader reader)
+        private TexMipmap ReadMipmap(
+            BinaryReader reader,
+            TexImageContainerVersion containerVersion,
+            MipmapFormat format)
         {
-            return new TexMipmap
+            switch (containerVersion)
             {
-                Width = reader.ReadInt32(),
-                Height = reader.ReadInt32(),
-                Bytes = ReadBytes(reader)
-            };
+                case TexImageContainerVersion.Version1:
+                    return ReadMipmapV1(reader, format);
+                case TexImageContainerVersion.Version2:
+                case TexImageContainerVersion.Version3:
+                    return ReadMipmapV2And3(reader, format);
+                case TexImageContainerVersion.Version4:
+                    return ReadMipmapV4(reader, format);
+                default:
+                    throw new InvalidOperationException(
+                        $"Tex image container version: {containerVersion} is not supported!");
+            }
         }
 
-        private TexMipmap ReadMipmapV2And3(BinaryReader reader)
+        private TexMipmap ReadMipmapV1(BinaryReader reader, MipmapFormat format)
         {
-            return new TexMipmap
-            {
-                Width = reader.ReadInt32(),
-                Height = reader.ReadInt32(),
-                IsLZ4Compressed = reader.ReadInt32() == 1,
-                DecompressedBytesCount = reader.ReadInt32(),
-                Bytes = ReadBytes(reader)
-            };
+            var width = reader.ReadInt32();
+            var height = reader.ReadInt32();
+            return ReadMipmapPayload(reader, width, height, false, 0, format);
         }
-        private TexMipmap ReadMipmapV4(BinaryReader reader)
+
+        private TexMipmap ReadMipmapV2And3(BinaryReader reader, MipmapFormat format)
+        {
+            var width = reader.ReadInt32();
+            var height = reader.ReadInt32();
+            var isLz4Compressed = ReadCompressionFlag(reader);
+            var decompressedBytesCount = reader.ReadInt32();
+            return ReadMipmapPayload(
+                reader,
+                width,
+                height,
+                isLz4Compressed,
+                decompressedBytesCount,
+                format);
+        }
+
+        private TexMipmap ReadMipmapV4(BinaryReader reader, MipmapFormat format)
         {
             /**FIXME
              * The role of the following param* parameters cannot be confirmed, 
@@ -95,58 +121,85 @@ namespace RePKG.Application.Texture
             {
                 throw new UnsafeTexException($"ReadMipmapV4 unknow param3 :{param3}");
             }
-            return new TexMipmap
-            {
-                Width = reader.ReadInt32(),
-                Height = reader.ReadInt32(),
-                IsLZ4Compressed = reader.ReadInt32() == 1,
-                DecompressedBytesCount = reader.ReadInt32(),
-                Bytes = ReadBytes(reader)
-            };
+
+            var width = reader.ReadInt32();
+            var height = reader.ReadInt32();
+            var isLz4Compressed = ReadCompressionFlag(reader);
+            var decompressedBytesCount = reader.ReadInt32();
+            return ReadMipmapPayload(
+                reader,
+                width,
+                height,
+                isLz4Compressed,
+                decompressedBytesCount,
+                format);
         }
-        private byte[] ReadBytes(BinaryReader reader)
+
+        private TexMipmap ReadMipmapPayload(
+            BinaryReader reader,
+            int width,
+            int height,
+            bool isLz4Compressed,
+            int decompressedBytesCount,
+            MipmapFormat format)
         {
             var byteCount = reader.ReadInt32();
-            
-            if (reader.BaseStream.Position + byteCount > reader.BaseStream.Length)
-                throw new UnsafeTexException("Detected invalid mipmap byte count - exceeds stream length");
+            ValidateAvailableBytes(reader, byteCount);
+            _budget.ReserveMipmap(
+                width,
+                height,
+                format,
+                isLz4Compressed,
+                byteCount,
+                decompressedBytesCount);
 
-            if (byteCount > Constants.MaximumMipmapByteCount)
-                throw new UnsafeTexException(
-                    $"Mipmap byte count exceeds maximum size: {byteCount}/{Constants.MaximumMipmapByteCount}");
+            return new TexMipmap
+            {
+                Width = width,
+                Height = height,
+                IsLZ4Compressed = isLz4Compressed,
+                DecompressedBytesCount = decompressedBytesCount,
+                Format = format,
+                Bytes = ReadBytes(reader, byteCount)
+            };
+        }
 
+        private byte[] ReadBytes(BinaryReader reader, int byteCount)
+        {
             if (!ReadMipmapBytes)
             {
                 reader.BaseStream.Seek(byteCount, SeekOrigin.Current);
                 return null;
             }
 
-            var bytes = new byte[byteCount];
-            var bytesRead = reader.Read(bytes, 0, byteCount);
-
-            if (bytesRead != byteCount)
-                throw new Exception("Failed to read bytes from stream while reading mipmap");
+            var bytes = reader.ReadBytes(byteCount);
+            if (bytes.Length != byteCount)
+                throw new UnsafeTexException(
+                    "Failed to read declared mipmap bytes from the TEX stream");
 
             return bytes;
         }
 
-        private Func<BinaryReader, TexMipmap> PickMipmapReader(TexImageContainerVersion containerVersion)
+        private static void ValidateAvailableBytes(BinaryReader reader, int byteCount)
         {
-            switch (containerVersion)
-            {
-                case TexImageContainerVersion.Version1:
-                    return ReadMipmapV1;
+            if (byteCount < 0)
+                return;
 
-                case TexImageContainerVersion.Version2:
-                case TexImageContainerVersion.Version3:
-                    return ReadMipmapV2And3;
-                    
-                case TexImageContainerVersion.Version4:
-                    return ReadMipmapV4;
-                default:
-                    throw new InvalidOperationException(
-                        $"Tex image container version: {containerVersion} is not supported!");
+            var remaining = reader.BaseStream.Length - reader.BaseStream.Position;
+            if (byteCount > remaining)
+                throw new UnsafeTexException(
+                    "Detected invalid mipmap byte count - exceeds stream length");
+        }
+
+        private static bool ReadCompressionFlag(BinaryReader reader)
+        {
+            var value = reader.ReadInt32();
+            if (value != 0 && value != 1)
+            {
+                throw new UnsafeTexException($"Invalid LZ4 compression flag: {value}");
             }
+
+            return value == 1;
         }
     }
 }

@@ -1,7 +1,9 @@
 using System.Buffers;
+using System.Runtime.ExceptionServices;
 using WallpaperField.Contracts;
 using WallpaperField.Models;
 using WallpaperField.ThirdParty.RePKG;
+using RePKG.Application.Texture;
 
 namespace WallpaperField.Services;
 
@@ -15,7 +17,6 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
     internal const string ManifestFileName = ".wallpaper-field-unpack.json";
 
     private const int CopyBufferSize = 128 * 1024;
-    private const string StagingPrefix = ".unpacked-stage-";
 
     public async Task<WallpaperUnpackResult> UnpackAsync(
         WallpaperUnpackRequest request,
@@ -39,7 +40,11 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
         var extractedEntryCount = 0;
         var convertedTextureCount = 0;
         var copiedVideoCount = 0;
+        var committedCount = 0;
+        var unchangedFailureCount = 0;
+        var additionalEffectsPossibleCount = 0;
         var warnings = new List<WallpaperUnpackWarning>();
+        var textureBudget = new TexDecodeBudget();
 
         ReportProgress(
             progress,
@@ -107,15 +112,15 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
                         item,
                         outputRoot,
                         entryProgress,
+                        textureBudget,
                         cancellationToken).ConfigureAwait(false);
-
-                await SaveCatalogRecordAsync(item, outputRoot).ConfigureAwait(false);
 
                 extractedEntryCount += itemResult.EntryCount;
                 convertedTextureCount += itemResult.ConvertedTextureCount;
                 copiedVideoCount += itemResult.CopiedVideoCount;
                 warnings.AddRange(itemResult.Warnings);
                 succeededCount++;
+                committedCount++;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -123,12 +128,25 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
             }
             catch (Exception exception)
             {
+                var commitState = exception is TransactionalCommitException commitException
+                    ? commitException.CommitState
+                    : WallpaperItemCommitState.NotModified;
+                if (commitState == WallpaperItemCommitState.AdditionalEffectsPossible)
+                {
+                    additionalEffectsPossibleCount++;
+                }
+                else
+                {
+                    unchangedFailureCount++;
+                }
+
                 errors.Add(new WallpaperUnpackError
                 {
                     WorkshopId = item.WorkshopId,
                     ScenePackagePath = item.ScenePackagePath ?? item.VideoFilePath,
                     Message = exception.Message,
-                    ExceptionType = exception.GetType().Name
+                    ExceptionType = exception.GetType().Name,
+                    CommitState = commitState
                 });
             }
 
@@ -168,6 +186,9 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
             SucceededCount = succeededCount,
             SkippedCount = skippedCount,
             FailedCount = errors.Count,
+            CommittedCount = committedCount,
+            UnchangedFailureCount = unchangedFailureCount,
+            AdditionalEffectsPossibleCount = additionalEffectsPossibleCount,
             ExtractedEntryCount = extractedEntryCount,
             ConvertedTextureCount = convertedTextureCount,
             CopiedVideoCount = copiedVideoCount,
@@ -181,10 +202,12 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
         WallpaperRecord item,
         string outputRoot,
         Action<string, int, int> entryProgress,
+        TexDecodeBudget textureBudget,
         CancellationToken cancellationToken)
     {
         var scenePackagePath = ValidateScenePackage(item);
         var itemOutputDirectory = ResolveItemOutputDirectory(item, outputRoot);
+        RejectSourceOutputOverlap(item.SourceDirectory!, outputRoot);
 
         var package = await Task.Run(
             () =>
@@ -201,10 +224,11 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
             cancellationToken).ConfigureAwait(false);
 
         cancellationToken.ThrowIfCancellationRequested();
-        var stagingDirectory = Path.Combine(
+        var stagingRoot = Path.Combine(
             itemOutputDirectory,
-            $"{StagingPrefix}{Guid.NewGuid():N}");
-        var extractionPlan = BuildExtractionPlan(package, stagingDirectory);
+            $"{TransactionalDirectoryCommitter.StagingPrefix}{Guid.NewGuid():N}");
+        var stagingDirectory = Path.Combine(stagingRoot, UnpackFolderName);
+        var extractionPlan = PackageExtractionPlanner.Build(package, stagingDirectory);
         var convertedTextureCount = 0;
         var warnings = new List<WallpaperUnpackWarning>();
         var createdItemOutputDirectory = !Directory.Exists(itemOutputDirectory);
@@ -212,7 +236,9 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
         try
         {
             Directory.CreateDirectory(itemOutputDirectory);
-            RejectReparsePoint(itemOutputDirectory, "壁纸输出目录");
+            OutputPathPolicy.RejectReparsePointsInExistingPath(
+                itemOutputDirectory,
+                "壁纸输出目录");
             Directory.CreateDirectory(stagingDirectory);
             var buffer = ArrayPool<byte>.Shared.Rent(CopyBufferSize);
             try
@@ -225,10 +251,10 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
                     CopyBufferSize,
                     FileOptions.Asynchronous | FileOptions.RandomAccess);
 
-                for (var index = 0; index < extractionPlan.Count; index++)
+                for (var index = 0; index < extractionPlan.Entries.Count; index++)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    var plannedEntry = extractionPlan[index];
+                    var plannedEntry = extractionPlan.Entries[index];
                     var isTextureIntermediate = string.Equals(
                         Path.GetExtension(plannedEntry.OutputPath),
                         ".tex",
@@ -268,12 +294,18 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
                             try
                             {
                                 _ = await Task.Run(
-                                        () => RePkgTextureConverter.Convert(plannedEntry.OutputPath),
+                                        () => RePkgTextureConverter.Convert(
+                                            plannedEntry.OutputPath,
+                                            textureBudget),
                                         cancellationToken)
                                     .ConfigureAwait(false);
                                 convertedTextureCount++;
                             }
                             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                            {
+                                throw;
+                            }
+                            catch (TextureConversionAtomicityException)
                             {
                                 throw;
                             }
@@ -301,7 +333,10 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
                         }
                     }
 
-                    entryProgress(plannedEntry.Entry.FullPath, index + 1, extractionPlan.Count);
+                    entryProgress(
+                        plannedEntry.Entry.FullPath,
+                        index + 1,
+                        extractionPlan.Entries.Count);
                 }
             }
             finally
@@ -319,7 +354,7 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
                     PackageMagic = package.Magic,
                     PackageLength = packageInfo.Length,
                     PackageLastWriteTimeUtc = packageInfo.LastWriteTimeUtc,
-                    EntryCount = extractionPlan.Count,
+                    EntryCount = extractionPlan.Entries.Count,
                     ConvertedTextureCount = convertedTextureCount,
                     TextureWarningCount = warnings.Count,
                     TextureWarnings = warnings.ToArray(),
@@ -327,18 +362,31 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
                 },
                 cancellationToken).ConfigureAwait(false);
 
+            await WriteStagedCatalogRecordAsync(
+                item,
+                itemOutputDirectory,
+                stagingRoot,
+                cancellationToken).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
-            CommitStagingDirectory(stagingDirectory, itemOutputDirectory);
+            TransactionalDirectoryCommitter.Commit(
+                stagingRoot,
+                itemOutputDirectory,
+                extractionPlan.AllowedFinalRelativePaths,
+                cancellationToken);
             return new ItemExtractionResult(
-                extractionPlan.Count,
+                extractionPlan.Entries.Count,
                 convertedTextureCount,
                 0,
                 warnings.ToArray());
         }
-        finally
+        catch (Exception exception)
         {
-            TryDeleteOwnedStagingDirectory(stagingDirectory, itemOutputDirectory);
-            TryDeleteEmptyItemDirectory(itemOutputDirectory, createdItemOutputDirectory);
+            RethrowAfterFailedItemCleanup(
+                exception,
+                stagingRoot,
+                itemOutputDirectory,
+                createdItemOutputDirectory);
+            throw;
         }
     }
 
@@ -350,9 +398,11 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
     {
         var (videoFilePath, videoRelativePath) = ValidateVideoFile(item);
         var itemOutputDirectory = ResolveItemOutputDirectory(item, outputRoot);
-        var stagingDirectory = Path.Combine(
+        RejectSourceOutputOverlap(item.SourceDirectory!, outputRoot);
+        var stagingRoot = Path.Combine(
             itemOutputDirectory,
-            $"{StagingPrefix}{Guid.NewGuid():N}");
+            $"{TransactionalDirectoryCommitter.StagingPrefix}{Guid.NewGuid():N}");
+        var stagingDirectory = Path.Combine(stagingRoot, UnpackFolderName);
         var destinationPath = ResolveSafeEntryPath(stagingDirectory, videoRelativePath);
         var destinationDirectory = Path.GetDirectoryName(destinationPath)
             ?? throw new InvalidDataException("无法确定视频文件的输出目录。");
@@ -361,7 +411,9 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
         try
         {
             Directory.CreateDirectory(itemOutputDirectory);
-            RejectReparsePoint(itemOutputDirectory, "壁纸输出目录");
+            OutputPathPolicy.RejectReparsePointsInExistingPath(
+                itemOutputDirectory,
+                "壁纸输出目录");
             Directory.CreateDirectory(destinationDirectory);
 
             await using (var sourceStream = new FileStream(
@@ -403,29 +455,36 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
                 },
                 cancellationToken).ConfigureAwait(false);
 
+            await WriteStagedCatalogRecordAsync(
+                item,
+                itemOutputDirectory,
+                stagingRoot,
+                cancellationToken).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
-            CommitStagingDirectory(stagingDirectory, itemOutputDirectory);
+            TransactionalDirectoryCommitter.Commit(
+                stagingRoot,
+                itemOutputDirectory,
+                PackageExtractionPlanner.BuildVideoFinalPaths(videoRelativePath),
+                cancellationToken);
             return new ItemExtractionResult(1, 0, 1, Array.Empty<WallpaperUnpackWarning>());
         }
-        finally
+        catch (Exception exception)
         {
-            TryDeleteOwnedStagingDirectory(stagingDirectory, itemOutputDirectory);
-            TryDeleteEmptyItemDirectory(itemOutputDirectory, createdItemOutputDirectory);
+            RethrowAfterFailedItemCleanup(
+                exception,
+                stagingRoot,
+                itemOutputDirectory,
+                createdItemOutputDirectory);
+            throw;
         }
     }
 
-    private static async Task SaveCatalogRecordAsync(
+    private static async Task WriteStagedCatalogRecordAsync(
         WallpaperRecord item,
-        string outputRoot)
+        string itemOutputDirectory,
+        string stagingRoot,
+        CancellationToken cancellationToken)
     {
-        var itemOutputDirectory = ResolveItemOutputDirectory(item, outputRoot);
-        if (!Directory.Exists(itemOutputDirectory))
-        {
-            throw new DirectoryNotFoundException(
-                $"处理完成后找不到项目输出目录：{itemOutputDirectory}");
-        }
-
-        RejectReparsePoint(itemOutputDirectory, "壁纸输出目录");
         var previewPath = !string.IsNullOrWhiteSpace(item.PreviewPath)
                           && File.Exists(item.PreviewPath)
             ? Path.GetFullPath(item.PreviewPath)
@@ -437,13 +496,10 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
             PreviewFileName = previewPath is null ? null : Path.GetFileName(previewPath)
         };
 
-        // The content has already been committed. Do not let a last-moment
-        // cancellation interrupt this small catalog write; genuine I/O errors
-        // are still surfaced to the caller.
         await WallpaperStorage.WriteJsonAtomicallyAsync(
-            Path.Combine(itemOutputDirectory, WallpaperStorage.MetadataFileName),
+            Path.Combine(stagingRoot, WallpaperStorage.MetadataFileName),
             storedRecord,
-            CancellationToken.None).ConfigureAwait(false);
+            cancellationToken).ConfigureAwait(false);
     }
 
     private static (string FullPath, string RelativePath) ValidateVideoFile(
@@ -579,79 +635,11 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
         return itemOutput;
     }
 
-    private static IReadOnlyList<PlannedEntry> BuildExtractionPlan(
-        SafePackage package,
-        string stagingDirectory)
-    {
-        var plannedEntries = new List<PlannedEntry>(package.Entries.Count);
-        var uniquePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var entry in package.Entries)
-        {
-            var outputPath = ResolveSafeEntryPath(stagingDirectory, entry.FullPath);
-            if (!uniquePaths.Add(outputPath))
-            {
-                throw new InvalidDataException(
-                    $"scene.pkg 包含大小写不敏感的重复路径：{entry.FullPath}");
-            }
-
-            plannedEntries.Add(new PlannedEntry(entry, outputPath));
-        }
-
-        return plannedEntries;
-    }
+    private static void RejectSourceOutputOverlap(string sourceDirectory, string outputRoot)
+        => OutputPathPolicy.RejectOverlappingRoots(sourceDirectory, outputRoot);
 
     private static string ResolveSafeEntryPath(string rootDirectory, string entryPath)
-    {
-        if (string.IsNullOrWhiteSpace(entryPath) || Path.IsPathRooted(entryPath))
-        {
-            throw new InvalidDataException($"scene.pkg 包含无效或绝对路径：{entryPath}");
-        }
-
-        var segments = entryPath.Split(
-            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
-            StringSplitOptions.None);
-        if (segments.Length == 0)
-        {
-            throw new InvalidDataException("scene.pkg 包含空路径。");
-        }
-
-        foreach (var segment in segments)
-        {
-            if (string.IsNullOrWhiteSpace(segment)
-                || segment is "." or ".."
-                || segment.EndsWith(' ')
-                || segment.EndsWith('.')
-                || segment.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0
-                || IsReservedWindowsName(segment))
-            {
-                throw new InvalidDataException($"scene.pkg 包含不安全的路径段：{entryPath}");
-            }
-        }
-
-        var combined = Path.GetFullPath(Path.Combine([rootDirectory, .. segments]));
-        var normalizedRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(rootDirectory));
-        var rootWithSeparator = normalizedRoot + Path.DirectorySeparatorChar;
-        if (!combined.StartsWith(rootWithSeparator, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidDataException($"scene.pkg 路径试图写出解包目录：{entryPath}");
-        }
-
-        return combined;
-    }
-
-    private static bool IsReservedWindowsName(string segment)
-    {
-        var name = segment.Split('.', 2)[0];
-        return name.Equals("CON", StringComparison.OrdinalIgnoreCase)
-               || name.Equals("PRN", StringComparison.OrdinalIgnoreCase)
-               || name.Equals("AUX", StringComparison.OrdinalIgnoreCase)
-               || name.Equals("NUL", StringComparison.OrdinalIgnoreCase)
-               || (name.Length == 4
-                   && (name.StartsWith("COM", StringComparison.OrdinalIgnoreCase)
-                       || name.StartsWith("LPT", StringComparison.OrdinalIgnoreCase))
-                   && name[3] is >= '1' and <= '9');
-    }
+        => OutputPathPolicy.ResolveUnderRoot(rootDirectory, entryPath, "scene.pkg 路径");
 
     private static async Task CopyExactlyAsync(
         Stream source,
@@ -708,77 +696,6 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
         File.Delete(fullTexturePath);
     }
 
-    private static void CommitStagingDirectory(string stagingDirectory, string itemOutputDirectory)
-    {
-        var finalDirectory = Path.Combine(itemOutputDirectory, UnpackFolderName);
-        if (File.Exists(finalDirectory))
-        {
-            throw new IOException($"解包目标被同名文件占用：{finalDirectory}");
-        }
-
-        if (!Directory.Exists(finalDirectory))
-        {
-            Directory.Move(stagingDirectory, finalDirectory);
-            return;
-        }
-
-        RejectReparsePoint(finalDirectory, "已有解包目录");
-        var files = Directory
-            .EnumerateFiles(stagingDirectory, "*", SearchOption.AllDirectories)
-            .OrderBy(path => string.Equals(
-                Path.GetFileName(path),
-                ManifestFileName,
-                StringComparison.OrdinalIgnoreCase) ? 1 : 0)
-            .ThenBy(path => path, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-
-        foreach (var stagedFile in files)
-        {
-            var relativePath = Path.GetRelativePath(stagingDirectory, stagedFile);
-            var destinationPath = ResolveSafeEntryPath(finalDirectory, relativePath);
-            var destinationParent = Path.GetDirectoryName(destinationPath)
-                ?? throw new IOException($"无法确定解包目标的父目录：{destinationPath}");
-            CreateSafeDirectoryChain(finalDirectory, destinationParent);
-
-            if (File.Exists(destinationPath))
-            {
-                RejectReparsePoint(destinationPath, "已有解包文件");
-            }
-
-            File.Move(stagedFile, destinationPath, overwrite: true);
-        }
-    }
-
-    private static void CreateSafeDirectoryChain(string rootDirectory, string targetDirectory)
-    {
-        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(rootDirectory));
-        var target = Path.TrimEndingDirectorySeparator(Path.GetFullPath(targetDirectory));
-        if (PathsEqual(root, target))
-        {
-            return;
-        }
-
-        var relative = Path.GetRelativePath(root, target);
-        var current = root;
-        foreach (var segment in relative.Split(Path.DirectorySeparatorChar))
-        {
-            current = Path.Combine(current, segment);
-            if (File.Exists(current))
-            {
-                throw new IOException($"解包目录路径被同名文件占用：{current}");
-            }
-
-            if (Directory.Exists(current))
-            {
-                RejectReparsePoint(current, "已有解包子目录");
-            }
-            else
-            {
-                Directory.CreateDirectory(current);
-            }
-        }
-    }
-
     private static void RejectReparsePoint(string path, string description)
     {
         if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
@@ -787,59 +704,55 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
         }
     }
 
-    private static void TryDeleteOwnedStagingDirectory(
-        string stagingDirectory,
-        string itemOutputDirectory)
-    {
-        try
-        {
-            var fullStaging = Path.TrimEndingDirectorySeparator(Path.GetFullPath(stagingDirectory));
-            var parent = Path.GetDirectoryName(fullStaging);
-            if (!Path.GetFileName(fullStaging).StartsWith(StagingPrefix, StringComparison.Ordinal)
-                || parent is null
-                || !PathsEqual(parent, itemOutputDirectory)
-                || !Directory.Exists(fullStaging))
-            {
-                return;
-            }
-
-            Directory.Delete(fullStaging, recursive: true);
-        }
-        catch
-        {
-            // A best-effort cleanup must not mask the extraction result.
-        }
-    }
-
-    private static void TryDeleteEmptyItemDirectory(
+    private static void RethrowAfterFailedItemCleanup(
+        Exception exception,
+        string stagingRoot,
         string itemOutputDirectory,
-        bool createdByCurrentOperation)
+        bool createdItemOutputDirectory)
     {
-        if (!createdByCurrentOperation)
-        {
-            return;
-        }
-
+        var cleanupErrors = new List<Exception>();
         try
         {
-            if (Directory.Exists(itemOutputDirectory)
-                && !Directory.EnumerateFileSystemEntries(itemOutputDirectory).Any())
+            TransactionalDirectoryCommitter.CleanupOwnedStaging(
+                stagingRoot,
+                itemOutputDirectory);
+        }
+        catch (Exception cleanupException)
+        {
+            cleanupErrors.Add(cleanupException);
+        }
+
+        if (createdItemOutputDirectory && Directory.Exists(itemOutputDirectory))
+        {
+            try
             {
+                if (Directory.EnumerateFileSystemEntries(itemOutputDirectory).Any())
+                {
+                    throw new IOException(
+                        $"失败后新建的项目输出目录仍包含文件：{itemOutputDirectory}");
+                }
+
                 Directory.Delete(itemOutputDirectory);
             }
+            catch (Exception cleanupException)
+            {
+                cleanupErrors.Add(cleanupException);
+            }
         }
-        catch
+
+        if (cleanupErrors.Count > 0)
         {
-            // Empty-directory cleanup is best effort and must not hide the
-            // original extraction or copy failure.
+            throw new TransactionalCommitException(
+                "处理失败，且 staging 或项目目录清理未能完全完成；磁盘上可能存在附加影响。",
+                WallpaperItemCommitState.AdditionalEffectsPossible,
+                new AggregateException([exception, .. cleanupErrors]));
         }
+
+        ExceptionDispatchInfo.Capture(exception).Throw();
     }
 
     private static bool PathsEqual(string left, string right)
-        => string.Equals(
-            Path.TrimEndingDirectorySeparator(Path.GetFullPath(left)),
-            Path.TrimEndingDirectorySeparator(Path.GetFullPath(right)),
-            StringComparison.OrdinalIgnoreCase);
+        => OutputPathPolicy.PathsEqual(left, right);
 
     private static void ReportProgress(
         IProgress<WallpaperUnpackProgress>? progress,
@@ -868,8 +781,6 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
             Message = message
         });
     }
-
-    private sealed record PlannedEntry(SafePackageEntry Entry, string OutputPath);
 
     private sealed record ItemExtractionResult(
         int EntryCount,

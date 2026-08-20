@@ -2,6 +2,8 @@
 
 一款面向 Windows 的 Wallpaper Engine 本地壁纸整理与 `scene.pkg` 解包工具。程序使用 C# / WPF 编写，可以只读扫描 Workshop 壁纸目录、直接显示源 preview，并按用户勾选解包场景壁纸或复制视频壁纸。
 
+当前维护版本为 **v1.2.1**；修复范围与已知限制见 [v1.2.1 release notes](docs/releases/v1.2.1.md)。
+
 > [!NOTE]
 > 这是一个非官方社区项目，与 Wallpaper Engine、Arknights: Endfield、Hypergryph 或其关联公司无隶属或背书关系。界面采用原创的 Endfield-inspired 技术终端风格，不包含官方徽标、角色图、宣传素材或字体。
 
@@ -188,6 +190,7 @@ preview 的选择优先级为 PNG → JPG → JPEG → GIF。程序直接读取�
 - 单个项目处理成功后，程序才会写入 `<输出目录>\<workshopid>\metadata.json`。该文件保留源 preview 路径，输出目录中不创建 preview 副本。
 - 不同 Workshop ID 的内容互不混合。
 - 某一个项目失败时会记录错误并继续处理后续已勾选项目；失败项不会写入新的 metadata。
+- 新建和更新都先写入隔离 staging；内容、应用清单与 `metadata.json` 一起提交。正常失败或取消会回滚本次动作，既有输出保持不变。
 - 可以在操作过程中取消；临时 staging 目录会被清理。
 
 如果扫描完成后移动、删除或替换了源目录中的 `scene.pkg`、视频或 preview，请重新扫描再处理。如果更改了输出目录，也应重新扫描，以确保卡片记录和目标目录一致。
@@ -301,14 +304,35 @@ dotnet build .\WallpaperField.slnx --configuration Release
 生成 Windows x64 自包含单文件版本：
 
 ```powershell
-.\build-release.cmd
-.\GUI_for_RePKG.exe
+$candidate = Join-Path $PWD 'artifacts\WallpaperField-v1.2.1-local'
+.\build-release.ps1 -OutputDirectory $candidate
+Get-ChildItem -LiteralPath $candidate
 ```
 
-`build-release.cmd` 会调用 `build-release.ps1`，将发布结果复制为仓库根目录的 `GUI_for_RePKG.exe`。RePKG、XamlAnimatedGif 和 .NET 运行时会链接到该 EXE 中。
+也可以从 `cmd.exe` 调用同一流程：
+
+```bat
+build-release.cmd artifacts\WallpaperField-v1.2.1-local
+```
+
+输出目录必须是尚不存在的专用目录。脚本先在同卷 GUID 工作区 restore/publish，验证 PE 版本、真实启动截图、ZIP 精确内容、许可 hash、依赖 JSON、Authenticode 状态与 SHA-256 后，才一次性发布候选目录。默认流程不会覆盖仓库根 `GUI_for_RePKG.exe`。
+
+候选目录包含：
+
+```text
+WallpaperField.exe
+WallpaperField-v1.2.1-win-x64.zip
+release-manifest.json
+dependencies.json
+SHA256SUMS
+```
+
+对外分发单位是 ZIP，而不是孤立 EXE。ZIP 内含 EXE、release notes、根许可/notices、RePKG 许可/notices/本地补丁记录、build manifest 与完整机器可读依赖清单。没有代码签名证书时，manifest 会明确记录 `NotSigned`，并由外部 `SHA256SUMS` 提供 EXE 与 ZIP hash。
+
+`-UpdateTrackedExecutable` 只用于候选已经通过全部门禁后的有意根 EXE 更新；普通构建和 CI 不使用该开关。RePKG、XamlAnimatedGif 和 .NET 运行时会链接到候选 EXE 中。
 
 > [!IMPORTANT]
-> 对外分发时，请同时提供本项目的 `LICENSE`、`THIRD-PARTY-NOTICES.md`、`ThirdParty/RePKG/LICENSE.txt` 和 `ThirdParty/RePKG/THIRD-PARTY-NOTICES.txt`。最简单的做法是把 EXE 与这些文件一起放入发布 ZIP，而不是只上传一个孤立的 EXE。
+> 对外分发时请使用脚本生成并验证的完整 ZIP；不要只上传一个孤立的 EXE，也不要手工省略许可、补丁记录、manifest 或依赖清单。
 
 ## 测试
 
@@ -317,6 +341,20 @@ dotnet build .\WallpaperField.slnx --configuration Release
 ```powershell
 dotnet run --project .\tests\WallpaperField.SmokeTests\WallpaperField.SmokeTests.csproj --configuration Release
 ```
+
+成功运行的最后一行是可由 CI 严格解析的摘要，例如：
+
+```text
+SMOKE_RESULT tests=1 assertions=136 passed=1 failed=0
+```
+
+断言数量会随回归用例增加；`tests` 和 `assertions` 必须都大于零。可用下面的专用自检证明断言失败会返回非零退出码：
+
+```powershell
+dotnet run --project .\tests\WallpaperField.SmokeTests\WallpaperField.SmokeTests.csproj --configuration Release -- --verify-failure-exit
+```
+
+仓库的 Windows CI 会显式执行并解析这个 harness。当前项目不是标准 Test SDK 项目，因此 `dotnet test` 可能执行零项；它不能代替上述 SmokeTests 门禁。
 
 使用真实 `scene.pkg` 做抽样解包：
 
@@ -359,7 +397,7 @@ dotnet run --project .\tests\WallpaperField.SmokeTests\WallpaperField.SmokeTests
 
 Wallpaper Field 自行创作的代码以 [MIT License](LICENSE) 发布。你可以使用、复制、修改、合并、发布和再分发，但必须保留 MIT 版权与许可声明。
 
-第三方代码和依赖仍适用其各自的许可证。RePKG 与 XamlAnimatedGif 的许可和依赖声明位于 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)、[ThirdParty/RePKG/LICENSE.txt](ThirdParty/RePKG/LICENSE.txt) 与 [ThirdParty/RePKG/THIRD-PARTY-NOTICES.txt](ThirdParty/RePKG/THIRD-PARTY-NOTICES.txt)。本项目的 MIT 许可证不会替代这些第三方条款。
+第三方代码和依赖仍适用其各自的许可证。RePKG 与 XamlAnimatedGif 的许可和依赖声明位于 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)、[ThirdParty/RePKG/LICENSE.txt](ThirdParty/RePKG/LICENSE.txt) 与 [ThirdParty/RePKG/THIRD-PARTY-NOTICES.txt](ThirdParty/RePKG/THIRD-PARTY-NOTICES.txt)；相对 RePKG 0.4.0 的本地安全补丁记录见 [ThirdParty/RePKG/UPSTREAM-PATCHES.md](ThirdParty/RePKG/UPSTREAM-PATCHES.md)。本项目的 MIT 许可证不会替代这些第三方条款。
 
 ## 感谢
 

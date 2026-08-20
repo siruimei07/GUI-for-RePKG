@@ -4,3 +4,6 @@ artifacts/
 .vs/
 *.user
 *.suo
+
+# Local research, diagnostics, and other files that must not be committed
+/temp/

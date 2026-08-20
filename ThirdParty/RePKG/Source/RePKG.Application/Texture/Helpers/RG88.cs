@@ -130,8 +130,10 @@ namespace RePKG.Application.Texture.Helpers
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void ToRgba32(ref Rgba32 dest)
         {
-            dest.R = R;
+            dest.R = G;
             dest.G = G;
+            dest.B = G;
+            dest.A = R;
         }
 
         public static byte DownScaleFrom16BitTo8Bit(ushort component)
@@ -153,7 +155,7 @@ namespace RePKG.Application.Texture.Helpers
             G = DownScaleFrom16BitTo8Bit(source.G);
         }
 
-        public override bool Equals(object obj) => obj is Argb32 argb32 && Equals(argb32);
+        public override bool Equals(object obj) => obj is RG88 other && Equals(other);
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool Equals(RG88 other) => Rg == other.Rg;

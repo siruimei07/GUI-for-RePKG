@@ -3,6 +3,7 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
+    <DefaultItemExcludes>$(DefaultItemExcludes);temp\**</DefaultItemExcludes>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>WallpaperField</AssemblyName>
@@ -11,6 +12,9 @@
     <ApplicationTitle>Wallpaper Field</ApplicationTitle>
     <Product>Wallpaper Field</Product>
     <Description>Wallpaper Engine workshop catalog and safe scene.pkg extractor</Description>
+    <Version>1.2.1</Version>
+    <FileVersion>1.2.1.0</FileVersion>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
   </PropertyGroup>
   <ItemGroup>
     <Compile Remove="tests\**\*.cs" />
@@ -24,5 +28,6 @@
     <None Update="THIRD-PARTY-NOTICES.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Update="ThirdParty\RePKG\LICENSE.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Update="ThirdParty\RePKG\THIRD-PARTY-NOTICES.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Update="ThirdParty\RePKG\UPSTREAM-PATCHES.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

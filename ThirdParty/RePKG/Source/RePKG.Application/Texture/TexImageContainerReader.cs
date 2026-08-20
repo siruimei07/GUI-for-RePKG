@@ -8,10 +8,20 @@ namespace RePKG.Application.Texture
     public class TexImageContainerReader : ITexImageContainerReader
     {
         private readonly ITexImageReader _texImageReader;
+        private readonly TexDecodeBudget.FileScope _budget;
 
         public TexImageContainerReader(ITexImageReader texImageReader)
+            : this(texImageReader, new TexDecodeBudget().BeginFile(1))
         {
-            _texImageReader = texImageReader;
+        }
+
+        public TexImageContainerReader(
+            ITexImageReader texImageReader,
+            TexDecodeBudget.FileScope budget)
+        {
+            _texImageReader = texImageReader
+                ?? throw new ArgumentNullException(nameof(texImageReader));
+            _budget = budget ?? throw new ArgumentNullException(nameof(budget));
         }
 
         public ITexImageContainer ReadFrom(BinaryReader reader, TexFormat texFormat)
@@ -27,10 +37,7 @@ namespace RePKG.Application.Texture
             };
 
             var imageCount = reader.ReadInt32();
-
-            if (imageCount > Constants.MaximumImageCount)
-                throw new UnsafeTexException(
-                    $"Image count exceeds limit: {imageCount}/{Constants.MaximumImageCount}");
+            _budget.ReserveImageCount(imageCount);
 
             switch (container.Magic)
             {

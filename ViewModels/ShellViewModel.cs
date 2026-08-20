@@ -810,7 +810,8 @@ public sealed class ShellViewModel : ObservableObject
                 ErrorText = string.Join(
                     Environment.NewLine,
                     result.Errors
-                        .Select(error => $"{error.WorkshopId}：{error.Message}")
+                        .Select(error =>
+                            $"{error.WorkshopId} · {FormatCommitState(error.CommitState)}：{error.Message}")
                         .Concat(result.Warnings.Select(warning =>
                             $"{warning.WorkshopId} · {warning.EntryPath}：TEX 转换失败；原始 TEX 中间文件已清理（{warning.Message}）")));
                 SetStatus(result.Message, "Warning");
@@ -907,6 +908,15 @@ public sealed class ShellViewModel : ObservableObject
 
         return Math.Clamp(value, 0, 100);
     }
+
+    private static string FormatCommitState(WallpaperItemCommitState state)
+        => state switch
+        {
+            WallpaperItemCommitState.NotModified => "磁盘未修改",
+            WallpaperItemCommitState.Committed => "已提交",
+            WallpaperItemCommitState.AdditionalEffectsPossible => "失败，磁盘可能有附加影响",
+            _ => "提交状态未知"
+        };
 
     private static string JoinIssues(IEnumerable<ScanError> issues)
         => string.Join(

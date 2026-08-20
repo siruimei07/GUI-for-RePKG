@@ -1,6 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using RePKG.Application.Exceptions;
+using RePKG.Application.Texture;
 
 namespace RePKG.Application
 {
@@ -9,17 +12,45 @@ namespace RePKG.Application
         public static string ReadNString(this BinaryReader reader, int maxLength = -1)
         {
             if (reader == null) throw new ArgumentNullException(nameof(reader));
-            
-            var builder = new StringBuilder(maxLength <= 0 ? 16 : maxLength);
-            var c = reader.ReadChar();
+            if (maxLength < -1)
+                throw new ArgumentOutOfRangeException(nameof(maxLength));
 
-            while (c != '\0' && (maxLength == -1 || builder.Length < maxLength))
+            var maximumBytes = maxLength == -1
+                ? TexDecodeBudget.MaximumCStringByteCount
+                : Math.Min(maxLength, TexDecodeBudget.MaximumCStringByteCount);
+            var bytes = new List<byte>(Math.Min(maximumBytes, 256));
+            while (true)
             {
-                builder.Append(c);
-                c = reader.ReadChar();
+                byte value;
+                try
+                {
+                    value = reader.ReadByte();
+                }
+                catch (EndOfStreamException)
+                {
+                    throw new UnsafeTexException("C-string is missing its NUL terminator");
+                }
+
+                if (value == 0)
+                    break;
+
+                if (bytes.Count >= maximumBytes)
+                {
+                    throw new UnsafeTexException(
+                        $"C-string exceeds byte limit: {maximumBytes}");
+                }
+
+                bytes.Add(value);
             }
 
-            return builder.ToString();
+            try
+            {
+                return new UTF8Encoding(false, true).GetString(bytes.ToArray());
+            }
+            catch (DecoderFallbackException)
+            {
+                throw new UnsafeTexException("C-string contains invalid UTF-8");
+            }
         }
 
         public static void WriteNString(this BinaryWriter writer, string input)

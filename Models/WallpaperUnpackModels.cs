@@ -1,5 +1,12 @@
 namespace WallpaperField.Models;
 
+public enum WallpaperItemCommitState
+{
+    NotModified,
+    Committed,
+    AdditionalEffectsPossible
+}
+
 public sealed record WallpaperUnpackRequest
 {
     public string OutputDirectory { get; init; } = string.Empty;
@@ -43,6 +50,8 @@ public sealed record WallpaperUnpackError
     public string Message { get; init; } = string.Empty;
 
     public string? ExceptionType { get; init; }
+
+    public WallpaperItemCommitState CommitState { get; init; }
 }
 
 public sealed record WallpaperUnpackWarning
@@ -73,6 +82,12 @@ public sealed record WallpaperUnpackResult
     public int SkippedCount { get; init; }
 
     public int FailedCount { get; init; }
+
+    public int CommittedCount { get; init; }
+
+    public int UnchangedFailureCount { get; init; }
+
+    public int AdditionalEffectsPossibleCount { get; init; }
 
     public int ExtractedEntryCount { get; init; }
 

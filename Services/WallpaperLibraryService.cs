@@ -150,6 +150,12 @@ public sealed class WallpaperLibraryService : IWallpaperLibraryService
                                 StringComparison.OrdinalIgnoreCase)
                             || childName.StartsWith(
                                 ".unpacked-stage-",
+                                StringComparison.OrdinalIgnoreCase)
+                            || childName.StartsWith(
+                                TransactionalDirectoryCommitter.StagingPrefix,
+                                StringComparison.OrdinalIgnoreCase)
+                            || childName.StartsWith(
+                                TransactionalDirectoryCommitter.BackupPrefix,
                                 StringComparison.OrdinalIgnoreCase));
                     if (!isExtractorOwnedDirectory
                         && (File.GetAttributes(childDirectory) & FileAttributes.ReparsePoint) == 0)

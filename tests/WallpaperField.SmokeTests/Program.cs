@@ -14,6 +14,13 @@ using WallpaperField.ThirdParty.RePKG;
 using WallpaperField.ViewModels;
 using XamlAnimatedGif;
 
+var metrics = new SmokeTestMetrics();
+if (args.Length == 1
+    && string.Equals(args[0], "--verify-failure-exit", StringComparison.Ordinal))
+{
+    Assert(false, "Intentional SmokeTests failure-exit verification.");
+}
+
 var testRoot = Path.Combine(
     Path.GetTempPath(),
     $"WallpaperField-Smoke-{Guid.NewGuid():N}");
@@ -23,6 +30,15 @@ var outputRoot = Path.Combine(testRoot, "output");
 try
 {
     Directory.CreateDirectory(sourceRoot);
+
+    ReleaseContractTests.Run(Assert);
+    await OutputPlanningRegressionTests.RunAsync(Assert);
+    await TransactionRegressionTests.RunAsync(Assert);
+    TexBudgetRegressionTests.RunBudgetBoundaryTests(Assert);
+    TexStringAndPixelRegressionTests.RunCStringTests(Assert);
+    await TexStringAndPixelRegressionTests.RunRg88TestsAsync(Assert);
+    TexOwnershipRegressionTests.Run(Assert);
+    TexBudgetRegressionTests.RunStructuralTests(Assert);
 
     var settingsPath = Path.Combine(testRoot, "settings", "settings.json");
     var settingsStore = new UserSettingsStore(settingsPath);
@@ -189,7 +205,9 @@ try
         "A traversal package wrote outside its isolated unpack directory.");
     Assert(!Directory.Exists(Path.Combine(outputRoot, "404"))
            || !Directory.EnumerateDirectories(Path.Combine(outputRoot, "404"))
-               .Any(path => Path.GetFileName(path).StartsWith(".unpacked-stage-", StringComparison.Ordinal)),
+               .Any(path => Path.GetFileName(path).StartsWith(
+                   ".wallpaper-field-stage-",
+                   StringComparison.Ordinal)),
         "Failed unpack left a staging directory behind.");
     Assert(!Directory.EnumerateFiles(
             Path.Combine(outputRoot, "101"),
@@ -286,8 +304,13 @@ try
     Assert((await File.ReadAllBytesAsync(existingMainPath)).SequenceEqual(existingMainBytes),
         "Canceled extraction changed the previously committed output.");
     Assert(!Directory.EnumerateDirectories(Path.Combine(outputRoot, "101"))
-        .Any(path => Path.GetFileName(path).StartsWith(".unpacked-stage-", StringComparison.Ordinal)),
-        "Canceled extraction left a staging directory behind.");
+        .Any(path => Path.GetFileName(path).StartsWith(
+                         ".wallpaper-field-stage-",
+                         StringComparison.Ordinal)
+                     || Path.GetFileName(path).StartsWith(
+                         ".wallpaper-field-backup-",
+                         StringComparison.Ordinal)),
+        "Canceled extraction left a staging or backup directory behind.");
 
     var existingTexSentinelPath = Path.Combine(
         outputRoot,
@@ -302,7 +325,9 @@ try
         OutputDirectory = outputRoot,
         Items = [scanResult.Items.Single(item => item.WorkshopId == "101")]
     });
-    Assert(repeatResult.SucceededCount == 1 && repeatResult.FailedCount == 0,
+    Assert(repeatResult.SucceededCount == 1
+           && repeatResult.CommittedCount == 1
+           && repeatResult.FailedCount == 0,
         "Repeated extraction should safely overwrite package-owned files.");
     Assert((await File.ReadAllBytesAsync(existingTexSentinelPath))
             .SequenceEqual(existingTexSentinelBytes),
@@ -490,6 +515,7 @@ try
 
     Assert(overlapRejected, "Overlapping source/output paths must be rejected.");
     Console.WriteLine("Wallpaper Field scan, library, safety, and RePKG unpack smoke tests passed.");
+    Console.WriteLine(metrics.CreateSuccessSummary());
 }
 finally
 {
@@ -572,7 +598,7 @@ static void WriteSizedUtf8(BinaryWriter writer, string value)
     writer.Write(bytes);
 }
 
-static void ValidateRealCatalog(string catalogRoot)
+void ValidateRealCatalog(string catalogRoot)
 {
     var packagePaths = Directory
         .EnumerateDirectories(catalogRoot, "*", SearchOption.TopDirectoryOnly)
@@ -607,13 +633,7 @@ static void ValidateRealCatalog(string catalogRoot)
         $"magic {string.Join(", ", magics.Order())}.");
 }
 
-static void Assert(bool condition, string message)
-{
-    if (!condition)
-    {
-        throw new InvalidOperationException(message);
-    }
-}
+void Assert(bool condition, string message) => metrics.Assert(condition, message);
 
 static bool PathsEqual(string? left, string? right)
     => !string.IsNullOrWhiteSpace(left)
@@ -629,7 +649,7 @@ static byte[] GetPngBytes() => Convert.FromBase64String(
 static byte[] GetGifBytes() => Convert.FromBase64String(
     "R0lGODlhBAACAIEAAP8AAAAAAAAAAAAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQIDAAAACwAAAAABAACAAAIBwABCBwoMCAAIfkECBgAAAAsAAAAAAQAAgCBAAD/AAAAAAAAAAAACAcAAQgcKDAgADs=");
 
-static async Task ValidateStaticPreviewAsync(string path)
+async Task ValidateStaticPreviewAsync(string path)
 {
     var completion = new TaskCompletionSource<bool>(
         TaskCreationOptions.RunContinuationsAsynchronously);
@@ -737,7 +757,7 @@ static async Task ValidateStaticPreviewAsync(string path)
         "Static preview validation dispatcher did not shut down.");
 }
 
-static async Task ValidateAnimatedGifPreviewAsync(string path)
+async Task ValidateAnimatedGifPreviewAsync(string path)
 {
     var completion = new TaskCompletionSource<bool>(
         TaskCreationOptions.RunContinuationsAsynchronously);

@@ -22,6 +22,7 @@
 // http://code.google.com/p/libsquish/
 
 using RePKG.Core.Texture;
+using RePKG.Application.Exceptions;
 
 namespace RePKG.Application.Texture.Helpers
 {
@@ -192,7 +193,30 @@ namespace RePKG.Application.Texture.Helpers
 
         public static byte[] DecompressImage(int width, int height, byte[] data, DXTFlags flags)
         {
-            var rgba = new byte[width * height * 4];
+            if (data == null)
+                throw new UnsafeTexException("DXT payload is missing");
+
+            MipmapFormat format;
+            if (flags == DXTFlags.DXT1)
+                format = MipmapFormat.CompressedDXT1;
+            else if (flags == DXTFlags.DXT3)
+                format = MipmapFormat.CompressedDXT3;
+            else if (flags == DXTFlags.DXT5)
+                format = MipmapFormat.CompressedDXT5;
+            else
+                throw new UnsafeTexException($"Unsupported DXT flags: {flags}");
+
+            var budget = new TexDecodeBudget();
+            var scope = budget.BeginFile(data.LongLength);
+            scope.ReserveMipmap(
+                width,
+                height,
+                format,
+                false,
+                data.Length,
+                0);
+            var rgbaLength = checked((long)width * height * 4);
+            var rgba = new byte[checked((int)rgbaLength)];
 
             // initialise the block input
             var sourceBlock_pos = 0;
@@ -206,9 +230,6 @@ namespace RePKG.Application.Texture.Helpers
                 {
                     // decompress the block
                     var targetRGBA_pos = 0;
-
-                    if (data.Length == sourceBlock_pos)
-                        continue;
 
                     Decompress(targetRGBA, data, sourceBlock_pos, flags);
 
