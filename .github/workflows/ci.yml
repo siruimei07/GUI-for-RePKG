@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   verify:
-    runs-on: windows-latest
+    runs-on: windows-2025
     timeout-minutes: 45
     env:
       DOTNET_CLI_TELEMETRY_OPTOUT: "1"

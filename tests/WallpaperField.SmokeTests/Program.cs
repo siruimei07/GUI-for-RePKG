@@ -651,6 +651,8 @@ static byte[] GetGifBytes() => Convert.FromBase64String(
 
 async Task ValidateStaticPreviewAsync(string path)
 {
+    var hostReady = new TaskCompletionSource<bool>(
+        TaskCreationOptions.RunContinuationsAsynchronously);
     var completion = new TaskCompletionSource<bool>(
         TaskCreationOptions.RunContinuationsAsynchronously);
     var thread = new Thread(() =>
@@ -701,7 +703,6 @@ async Task ValidateStaticPreviewAsync(string path)
         {
             var image = new AnimatedPreviewImage
             {
-                SourcePath = path,
                 Width = 8,
                 Height = 8
             };
@@ -742,23 +743,41 @@ async Task ValidateStaticPreviewAsync(string path)
             window.Show();
             poll.Start();
             timeout.Start();
+            // Keep hosted-runner WPF/session cold start outside the preview
+            // decode deadline. SourcePath still exercises the real loaded UI.
+            hostReady.TrySetResult(true);
+            image.SourcePath = path;
             Dispatcher.Run();
         }
         catch (Exception exception)
         {
+            hostReady.TrySetException(exception);
             Finish(exception);
         }
-    });
+    })
+    {
+        IsBackground = true,
+        Name = "WallpaperField.StaticPreviewSmoke"
+    };
 
     thread.SetApartmentState(ApartmentState.STA);
     thread.Start();
-    await completion.Task.WaitAsync(TimeSpan.FromSeconds(8));
+    await WaitForPreviewStageAsync(
+        hostReady.Task,
+        TimeSpan.FromSeconds(30),
+        "Static preview WPF host did not become ready within 30 seconds.");
+    await WaitForPreviewStageAsync(
+        completion.Task,
+        TimeSpan.FromSeconds(8),
+        "Static preview dispatcher stopped responding after its WPF host became ready.");
     Assert(thread.Join(TimeSpan.FromSeconds(2)),
         "Static preview validation dispatcher did not shut down.");
 }
 
 async Task ValidateAnimatedGifPreviewAsync(string path)
 {
+    var hostReady = new TaskCompletionSource<bool>(
+        TaskCreationOptions.RunContinuationsAsynchronously);
     var completion = new TaskCompletionSource<bool>(
         TaskCreationOptions.RunContinuationsAsynchronously);
     var thread = new Thread(() =>
@@ -817,7 +836,6 @@ async Task ValidateAnimatedGifPreviewAsync(string path)
         {
             var image = new AnimatedPreviewImage
             {
-                SourcePath = path,
                 AnimationEnabled = true,
                 Width = 16,
                 Height = 16
@@ -911,19 +929,48 @@ async Task ValidateAnimatedGifPreviewAsync(string path)
 
             window.Show();
             timeout.Start();
+            hostReady.TrySetResult(true);
+            image.SourcePath = path;
             Dispatcher.Run();
         }
         catch (Exception exception)
         {
+            hostReady.TrySetException(exception);
             Finish(exception);
         }
-    });
+    })
+    {
+        IsBackground = true,
+        Name = "WallpaperField.GifPreviewSmoke"
+    };
 
     thread.SetApartmentState(ApartmentState.STA);
     thread.Start();
-    await completion.Task.WaitAsync(TimeSpan.FromSeconds(10));
+    await WaitForPreviewStageAsync(
+        hostReady.Task,
+        TimeSpan.FromSeconds(30),
+        "Animated GIF preview WPF host did not become ready within 30 seconds.");
+    await WaitForPreviewStageAsync(
+        completion.Task,
+        TimeSpan.FromSeconds(10),
+        "Animated GIF preview dispatcher stopped responding after its WPF host became ready.");
     Assert(thread.Join(TimeSpan.FromSeconds(2)),
         "Animated GIF validation dispatcher did not shut down.");
+}
+
+static async Task WaitForPreviewStageAsync(
+    Task stage,
+    TimeSpan timeout,
+    string timeoutMessage)
+{
+    try
+    {
+        await stage.WaitAsync(timeout);
+    }
+    catch (TimeoutException exception) when (!stage.IsCompleted)
+    {
+        throw new TimeoutException(timeoutMessage, exception);
+    }
 }
 
 sealed class InlineProgress<T>(Action<T> report) : IProgress<T>
