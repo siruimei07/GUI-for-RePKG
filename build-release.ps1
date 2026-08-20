@@ -313,9 +313,11 @@ try
         throw 'Could not resolve a full 40-character source commit.'
     }
 
-    & git -c core.autocrlf=false -C $projectRoot diff --quiet HEAD --
+    # Respect the checkout's EOL normalization; overriding it can make a fresh
+    # Windows checkout appear tracked-dirty before Git refreshes its index.
+    & git -C $projectRoot diff --quiet HEAD --
     $dirtyTracked = $LASTEXITCODE -ne 0
-    $dirtyTrackedPaths = @(& git -c core.autocrlf=false -C $projectRoot diff --name-only HEAD --)
+    $dirtyTrackedPaths = @(& git -C $projectRoot diff --name-only HEAD --)
     if ($LASTEXITCODE -ne 0)
     {
         throw 'Could not enumerate tracked source changes.'
