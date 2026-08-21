@@ -32,6 +32,7 @@ try
     Directory.CreateDirectory(sourceRoot);
 
     ReleaseContractTests.Run(Assert);
+    await RoadmapBehaviorRegressionTests.RunAsync(Assert);
     await OutputPlanningRegressionTests.RunAsync(Assert);
     await TransactionRegressionTests.RunAsync(Assert);
     TexBudgetRegressionTests.RunBudgetBoundaryTests(Assert);
@@ -514,6 +515,7 @@ try
     }
 
     Assert(overlapRejected, "Overlapping source/output paths must be rejected.");
+    RoadmapBehaviorRegressionTests.VerifyCatalogListsRetainVirtualization(Assert);
     Console.WriteLine("Wallpaper Field scan, library, safety, and RePKG unpack smoke tests passed.");
     Console.WriteLine(metrics.CreateSuccessSummary());
 }
