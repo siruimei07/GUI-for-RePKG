@@ -22,6 +22,7 @@ public sealed class ShellViewModel : ObservableObject
     private readonly ISystemFolderService _systemFolderService;
     private readonly IWallpaperUnpackService _unpackService;
     private readonly PathInputValidator _pathInputValidator;
+    private readonly AppIssueStore _issueStore = new();
     private CancellationTokenSource? _pathValidationCancellation;
     private long _pathValidationVersion;
     private PathValidationResult _sourcePathValidation = new(
@@ -625,11 +626,40 @@ public sealed class ShellViewModel : ObservableObject
     public void PublishIssues(IEnumerable<AppIssue> issues)
     {
         ArgumentNullException.ThrowIfNull(issues);
-        foreach (var issue in issues)
-        {
-            Issues.Add(issue);
-        }
+        _issueStore.Publish(issues);
+        SynchronizeIssues();
     }
+
+    public void PublishIssue(AppIssue issue)
+    {
+        ArgumentNullException.ThrowIfNull(issue);
+        _issueStore.Publish(issue);
+        SynchronizeIssues();
+    }
+
+    public int ResolveIssues(AppIssueSource source, string code, string contextKey)
+    {
+        var resolved = _issueStore.ResolveMatching(source, code, contextKey);
+        if (resolved > 0)
+        {
+            SynchronizeIssues();
+        }
+
+        return resolved;
+    }
+
+    public int ClearResolvedIssues()
+    {
+        var removed = _issueStore.ClearResolved();
+        if (removed > 0)
+        {
+            SynchronizeIssues();
+        }
+
+        return removed;
+    }
+
+    public string CopyAllIssuesText() => _issueStore.CopyAllText();
 
     public long UnpackCompletedWork
     {
@@ -938,7 +968,22 @@ public sealed class ShellViewModel : ObservableObject
     {
         if (!Directory.Exists(SourcePath))
         {
+            ClearError();
+            BeginForegroundOperation(ForegroundOperationKind.Scan);
+            CurrentStage = "FAILED";
+            PublishIssue(AppIssue.Create(
+                "SCAN_OPERATION_FAILED",
+                AppIssueSeverity.Error,
+                AppIssueSource.Scan,
+                "扫描源目录在执行前已不存在或不可访问。",
+                "目录状态在输入验证后发生变化；未执行扫描。",
+                AppDiskFact.NotModified,
+                AppIssueAction.ReviewInput,
+                NormalizeIssueContext(SourcePath),
+                ActiveOperationId,
+                SourcePath));
             PresentError("壁纸目录不存在或当前不可访问");
+            SetTaskState(TaskLifecycleState.Failed);
             return;
         }
 
@@ -959,6 +1004,11 @@ public sealed class ShellViewModel : ObservableObject
                 .ScanAsync(request, progress, cancellationToken)
                 .ConfigureAwait(true);
 
+            ResolveIssues(
+                AppIssueSource.Scan,
+                "SCAN_OPERATION_FAILED",
+                NormalizeIssueContext(request.SourceDirectory));
+
             ReplaceScanItems(result.Items);
             _scanSnapshotIdentity = new ScanSnapshotIdentity(
                 Path.GetFullPath(request.SourceDirectory),
@@ -975,6 +1025,49 @@ public sealed class ShellViewModel : ObservableObject
             TotalCount = Math.Max(TotalCount, ScannedCount);
             ProgressValue = 100;
             CurrentStage = "COMPLETE";
+
+            var recordIssues = new List<AppIssue>();
+            foreach (var record in result.Items)
+            {
+                ResolveIssues(
+                    AppIssueSource.Scan,
+                    "SCAN_ITEM_FAILED",
+                    NormalizeIssueContext(record.SourceDirectory));
+                if (record.Warnings.Count == 0)
+                {
+                    ResolveIssues(
+                        AppIssueSource.Scan,
+                        "SCAN_ITEM_WARNING",
+                        NormalizeIssueContext(record.SourceDirectory));
+                }
+                else
+                {
+                    recordIssues.Add(AppIssue.Create(
+                        "SCAN_ITEM_WARNING",
+                        AppIssueSeverity.Warning,
+                        AppIssueSource.Scan,
+                        $"{record.WorkshopId} 扫描完成，但包含需要查看的提示。",
+                        string.Join("；", record.Warnings),
+                        AppDiskFact.NotModified,
+                        AppIssueAction.ReviewInput,
+                        NormalizeIssueContext(record.SourceDirectory),
+                        ActiveOperationId,
+                        record.SourceDirectory));
+                }
+            }
+            PublishIssues(recordIssues);
+
+            PublishIssues(result.Errors.Select(error => AppIssue.Create(
+                "SCAN_ITEM_FAILED",
+                AppIssueSeverity.Error,
+                AppIssueSource.Scan,
+                "扫描项目失败；其他项目已继续处理。",
+                error.Message,
+                AppDiskFact.NotModified,
+                AppIssueAction.Retry,
+                NormalizeIssueContext(error.FolderPath),
+                ActiveOperationId,
+                error.FolderPath)));
 
             var issues = JoinIssues(result.Errors);
             var recordWarnings = FormatRecordWarnings(result.Items);
@@ -1001,6 +1094,17 @@ public sealed class ShellViewModel : ObservableObject
         catch (Exception exception)
         {
             CurrentStage = "FAILED";
+            PublishIssue(AppIssue.Create(
+                "SCAN_OPERATION_FAILED",
+                AppIssueSeverity.Error,
+                AppIssueSource.Scan,
+                "扫描未能完成；上一份可用结果已保留。",
+                exception.Message,
+                AppDiskFact.NotModified,
+                AppIssueAction.Retry,
+                NormalizeIssueContext(SourcePath),
+                ActiveOperationId,
+                SourcePath));
             PresentError("扫描未能完成", exception);
             SetTaskState(TaskLifecycleState.Failed);
         }
@@ -1098,6 +1202,17 @@ public sealed class ShellViewModel : ObservableObject
             ClearError();
             BeginForegroundOperation(ForegroundOperationKind.LibraryRefresh);
             CurrentStage = "FAILED";
+            PublishIssue(AppIssue.Create(
+                "LIBRARY_OPERATION_FAILED",
+                AppIssueSeverity.Error,
+                AppIssueSource.Library,
+                "输出目录在执行前已不存在或不可访问。",
+                "目录状态在输入验证后发生变化；上一份可用图库已保留。",
+                AppDiskFact.NotModified,
+                AppIssueAction.ReviewInput,
+                NormalizeIssueContext(OutputPath),
+                ActiveOperationId,
+                OutputPath));
             PresentError("输出目录不存在或当前不可访问");
             SetTaskState(TaskLifecycleState.Failed);
             return;
@@ -1116,8 +1231,73 @@ public sealed class ShellViewModel : ObservableObject
                 .LoadAsync(OutputPath.Trim(), cancellationToken)
                 .ConfigureAwait(true);
 
+            ResolveIssues(
+                AppIssueSource.Library,
+                "LIBRARY_OPERATION_FAILED",
+                NormalizeIssueContext(OutputPath));
+
             ReplaceItems(LibraryWallpapers, result.Items);
             LastLibraryRefresh = DateTimeOffset.Now;
+
+            var recordIssues = new List<AppIssue>();
+            foreach (var record in result.Items)
+            {
+                var metadataPath = Path.Combine(
+                    record.OutputDirectory,
+                    WallpaperStorage.MetadataFileName);
+                ResolveIssues(
+                    AppIssueSource.Library,
+                    "LIBRARY_ITEM_FAILED",
+                    NormalizeIssueContext(metadataPath));
+                ResolveIssues(
+                    AppIssueSource.Library,
+                    "LIBRARY_DUPLICATE_ID",
+                    NormalizeItemContext(record.WorkshopId));
+                if (record.Warnings.Count == 0)
+                {
+                    ResolveIssues(
+                        AppIssueSource.Library,
+                        "LIBRARY_ITEM_WARNING",
+                        NormalizeIssueContext(metadataPath));
+                }
+                else
+                {
+                    recordIssues.Add(AppIssue.Create(
+                        "LIBRARY_ITEM_WARNING",
+                        AppIssueSeverity.Warning,
+                        AppIssueSource.Library,
+                        $"{record.WorkshopId} 已载入，但包含需要查看的提示。",
+                        string.Join("；", record.Warnings),
+                        AppDiskFact.NotModified,
+                        AppIssueAction.ReviewInput,
+                        NormalizeIssueContext(metadataPath),
+                        ActiveOperationId,
+                        metadataPath));
+                }
+            }
+            PublishIssues(recordIssues);
+
+            PublishIssues(result.Errors.Select(error => AppIssue.Create(
+                "LIBRARY_ITEM_FAILED",
+                AppIssueSeverity.Error,
+                AppIssueSource.Library,
+                "输出库记录读取失败；其他记录已继续载入。",
+                error.Message,
+                AppDiskFact.NotModified,
+                AppIssueAction.Retry,
+                NormalizeIssueContext(error.Path),
+                ActiveOperationId,
+                error.Path)));
+            PublishIssues(result.Conflicts.Select(conflict => AppIssue.Create(
+                "LIBRARY_DUPLICATE_ID",
+                AppIssueSeverity.Warning,
+                AppIssueSource.Library,
+                $"重复 Workshop ID {conflict.WorkshopId} 已从图库排除。",
+                string.Join("；", conflict.CandidatePaths),
+                AppDiskFact.NotModified,
+                AppIssueAction.ReviewInput,
+                NormalizeItemContext(conflict.WorkshopId),
+                ActiveOperationId)));
 
             var issues = JoinVisibleNotes(
                 JoinIssues(result.Errors),
@@ -1144,6 +1324,17 @@ public sealed class ShellViewModel : ObservableObject
         }
         catch (Exception exception)
         {
+            PublishIssue(AppIssue.Create(
+                "LIBRARY_OPERATION_FAILED",
+                AppIssueSeverity.Error,
+                AppIssueSource.Library,
+                "输出库刷新失败；上一份可用图库已保留。",
+                exception.Message,
+                AppDiskFact.NotModified,
+                AppIssueAction.Retry,
+                NormalizeIssueContext(OutputPath),
+                ActiveOperationId,
+                OutputPath));
             PresentError("输出壁纸库读取失败", exception);
             SetTaskState(TaskLifecycleState.Failed);
         }
@@ -1195,7 +1386,13 @@ public sealed class ShellViewModel : ObservableObject
                 .UnpackAsync(request, progress, cancellationToken)
                 .ConfigureAwait(true);
 
+            ResolveIssues(
+                AppIssueSource.Unpack,
+                "UNPACK_OPERATION_FAILED",
+                NormalizeIssueContext(request.OutputDirectory));
+
             ApplyUnpackItemResults(operationId, result.ItemResults);
+            PublishUnpackIssues(operationId, result);
             ScannedCount = result.ProcessedCount;
             TotalCount = result.TotalCount;
             ProgressValue = 100;
@@ -1225,6 +1422,7 @@ public sealed class ShellViewModel : ObservableObject
             when (cancellationToken.IsCancellationRequested)
         {
             ApplyUnpackItemResults(operationId, exception.Result.ItemResults);
+            PublishUnpackIssues(operationId, exception.Result);
             ScannedCount = exception.Result.ProcessedCount;
             TotalCount = exception.Result.TotalCount;
             SetUnpackSummaryWork(
@@ -1252,6 +1450,17 @@ public sealed class ShellViewModel : ObservableObject
             CurrentStage = "FAILED";
             IsProgressIndeterminate = false;
             SetUnpackProgressCanCancel(false);
+            PublishIssue(AppIssue.Create(
+                "UNPACK_OPERATION_FAILED",
+                AppIssueSeverity.Error,
+                AppIssueSource.Unpack,
+                "解包服务异常结束；请检查输出目录中的实际状态。",
+                exception.Message,
+                AppDiskFact.AdditionalEffectsPossible,
+                AppIssueAction.OpenOutput,
+                NormalizeIssueContext(OutputPath),
+                operationId,
+                OutputPath));
             PresentError("解包未能完成", exception);
             SetTaskState(TaskLifecycleState.Failed);
         }
@@ -1348,6 +1557,71 @@ public sealed class ShellViewModel : ObservableObject
         }
     }
 
+    private void PublishUnpackIssues(Guid? operationId, WallpaperUnpackResult result)
+    {
+        var warningGroups = result.Warnings
+            .GroupBy(
+                warning => NormalizeItemContext(warning.WorkshopId),
+                StringComparer.Ordinal)
+            .ToArray();
+        var warningContexts = warningGroups
+            .Select(group => group.Key)
+            .ToHashSet(StringComparer.Ordinal);
+
+        foreach (var item in result.ItemResults.Where(item =>
+                     item.Outcome == WallpaperUnpackOutcome.Succeeded
+                     && item.CommitState == WallpaperItemCommitState.Committed))
+        {
+            var context = NormalizeItemContext(item.WorkshopId);
+            ResolveIssues(
+                AppIssueSource.Unpack,
+                "UNPACK_ITEM_FAILED",
+                context);
+            if (!warningContexts.Contains(context))
+            {
+                ResolveIssues(
+                    AppIssueSource.Unpack,
+                    "UNPACK_ITEM_WARNING",
+                    context);
+            }
+        }
+
+        PublishIssues(result.Errors.Select(error => AppIssue.Create(
+            "UNPACK_ITEM_FAILED",
+            AppIssueSeverity.Error,
+            AppIssueSource.Unpack,
+            $"{error.WorkshopId} 解包失败。",
+            error.Message,
+            MapDiskFact(error.CommitState),
+            error.CommitState == WallpaperItemCommitState.AdditionalEffectsPossible
+                ? AppIssueAction.OpenOutput
+                : AppIssueAction.Retry,
+            NormalizeItemContext(error.WorkshopId),
+            operationId,
+            error.ScenePackagePath)));
+
+        PublishIssues(warningGroups.Select(group =>
+        {
+            var item = result.ItemResults.LastOrDefault(candidate =>
+                string.Equals(
+                    candidate.WorkshopId,
+                    group.First().WorkshopId,
+                    StringComparison.OrdinalIgnoreCase));
+            return AppIssue.Create(
+                "UNPACK_ITEM_WARNING",
+                AppIssueSeverity.Warning,
+                AppIssueSource.Unpack,
+                $"{group.First().WorkshopId} 解包完成，但包含需要查看的转换提示。",
+                string.Join(
+                    Environment.NewLine,
+                    group.Select(warning => $"{warning.EntryPath}：{warning.Message}")),
+                item is null ? AppDiskFact.Unknown : MapDiskFact(item.CommitState),
+                AppIssueAction.OpenOutput,
+                group.Key,
+                operationId);
+        }));
+    }
+
     private static bool PathsEqualOrFalse(string left, string right)
     {
         try
@@ -1377,10 +1651,24 @@ public sealed class ShellViewModel : ObservableObject
         try
         {
             _systemFolderService.OpenFolder(folder);
+            ResolveIssues(
+                AppIssueSource.Diagnostics,
+                "OPEN_FOLDER_FAILED",
+                NormalizeIssueContext(folder));
             SetStatus($"已在文件管理器中打开 · {Path.GetFileName(folder)}", "Neutral");
         }
         catch (Exception exception)
         {
+            PublishIssue(AppIssue.Create(
+                "OPEN_FOLDER_FAILED",
+                AppIssueSeverity.Warning,
+                AppIssueSource.Diagnostics,
+                "无法在文件管理器中打开目录。",
+                exception.Message,
+                AppDiskFact.NotModified,
+                AppIssueAction.ReviewInput,
+                NormalizeIssueContext(folder),
+                pathContext: folder));
             PresentError("无法在文件管理器中打开该目录", exception);
         }
     }
@@ -1552,6 +1840,9 @@ public sealed class ShellViewModel : ObservableObject
         ErrorText = string.Empty;
     }
 
+    private void SynchronizeIssues()
+        => Issues.ReplaceRange(_issueStore.Snapshot());
+
     private void SetStatus(string text, string kind)
     {
         StatusText = text;
@@ -1560,6 +1851,36 @@ public sealed class ShellViewModel : ObservableObject
 
     private static bool PathsEqual(string left, string right)
         => OutputPathPolicy.PathsEqual(left, right);
+
+    private static string NormalizeIssueContext(string? value)
+    {
+        var trimmed = value?.Trim() ?? string.Empty;
+        if (trimmed.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            return Path.GetFullPath(trimmed);
+        }
+        catch
+        {
+            return trimmed;
+        }
+    }
+
+    private static string NormalizeItemContext(string? value)
+        => (value?.Trim() ?? string.Empty).ToUpperInvariant();
+
+    private static AppDiskFact MapDiskFact(WallpaperItemCommitState state)
+        => state switch
+        {
+            WallpaperItemCommitState.NotModified => AppDiskFact.NotModified,
+            WallpaperItemCommitState.Committed => AppDiskFact.Committed,
+            WallpaperItemCommitState.AdditionalEffectsPossible => AppDiskFact.AdditionalEffectsPossible,
+            _ => AppDiskFact.Unknown
+        };
 
     private void BeginForegroundOperation(ForegroundOperationKind operationKind)
         => TaskLifecycle = new TaskLifecycleSnapshot(

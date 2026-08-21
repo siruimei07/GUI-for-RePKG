@@ -19,10 +19,10 @@ public partial class App : Application
             var startup = StartupOptions.Parse(e.Args);
             var options = startup.Options;
             AppLog.Write($"Launch options parsed. IssueCount={startup.Issues.Count}.");
-            var settingsStore = new UserSettingsStore();
-            var savedSettings = settingsStore.Load();
             var viewModel = AppComposition.CreateShellViewModel();
             viewModel.PublishIssues(startup.Issues);
+            var settingsStore = AppComposition.CreateUserSettingsStore(viewModel);
+            var savedSettings = settingsStore.Load();
             AppLog.Write("Application services composed.");
 
             viewModel.SourcePath = savedSettings.SourcePath;
