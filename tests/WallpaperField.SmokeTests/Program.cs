@@ -34,6 +34,7 @@ try
     ReleaseContractTests.Run(Assert);
     await RoadmapBehaviorRegressionTests.RunAsync(Assert);
     await TaskLifecycleRegressionTests.RunAsync(Assert);
+    await ScanLifecycleRegressionTests.RunAsync(Assert);
     await OutputPlanningRegressionTests.RunAsync(Assert);
     await TransactionRegressionTests.RunAsync(Assert);
     TexBudgetRegressionTests.RunBudgetBoundaryTests(Assert);

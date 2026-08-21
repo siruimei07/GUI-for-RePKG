@@ -2,6 +2,11 @@ namespace WallpaperField.Models;
 
 public sealed record WallpaperScanRequest(string SourceDirectory, string OutputDirectory);
 
+public sealed record ScanSnapshotIdentity(
+    string SourceDirectory,
+    string OutputDirectory,
+    DateTimeOffset CompletedAtUtc);
+
 public enum ScanStage
 {
     Discovering,

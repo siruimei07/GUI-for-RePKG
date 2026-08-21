@@ -23,7 +23,7 @@ public sealed class ShellViewModel : ObservableObject
     private string _currentPage = ScanPage;
     private string _sourcePath = string.Empty;
     private string _outputPath = string.Empty;
-    private string _scanOutputPath = string.Empty;
+    private ScanSnapshotIdentity? _scanSnapshotIdentity;
     private string _scanSearchText = string.Empty;
     private string _librarySearchText = string.Empty;
     private bool _isBusy;
@@ -233,6 +233,8 @@ public sealed class ShellViewModel : ObservableObject
 
     public bool IsCancellationPending => TaskLifecycle.CancellationPending;
 
+    public ScanSnapshotIdentity? ScanIdentity => _scanSnapshotIdentity;
+
     public bool IsBusy
     {
         get => _isBusy;
@@ -321,8 +323,8 @@ public sealed class ShellViewModel : ObservableObject
 
     public string UnpackToolTip => ScannedWallpapers.Count == 0
         ? "请先扫描 Workshop 项目。"
-        : !IsCurrentOutputScanRoot()
-            ? "输出目录已在扫描后更改；请恢复扫描时的输出目录或重新扫描。"
+        : !IsCurrentScanIdentity()
+            ? "源目录或输出目录已在扫描后更改；请恢复扫描时的路径或重新扫描。"
             : SelectedUnpackCount == 0
                 ? "请先勾选至少一个 PKG 或视频项目。"
                 : $"仅处理已勾选的 {SelectedUnpackCount} 个项目。";
@@ -580,8 +582,11 @@ public sealed class ShellViewModel : ObservableObject
         value ??= string.Empty;
         if (SetProperty(ref _sourcePath, value, nameof(SourcePath)))
         {
-            OnPropertyChanged(nameof(SourceDirectory));
-            OnPropertyChanged(nameof(CanScan));
+            OnPropertiesChanged(
+                nameof(SourceDirectory),
+                nameof(CanScan),
+                nameof(IsUnpackAvailable),
+                nameof(UnpackToolTip));
             UpdateCommandStates();
         }
     }
@@ -674,21 +679,21 @@ public sealed class ShellViewModel : ObservableObject
     private bool CanStartUnpack()
         => !IsBusy
            && SelectedUnpackCount > 0
-           && IsCurrentOutputScanRoot();
+           && IsCurrentScanIdentity();
 
-    private bool IsCurrentOutputScanRoot()
+    private bool IsCurrentScanIdentity()
     {
-        if (string.IsNullOrWhiteSpace(OutputPath) || string.IsNullOrWhiteSpace(_scanOutputPath))
+        if (string.IsNullOrWhiteSpace(SourcePath)
+            || string.IsNullOrWhiteSpace(OutputPath)
+            || _scanSnapshotIdentity is null)
         {
             return false;
         }
 
         try
         {
-            return string.Equals(
-                Path.TrimEndingDirectorySeparator(Path.GetFullPath(OutputPath.Trim())),
-                Path.TrimEndingDirectorySeparator(Path.GetFullPath(_scanOutputPath)),
-                StringComparison.OrdinalIgnoreCase);
+            return PathsEqual(SourcePath, _scanSnapshotIdentity.SourceDirectory)
+                && PathsEqual(OutputPath, _scanSnapshotIdentity.OutputDirectory);
         }
         catch
         {
@@ -705,7 +710,7 @@ public sealed class ShellViewModel : ObservableObject
         }
 
         ClearError();
-        ResetScanState();
+        ResetScanProgress();
         BeginForegroundOperation(ForegroundOperationKind.Scan);
         IsBusy = true;
         IsScanning = true;
@@ -722,8 +727,14 @@ public sealed class ShellViewModel : ObservableObject
                 .ConfigureAwait(true);
 
             ReplaceScanItems(result.Items);
-            _scanOutputPath = Path.GetFullPath(request.OutputDirectory);
-            OnPropertiesChanged(nameof(IsUnpackAvailable), nameof(UnpackToolTip));
+            _scanSnapshotIdentity = new ScanSnapshotIdentity(
+                Path.GetFullPath(request.SourceDirectory),
+                Path.GetFullPath(request.OutputDirectory),
+                result.CompletedAtUtc);
+            OnPropertiesChanged(
+                nameof(ScanIdentity),
+                nameof(IsUnpackAvailable),
+                nameof(UnpackToolTip));
             UnpackCommand.NotifyCanExecuteChanged();
             SuccessCount = result.SuccessCount;
             FailureCount = result.FailedCount;
@@ -1024,10 +1035,8 @@ public sealed class ShellViewModel : ObservableObject
             _ => SelectedLibraryWallpaper?.OutputFolder
         };
 
-    private void ResetScanState()
+    private void ResetScanProgress()
     {
-        _scanOutputPath = string.Empty;
-        ScannedWallpapers.Clear();
         ProgressValue = 0;
         ScannedCount = 0;
         TotalCount = 0;
@@ -1180,6 +1189,12 @@ public sealed class ShellViewModel : ObservableObject
         StatusText = text;
         StatusKind = kind;
     }
+
+    private static bool PathsEqual(string left, string right)
+        => string.Equals(
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(left.Trim())),
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(right.Trim())),
+            StringComparison.OrdinalIgnoreCase);
 
     private void BeginForegroundOperation(ForegroundOperationKind operationKind)
         => TaskLifecycle = new TaskLifecycleSnapshot(

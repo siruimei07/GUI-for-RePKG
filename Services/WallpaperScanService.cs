@@ -39,6 +39,7 @@ public sealed class WallpaperScanService : IWallpaperScanService
         {
             cancellationToken.ThrowIfCancellationRequested();
             var sourceFolder = sourceFolders[index];
+            string? currentTitle = null;
 
             try
             {
@@ -52,6 +53,7 @@ public sealed class WallpaperScanService : IWallpaperScanService
 
                 var candidate = await ReadCandidateAsync(sourceFolder, cancellationToken)
                     .ConfigureAwait(false);
+                currentTitle = candidate.Title;
 
                 if (knownIds.Contains(candidate.WorkshopId))
                 {
@@ -81,7 +83,7 @@ public sealed class WallpaperScanService : IWallpaperScanService
                     index + 1,
                     sourceFolders.Length,
                     sourceFolder,
-                    null,
+                    currentTitle,
                     ScanStage.Failed,
                     $"跳过：{exception.Message}"));
             }
@@ -90,7 +92,7 @@ public sealed class WallpaperScanService : IWallpaperScanService
                 index + 1,
                 sourceFolders.Length,
                 sourceFolder,
-                items.LastOrDefault()?.Title,
+                currentTitle,
                 ScanStage.ReadingMetadata,
                 $"已处理 {index + 1}/{sourceFolders.Length}"));
         }
