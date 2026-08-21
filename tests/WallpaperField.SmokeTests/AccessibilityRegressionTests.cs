@@ -131,7 +131,12 @@ internal static class AccessibilityRegressionTests
                          "BrowseSourceButton",
                          "OutputPathTextBox",
                          "BrowseOutputButton",
-                         "ScanSearchBox"
+                         "ScanSearchBox",
+                         "OnlyProcessableFilter",
+                         "OnlyProblemsFilter",
+                         "SelectCurrentMatchesButton",
+                         "ClearUnpackSelectionButton",
+                         "CompactDensityToggle"
                      }),
                      ("LIBRARY", new[]
                      {

@@ -40,6 +40,7 @@ try
     await ProblemDiagnosticsRegressionTests.RunAsync(Assert);
     UiStructureRegressionTests.Run(Assert);
     AccessibilityRegressionTests.Run(Assert);
+    await SelectionEfficiencyRegressionTests.RunAsync(Assert);
     await UnpackLifecycleRegressionTests.RunAsync(Assert);
     await OutputPlanningRegressionTests.RunAsync(Assert);
     await TransactionRegressionTests.RunAsync(Assert);

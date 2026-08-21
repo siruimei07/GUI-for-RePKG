@@ -164,9 +164,10 @@
         </DrawingBrush>
 
         <DataTemplate x:Key="WallpaperCardTemplate">
-            <Button Height="154"
+            <Button x:Name="WallpaperCardButton"
+                    Height="{DynamicResource ComfortableCardHeight}"
                     MinHeight="0"
-                    Margin="0,0,8,12"
+                    Margin="{DynamicResource ComfortableCardMargin}"
                     Padding="0"
                     HorizontalContentAlignment="Stretch"
                     VerticalContentAlignment="Stretch"
@@ -177,7 +178,8 @@
                     ToolTip="打开已有输出目录；尚未解包时打开源目录">
                 <Grid>
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="236" />
+                        <ColumnDefinition x:Name="CardPreviewColumn"
+                                          Width="{DynamicResource ComfortableCardPreviewWidth}" />
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="66" />
                     </Grid.ColumnDefinitions>
@@ -213,7 +215,8 @@
                                                Foreground="{DynamicResource TextMutedBrush}"
                                                HorizontalAlignment="Center"
                                                Text="&#xE91B;" />
-                                    <TextBlock Margin="0,9,0,0"
+                                    <TextBlock x:Name="CardPreviewEmptyLabel"
+                                               Margin="0,9,0,0"
                                                Foreground="{DynamicResource TextMutedBrush}"
                                                FontSize="13"
                                                FontWeight="SemiBold"
@@ -315,17 +318,19 @@
                         </Grid>
                     </Border>
 
-                    <Grid Grid.Column="1" Margin="20,17,18,15">
+                    <Grid x:Name="CardContentGrid" Grid.Column="1" Margin="20,17,18,15">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="*" />
                             <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
-                        <TextBlock Grid.Row="0"
+                        <TextBlock x:Name="CardTechnicalHeader"
+                                   Grid.Row="0"
                                    Style="{StaticResource TechnicalLabel}"
                                    Foreground="{DynamicResource TextMutedBrush}"
                                    Text="WALLPAPER / PACKAGE RECORD" />
-                        <TextBlock Grid.Row="1"
+                        <TextBlock x:Name="CardTitle"
+                                   Grid.Row="1"
                                    Margin="0,8,0,5"
                                    VerticalAlignment="Top"
                                    FontSize="18"
@@ -334,7 +339,7 @@
                                    Text="{Binding Title}"
                                    TextTrimming="CharacterEllipsis"
                                    TextWrapping="NoWrap" />
-                        <Grid Grid.Row="2">
+                        <Grid x:Name="CardMetadataGrid" Grid.Row="2">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />
@@ -390,6 +395,27 @@
                     </Border>
                 </Grid>
             </Button>
+            <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding DataContext.Density, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                             Value="Compact">
+                    <Setter TargetName="WallpaperCardButton"
+                            Property="Height"
+                            Value="{DynamicResource CompactCardHeight}" />
+                    <Setter TargetName="WallpaperCardButton"
+                            Property="Margin"
+                            Value="{DynamicResource CompactCardMargin}" />
+                    <Setter TargetName="CardPreviewColumn"
+                            Property="Width"
+                            Value="{DynamicResource CompactCardPreviewWidth}" />
+                    <Setter TargetName="CardContentGrid" Property="Margin" Value="16,13,14,12" />
+                    <Setter TargetName="CardTechnicalHeader" Property="Visibility" Value="Collapsed" />
+                    <Setter TargetName="CardMetadataGrid" Property="Visibility" Value="Collapsed" />
+                    <Setter TargetName="CardPreviewEmptyLabel" Property="Visibility" Value="Collapsed" />
+                    <Setter TargetName="CardTitle" Property="Margin" Value="0" />
+                    <Setter TargetName="CardTitle" Property="FontSize" Value="16" />
+                    <Setter TargetName="CardTitle" Property="VerticalAlignment" Value="Center" />
+                </DataTrigger>
+            </DataTemplate.Triggers>
         </DataTemplate>
     </Window.Resources>
 
@@ -1271,20 +1297,84 @@
                                     <StackPanel VerticalAlignment="Center">
                                         <TextBlock FontSize="18" FontWeight="SemiBold" Text="扫描结果" />
                                         <TextBlock Margin="0,3,0,0"
-                                                   Style="{StaticResource TechnicalLabel}"
-                                                   Text="NAME FILTER / 实时筛选" />
+                                                   Text="NAME FILTER / 实时筛选">
+                                            <TextBlock.Style>
+                                                <Style BasedOn="{StaticResource TechnicalLabel}"
+                                                       TargetType="TextBlock">
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding LayoutMode, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                                                     Value="{x:Static local:ShellLayoutMode.Compact}">
+                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding LayoutMode, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                                                     Value="{x:Static local:ShellLayoutMode.Regular}">
+                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
                                     </StackPanel>
-                                    <Border Grid.Column="1" Height="1" Margin="16,0" VerticalAlignment="Center" Background="{DynamicResource BorderBrush}" />
+                                    <Border x:Name="ScanEfficiencyToolbar"
+                                            Grid.Column="1"
+                                            Margin="12,0"
+                                            VerticalAlignment="Center">
+                                        <WrapPanel HorizontalAlignment="Right" VerticalAlignment="Center">
+                                            <ToggleButton x:Name="OnlyProcessableFilter"
+                                                          MinWidth="68"
+                                                          Margin="0,0,4,0"
+                                                          Style="{StaticResource FilterToggleButton}"
+                                                          IsChecked="{Binding ShowOnlyProcessable, Mode=TwoWay}"
+                                                          Content="可处理"
+                                                          ToolTip="仅显示可处理项目"
+                                                          AutomationProperties.Name="仅显示可处理的扫描结果" />
+                                            <ToggleButton x:Name="OnlyProblemsFilter"
+                                                          MinWidth="68"
+                                                          Margin="0,0,8,0"
+                                                          Style="{StaticResource FilterToggleButton}"
+                                                          IsChecked="{Binding ShowOnlyProblems, Mode=TwoWay}"
+                                                          Content="有问题"
+                                                          ToolTip="仅显示有开放问题的项目"
+                                                          AutomationProperties.Name="仅显示有开放问题的扫描结果" />
+                                            <Button x:Name="SelectCurrentMatchesButton"
+                                                    MinWidth="88"
+                                                    Margin="0,0,4,0"
+                                                    Style="{StaticResource EfficiencyButton}"
+                                                    Command="{Binding SelectCurrentMatchesCommand}"
+                                                    Content="选择匹配"
+                                                    ToolTip="选择当前匹配中的全部可处理项目"
+                                                    AutomationProperties.Name="选择当前匹配中的可处理项目" />
+                                            <Button x:Name="ClearUnpackSelectionButton"
+                                                    MinWidth="60"
+                                                    Margin="0,0,4,0"
+                                                    Style="{StaticResource EfficiencyButton}"
+                                                    Command="{Binding ClearUnpackSelectionCommand}"
+                                                    Content="清空"
+                                                    ToolTip="清除全部解包选择，包括当前筛选隐藏的项目"
+                                                    AutomationProperties.Name="清除全部解包选择" />
+                                            <ToggleButton x:Name="CompactDensityToggle"
+                                                          MinWidth="68"
+                                                          Style="{StaticResource FilterToggleButton}"
+                                                          IsChecked="{Binding IsCompactDensity, Mode=TwoWay}"
+                                                          Content="紧凑"
+                                                          ToolTip="切换紧凑卡片密度"
+                                                          AutomationProperties.Name="使用紧凑卡片密度" />
+                                        </WrapPanel>
+                                    </Border>
                                     <Grid x:Name="ScanSearchPanel"
                                           Grid.Column="2"
                                           Height="50">
                                         <Grid.Style>
                                             <Style TargetType="Grid">
-                                                <Setter Property="Width" Value="430" />
+                                                <Setter Property="Width" Value="280" />
                                                 <Style.Triggers>
                                                     <DataTrigger Binding="{Binding LayoutMode, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
                                                                  Value="{x:Static local:ShellLayoutMode.Compact}">
-                                                        <Setter Property="Width" Value="320" />
+                                                        <Setter Property="Width" Value="250" />
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding LayoutMode, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                                                 Value="{x:Static local:ShellLayoutMode.Wide}">
+                                                        <Setter Property="Width" Value="330" />
                                                     </DataTrigger>
                                                 </Style.Triggers>
                                             </Style>
@@ -1302,12 +1392,12 @@
                                                    FontSize="15"
                                                    Foreground="{DynamicResource InkBrush}"
                                                    Text="&#xE721;" />
-                                        <TextBlock Margin="47,0,154,0"
+                                        <TextBlock Margin="47,0,130,0"
                                                    VerticalAlignment="Center"
                                                    IsHitTestVisible="False"
                                                    FontSize="13"
                                                    Foreground="{DynamicResource TextMutedBrush}"
-                                                   Text="输入壁纸名称">
+                                                   Text="搜索名称">
                                             <TextBlock.Style>
                                                 <Style TargetType="TextBlock">
                                                     <Setter Property="Visibility" Value="Collapsed" />
@@ -1340,25 +1430,18 @@
                                                     </Style.Triggers>
                                                 </Style>
                                             </Border.Style>
-                                             <TextBlock VerticalAlignment="Center"
+                                             <TextBlock x:Name="SelectionSummaryText"
+                                                        VerticalAlignment="Center"
                                                         FontFamily="Consolas"
                                                         FontSize="10"
                                                         FontWeight="SemiBold"
                                                         Foreground="{DynamicResource InkBrush}"
+                                                        Text="{Binding SelectionSummaryText}"
                                                         AutomationProperties.LiveSetting="Polite">
                                                  <AutomationProperties.Name>
-                                                     <MultiBinding StringFormat="扫描结果匹配 {0} 项，共 {1} 项">
-                                                         <Binding Path="FilteredScanCount" />
-                                                         <Binding Path="ScannedWallpapers.Count" />
-                                                     </MultiBinding>
+                                                     <Binding Path="SelectionSummaryText" />
                                                  </AutomationProperties.Name>
-                                                 <TextBlock.Text>
-                                                    <MultiBinding StringFormat="MATCH {0:00} / {1:00}">
-                                                        <Binding Path="FilteredScanCount" />
-                                                        <Binding Path="ScannedWallpapers.Count" />
-                                                    </MultiBinding>
-                                                </TextBlock.Text>
-                                            </TextBlock>
+                                             </TextBlock>
                                         </Border>
                                         <Button HorizontalAlignment="Right"
                                                 VerticalAlignment="Center"

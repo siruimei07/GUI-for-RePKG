@@ -590,7 +590,7 @@ public partial class MainWindow : Window
             96 * dpi.DpiScaleX,
             SystemParameters.HighContrast,
             !MotionEnabled,
-            "Comfortable",
+            ViewModel?.Density.ToString() ?? DisplayDensity.Comfortable.ToString(),
             identity.FileVersion);
     }
 

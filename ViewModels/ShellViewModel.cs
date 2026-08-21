@@ -49,6 +49,11 @@ public sealed class ShellViewModel : ObservableObject
     private string _problemSearchText = string.Empty;
     private string _problemSeverityFilter = "ALL";
     private string _problemSourceFilter = "ALL";
+    private DisplayDensity _density = DisplayDensity.Comfortable;
+    private bool _showOnlyProcessable;
+    private bool _showOnlyProblems;
+    private bool _isBatchUpdatingUnpackSelection;
+    private bool _batchUnpackSelectionChanged;
     private bool _isBusy;
     private bool _isScanning;
     private bool _isUnpacking;
@@ -126,6 +131,12 @@ public sealed class ShellViewModel : ObservableObject
         ClearResolvedIssuesCommand = new RelayCommand(
             () => ClearResolvedIssues(),
             () => ResolvedIssueCount > 0);
+        SelectCurrentMatchesCommand = new RelayCommand(
+            SelectCurrentMatches,
+            CanSelectCurrentMatches);
+        ClearUnpackSelectionCommand = new RelayCommand(
+            ClearUnpackSelection,
+            CanClearUnpackSelection);
     }
 
     public RangeObservableCollection<WallpaperCardViewModel> ScannedWallpapers { get; } = [];
@@ -172,6 +183,10 @@ public sealed class ShellViewModel : ObservableObject
     public RelayCommand ClearProblemSearchCommand { get; }
 
     public RelayCommand ClearResolvedIssuesCommand { get; }
+
+    public RelayCommand SelectCurrentMatchesCommand { get; }
+
+    public RelayCommand ClearUnpackSelectionCommand { get; }
 
     public string SourcePath
     {
@@ -226,6 +241,56 @@ public sealed class ShellViewModel : ObservableObject
     public bool HasScanSearchText => !string.IsNullOrWhiteSpace(ScanSearchText);
 
     public bool HasLibrarySearchText => !string.IsNullOrWhiteSpace(LibrarySearchText);
+
+    public DisplayDensity Density
+    {
+        get => _density;
+        set
+        {
+            var normalized = Enum.IsDefined(value)
+                ? value
+                : DisplayDensity.Comfortable;
+            if (SetProperty(ref _density, normalized))
+            {
+                OnPropertyChanged(nameof(IsCompactDensity));
+            }
+        }
+    }
+
+    public bool IsCompactDensity
+    {
+        get => Density == DisplayDensity.Compact;
+        set => Density = value
+            ? DisplayDensity.Compact
+            : DisplayDensity.Comfortable;
+    }
+
+    public bool ShowOnlyProcessable
+    {
+        get => _showOnlyProcessable;
+        set
+        {
+            if (SetProperty(ref _showOnlyProcessable, value))
+            {
+                NotifyScanFilterChanged();
+            }
+        }
+    }
+
+    public bool ShowOnlyProblems
+    {
+        get => _showOnlyProblems;
+        set
+        {
+            if (SetProperty(ref _showOnlyProblems, value))
+            {
+                NotifyScanFilterChanged();
+            }
+        }
+    }
+
+    public bool HasScanFilters
+        => HasScanSearchText || ShowOnlyProcessable || ShowOnlyProblems;
 
     public string ProblemSearchText
     {
@@ -301,12 +366,12 @@ public sealed class ShellViewModel : ObservableObject
         => HighestOpenIssueSeverityFor(Enum.GetValues<AppIssueSource>());
 
     public IEnumerable<WallpaperCardViewModel> FilteredScannedWallpapers
-        => FilterByTitle(ScannedWallpapers, ScanSearchText);
+        => ScannedWallpapers.Where(MatchesScanFilters);
 
     public IEnumerable<WallpaperCardViewModel> FilteredLibraryWallpapers
         => FilterByTitle(LibraryWallpapers, LibrarySearchText);
 
-    public int FilteredScanCount => CountTitleMatches(ScannedWallpapers, ScanSearchText);
+    public int FilteredScanCount => ScannedWallpapers.Count(MatchesScanFilters);
 
     public int FilteredLibraryCount => CountTitleMatches(LibraryWallpapers, LibrarySearchText);
 
@@ -314,12 +379,12 @@ public sealed class ShellViewModel : ObservableObject
 
     public bool HasVisibleLibraryResults => FilteredLibraryCount > 0;
 
-    public string ScanEmptyTitle => HasScanResults && HasScanSearchText
+    public string ScanEmptyTitle => HasScanResults && HasScanFilters
         ? "未找到匹配壁纸"
         : "等待扫描";
 
-    public string ScanEmptyDescription => HasScanResults && HasScanSearchText
-        ? $"没有名称包含“{ScanSearchText.Trim()}”的壁纸，请尝试其他关键词"
+    public string ScanEmptyDescription => HasScanResults && HasScanFilters
+        ? "当前名称与条件组合没有匹配项，请调整筛选后重试"
         : "选择源目录与输出目录后开始扫描";
 
     public string LibraryEmptyTitle => HasLibraryResults && HasLibrarySearchText
@@ -533,6 +598,9 @@ public sealed class ShellViewModel : ObservableObject
     public int PackageReadyCount => ScannedWallpapers.Count(item => item.HasUnpackableContent);
 
     public int SelectedUnpackCount => ScannedWallpapers.Count(item => item.IsSelectedForUnpack);
+
+    public string SelectionSummaryText
+        => $"已选 {SelectedUnpackCount:N0} · 当前匹配 {FilteredScanCount:N0}";
 
     public int LibraryCount => LibraryWallpapers.Count;
 
@@ -1874,17 +1942,35 @@ public sealed class ShellViewModel : ObservableObject
         => target.ReplaceRange(records.Select(record => new WallpaperCardViewModel(record)));
 
     private void ReplaceScanItems(IEnumerable<WallpaperRecord> records)
-        => ScannedWallpapers.ReplaceRange(records.Select(
+    {
+        ScannedWallpapers.ReplaceRange(records.Select(
             record => new WallpaperCardViewModel(record, OnUnpackSelectionChanged)));
+        SynchronizeScanCardIssueStates();
+        NotifyScanFilterChanged();
+    }
 
     private void OnUnpackSelectionChanged()
     {
+        if (_isBatchUpdatingUnpackSelection)
+        {
+            _batchUnpackSelectionChanged = true;
+            return;
+        }
+
+        NotifyUnpackSelectionChanged();
+    }
+
+    private void NotifyUnpackSelectionChanged()
+    {
         OnPropertiesChanged(
             nameof(SelectedUnpackCount),
+            nameof(SelectionSummaryText),
             nameof(UnpackButtonText),
             nameof(IsUnpackAvailable),
             nameof(UnpackToolTip));
         UnpackCommand.NotifyCanExecuteChanged();
+        SelectCurrentMatchesCommand.NotifyCanExecuteChanged();
+        ClearUnpackSelectionCommand.NotifyCanExecuteChanged();
     }
 
     private void OnScanCollectionChanged(object? sender, NotifyCollectionChangedEventArgs args)
@@ -1894,11 +1980,13 @@ public sealed class ShellViewModel : ObservableObject
             nameof(MissingPreviewCount),
             nameof(PackageReadyCount),
             nameof(SelectedUnpackCount),
+            nameof(SelectionSummaryText),
             nameof(UnpackButtonText),
             nameof(IsUnpackAvailable),
             nameof(UnpackToolTip));
         NotifyScanFilterChanged();
         UnpackCommand.NotifyCanExecuteChanged();
+        ClearUnpackSelectionCommand.NotifyCanExecuteChanged();
     }
 
     private void OnLibraryCollectionChanged(object? sender, NotifyCollectionChangedEventArgs args)
@@ -1910,13 +1998,18 @@ public sealed class ShellViewModel : ObservableObject
     }
 
     private void NotifyScanFilterChanged()
-        => OnPropertiesChanged(
+    {
+        OnPropertiesChanged(
             nameof(HasScanSearchText),
+            nameof(HasScanFilters),
             nameof(FilteredScannedWallpapers),
             nameof(FilteredScanCount),
             nameof(HasVisibleScanResults),
             nameof(ScanEmptyTitle),
-            nameof(ScanEmptyDescription));
+            nameof(ScanEmptyDescription),
+            nameof(SelectionSummaryText));
+        SelectCurrentMatchesCommand.NotifyCanExecuteChanged();
+    }
 
     private void NotifyLibraryFilterChanged()
         => OnPropertiesChanged(
@@ -1947,6 +2040,57 @@ public sealed class ShellViewModel : ObservableObject
             : items.Count(item => item.Title.Contains(query, StringComparison.OrdinalIgnoreCase));
     }
 
+    private bool MatchesScanFilters(WallpaperCardViewModel card)
+    {
+        var query = ScanSearchText.Trim();
+        return (query.Length == 0
+                || card.Title.Contains(query, StringComparison.OrdinalIgnoreCase))
+               && (!ShowOnlyProcessable || card.CanSelectForUnpack)
+               && (!ShowOnlyProblems || card.HasOpenIssues);
+    }
+
+    private bool CanSelectCurrentMatches()
+        => !IsBusy && ScannedWallpapers.Any(card =>
+            MatchesScanFilters(card)
+            && card.CanSelectForUnpack
+            && !card.IsSelectedForUnpack);
+
+    private void SelectCurrentMatches()
+        => SetUnpackSelection(
+            ScannedWallpapers.Where(MatchesScanFilters).ToArray(),
+            selected: true);
+
+    private bool CanClearUnpackSelection()
+        => !IsBusy && ScannedWallpapers.Any(card => card.IsSelectedForUnpack);
+
+    private void ClearUnpackSelection()
+        => SetUnpackSelection(ScannedWallpapers.ToArray(), selected: false);
+
+    private void SetUnpackSelection(
+        IReadOnlyList<WallpaperCardViewModel> cards,
+        bool selected)
+    {
+        _isBatchUpdatingUnpackSelection = true;
+        _batchUnpackSelectionChanged = false;
+        try
+        {
+            foreach (var card in cards)
+            {
+                card.IsSelectedForUnpack = selected;
+            }
+        }
+        finally
+        {
+            _isBatchUpdatingUnpackSelection = false;
+        }
+
+        if (_batchUnpackSelectionChanged)
+        {
+            _batchUnpackSelectionChanged = false;
+            NotifyUnpackSelectionChanged();
+        }
+    }
+
     private void ClearError()
     {
         ErrorText = string.Empty;
@@ -1960,6 +2104,7 @@ public sealed class ShellViewModel : ObservableObject
             SelectedIssue = Issues.FirstOrDefault(issue => issue.Id == selected.Id);
         }
 
+        SynchronizeScanCardIssueStates();
         OnPropertiesChanged(
             nameof(FilteredIssues),
             nameof(FilteredIssueCount),
@@ -1971,7 +2116,32 @@ public sealed class ShellViewModel : ObservableObject
             nameof(ProblemSummaryText),
             nameof(ScanIssueSummary),
             nameof(LibraryIssueSummary));
+        NotifyScanFilterChanged();
         ClearResolvedIssuesCommand.NotifyCanExecuteChanged();
+    }
+
+    private void SynchronizeScanCardIssueStates()
+    {
+        var openIssues = Issues.Where(issue =>
+            issue.ResolutionState == AppIssueResolutionState.Open
+            && issue.Source is AppIssueSource.Scan or AppIssueSource.Unpack)
+            .ToArray();
+        var scanContexts = openIssues
+            .Where(issue => issue.Source == AppIssueSource.Scan)
+            .Select(issue => issue.ContextKey)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var unpackContexts = openIssues
+            .Where(issue => issue.Source == AppIssueSource.Unpack)
+            .Select(issue => issue.ContextKey)
+            .ToHashSet(StringComparer.Ordinal);
+        foreach (var card in ScannedWallpapers)
+        {
+            var sourceContext = NormalizeIssueContext(card.SourceFolder);
+            var itemContext = NormalizeItemContext(card.WorkshopId);
+            card.SetHasOpenIssues(
+                scanContexts.Contains(sourceContext)
+                || unpackContexts.Contains(itemContext));
+        }
     }
 
     private bool MatchesProblemFilters(AppIssue issue)
@@ -2130,5 +2300,7 @@ public sealed class ShellViewModel : ObservableObject
         RefreshLibraryCommand.NotifyCanExecuteChanged();
         CancelLibraryRefreshCommand.NotifyCanExecuteChanged();
         OpenFolderCommand.NotifyCanExecuteChanged();
+        SelectCurrentMatchesCommand.NotifyCanExecuteChanged();
+        ClearUnpackSelectionCommand.NotifyCanExecuteChanged();
     }
 }

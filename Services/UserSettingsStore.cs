@@ -58,7 +58,10 @@ public sealed class UserSettingsStore
                 : settings with
                 {
                     SourcePath = settings.SourcePath ?? string.Empty,
-                    OutputPath = settings.OutputPath ?? string.Empty
+                    OutputPath = settings.OutputPath ?? string.Empty,
+                    Density = Enum.IsDefined(settings.Density)
+                        ? settings.Density
+                        : DisplayDensity.Comfortable
                 };
             Resolve("SETTINGS_LOAD_FAILED");
             return result;

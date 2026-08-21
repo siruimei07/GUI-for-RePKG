@@ -122,6 +122,7 @@ internal static class UiStructureRegressionTests
                     System.Windows.Threading.DispatcherPriority.DataBind);
 
                 AccessibilityRegressionTests.VerifyWindow(window, assert);
+                SelectionEfficiencyRegressionTests.VerifyWindowDensity(window, shell, assert);
                 VerifyLayoutMode(window, "Compact", assert);
                 VerifyAlwaysAvailableActions(window, shell, assert);
                 VerifyPage(window, shell, "SCAN", "ScanView", "ScanResultsList", assert);
@@ -130,12 +131,14 @@ internal static class UiStructureRegressionTests
                 VerifyProblemExpansionFollowsIssueIdentity(window, shell, assert);
 
                 window.Width = 1060;
+                SelectionEfficiencyRegressionTests.VerifyToolbarAtCurrentWidth(window, shell, assert);
                 shell.NavigateTo("LIBRARY");
                 window.UpdateLayout();
                 VerifyLayoutMode(window, "Regular", assert);
                 VerifyAlwaysAvailableActions(window, shell, assert);
 
                 window.Width = 1190;
+                SelectionEfficiencyRegressionTests.VerifyToolbarAtCurrentWidth(window, shell, assert);
                 shell.NavigateTo("LIBRARY");
                 window.UpdateLayout();
                 VerifyLayoutMode(window, "Wide", assert);

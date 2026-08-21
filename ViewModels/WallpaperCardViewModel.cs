@@ -8,6 +8,7 @@ namespace WallpaperField.ViewModels;
 public sealed class WallpaperCardViewModel : ObservableObject
 {
     private readonly Action? _unpackSelectionChanged;
+    private bool _hasOpenIssues;
     private bool _isSelectedForUnpack;
 
     public WallpaperCardViewModel(
@@ -75,9 +76,17 @@ public sealed class WallpaperCardViewModel : ObservableObject
 
     public bool HasWarnings => WarningCount > 0;
 
+    public bool HasOpenIssues
+    {
+        get => _hasOpenIssues;
+        private set => SetProperty(ref _hasOpenIssues, value);
+    }
+
     public string WarningSummary => HasWarnings
         ? string.Join(Environment.NewLine, Record.Warnings)
         : string.Empty;
+
+    internal void SetHasOpenIssues(bool value) => HasOpenIssues = value;
 
     public string FolderName
     {

@@ -8,4 +8,6 @@ public sealed record UserSettings
     public string SourcePath { get; init; } = string.Empty;
 
     public string OutputPath { get; init; } = string.Empty;
+
+    public DisplayDensity Density { get; init; } = DisplayDensity.Comfortable;
 }

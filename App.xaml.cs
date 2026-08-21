@@ -27,6 +27,7 @@ public partial class App : Application
 
             viewModel.SourcePath = savedSettings.SourcePath;
             viewModel.OutputPath = savedSettings.OutputPath;
+            viewModel.Density = savedSettings.Density;
             AppLog.Write("User settings restored.");
 
             if (!string.IsNullOrWhiteSpace(options.SourceDirectory))
@@ -68,7 +69,8 @@ public partial class App : Application
                     _ = settingsStore.Save(new UserSettings
                     {
                         SourcePath = viewModel.SourcePath.Trim(),
-                        OutputPath = viewModel.OutputPath.Trim()
+                        OutputPath = viewModel.OutputPath.Trim(),
+                        Density = viewModel.Density
                     });
                 }
             };

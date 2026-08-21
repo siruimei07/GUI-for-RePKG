@@ -142,6 +142,12 @@
     <Thickness x:Key="Space40">40</Thickness>
     <Thickness x:Key="PanelPadding">24</Thickness>
     <Thickness x:Key="PagePadding">32,28,36,32</Thickness>
+    <sys:Double x:Key="ComfortableCardHeight">154</sys:Double>
+    <sys:Double x:Key="CompactCardHeight">112</sys:Double>
+    <GridLength x:Key="ComfortableCardPreviewWidth">236</GridLength>
+    <GridLength x:Key="CompactCardPreviewWidth">168</GridLength>
+    <Thickness x:Key="ComfortableCardMargin">0,0,8,12</Thickness>
+    <Thickness x:Key="CompactCardMargin">0,0,8,8</Thickness>
 
     <CornerRadius x:Key="ActionCornerRadius">14</CornerRadius>
     <CornerRadius x:Key="CompactActionCornerRadius">12</CornerRadius>
@@ -279,6 +285,59 @@
         <Setter Property="Padding" Value="0" />
         <Setter Property="FontSize" Value="18" />
         <Setter Property="FontWeight" Value="Normal" />
+    </Style>
+
+    <Style x:Key="EfficiencyButton"
+           BasedOn="{StaticResource GhostButton}"
+           TargetType="{x:Type Button}">
+        <Setter Property="MinHeight" Value="40" />
+        <Setter Property="Padding" Value="10,0" />
+        <Setter Property="FontSize" Value="12" />
+    </Style>
+
+    <Style x:Key="FilterToggleButton" TargetType="{x:Type ToggleButton}">
+        <Setter Property="MinHeight" Value="40" />
+        <Setter Property="Padding" Value="10,0" />
+        <Setter Property="Background" Value="{DynamicResource PaperBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource InkBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource BorderStrongBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FocusVisualStyle" Value="{StaticResource FocusVisual}" />
+        <Setter Property="FontFamily" Value="{StaticResource UiFontFamily}" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="{x:Type ToggleButton}">
+                    <Border x:Name="ToggleChrome"
+                            Padding="{TemplateBinding Padding}"
+                            Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            CornerRadius="12">
+                        <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                          VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                          RecognizesAccessKey="True" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="ToggleChrome" Property="BorderBrush" Value="{DynamicResource InkBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter Property="Background" Value="{DynamicResource SignalBrush}" />
+                            <Setter Property="Foreground" Value="{DynamicResource SignalTextBrush}" />
+                            <Setter Property="BorderBrush" Value="{DynamicResource InkBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter TargetName="ToggleChrome" Property="Opacity" Value="0.46" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
     </Style>
 
     <!-- Navigation keeps a rounded touch target and a hard signal rail. -->
