@@ -46,6 +46,9 @@ public sealed class ShellViewModel : ObservableObject
     private ScanSnapshotIdentity? _scanSnapshotIdentity;
     private string _scanSearchText = string.Empty;
     private string _librarySearchText = string.Empty;
+    private string _problemSearchText = string.Empty;
+    private string _problemSeverityFilter = "ALL";
+    private string _problemSourceFilter = "ALL";
     private bool _isBusy;
     private bool _isScanning;
     private bool _isUnpacking;
@@ -69,6 +72,7 @@ public sealed class ShellViewModel : ObservableObject
     private DateTimeOffset? _lastLibraryRefresh;
     private WallpaperCardViewModel? _selectedScanWallpaper;
     private WallpaperCardViewModel? _selectedLibraryWallpaper;
+    private AppIssue? _selectedIssue;
     private TaskLifecycleSnapshot _taskLifecycle = new(
         null,
         null,
@@ -96,6 +100,7 @@ public sealed class ShellViewModel : ObservableObject
 
         NavigateScanCommand = new RelayCommand(() => NavigateTo(ScanPage));
         NavigateLibraryCommand = new RelayCommand(() => NavigateTo(LibraryPage));
+        NavigateProblemsCommand = new RelayCommand(() => NavigateTo(ProblemsPage));
         NavigateCommand = new RelayCommand(parameter => NavigateTo(parameter?.ToString()));
 
         BrowseSourceCommand = new RelayCommand(BrowseSource, () => !IsBusy);
@@ -115,6 +120,12 @@ public sealed class ShellViewModel : ObservableObject
         ClearLibrarySearchCommand = new RelayCommand(
             () => LibrarySearchText = string.Empty,
             () => HasLibrarySearchText);
+        ClearProblemSearchCommand = new RelayCommand(
+            () => ProblemSearchText = string.Empty,
+            () => HasProblemSearchText);
+        ClearResolvedIssuesCommand = new RelayCommand(
+            () => ClearResolvedIssues(),
+            () => ResolvedIssueCount > 0);
     }
 
     public RangeObservableCollection<WallpaperCardViewModel> ScannedWallpapers { get; } = [];
@@ -131,6 +142,8 @@ public sealed class ShellViewModel : ObservableObject
     public RelayCommand NavigateScanCommand { get; }
 
     public RelayCommand NavigateLibraryCommand { get; }
+
+    public RelayCommand NavigateProblemsCommand { get; }
 
     public RelayCommand NavigateCommand { get; }
 
@@ -155,6 +168,10 @@ public sealed class ShellViewModel : ObservableObject
     public RelayCommand ClearScanSearchCommand { get; }
 
     public RelayCommand ClearLibrarySearchCommand { get; }
+
+    public RelayCommand ClearProblemSearchCommand { get; }
+
+    public RelayCommand ClearResolvedIssuesCommand { get; }
 
     public string SourcePath
     {
@@ -209,6 +226,79 @@ public sealed class ShellViewModel : ObservableObject
     public bool HasScanSearchText => !string.IsNullOrWhiteSpace(ScanSearchText);
 
     public bool HasLibrarySearchText => !string.IsNullOrWhiteSpace(LibrarySearchText);
+
+    public string ProblemSearchText
+    {
+        get => _problemSearchText;
+        set
+        {
+            value ??= string.Empty;
+            if (SetProperty(ref _problemSearchText, value))
+            {
+                OnPropertiesChanged(
+                    nameof(HasProblemSearchText),
+                    nameof(FilteredIssues),
+                    nameof(FilteredIssueCount));
+                ClearProblemSearchCommand.NotifyCanExecuteChanged();
+            }
+        }
+    }
+
+    public string ProblemSeverityFilter
+    {
+        get => _problemSeverityFilter;
+        set
+        {
+            var normalized = NormalizeIssueFilter<AppIssueSeverity>(value);
+            if (SetProperty(ref _problemSeverityFilter, normalized))
+            {
+                OnPropertiesChanged(nameof(FilteredIssues), nameof(FilteredIssueCount));
+            }
+        }
+    }
+
+    public string ProblemSourceFilter
+    {
+        get => _problemSourceFilter;
+        set
+        {
+            var normalized = NormalizeIssueFilter<AppIssueSource>(value);
+            if (SetProperty(ref _problemSourceFilter, normalized))
+            {
+                OnPropertiesChanged(nameof(FilteredIssues), nameof(FilteredIssueCount));
+            }
+        }
+    }
+
+    public bool HasProblemSearchText => !string.IsNullOrWhiteSpace(ProblemSearchText);
+
+    public IReadOnlyList<AppIssue> FilteredIssues
+        => Issues.Where(MatchesProblemFilters).ToArray();
+
+    public int FilteredIssueCount => Issues.Count(MatchesProblemFilters);
+
+    public int OpenIssueCount => Issues.Count(issue =>
+        issue.ResolutionState == AppIssueResolutionState.Open);
+
+    public int ResolvedIssueCount => Issues.Count(issue =>
+        issue.ResolutionState == AppIssueResolutionState.Resolved);
+
+    public int ScanIssueCount => CountOpenIssues(AppIssueSource.Scan, AppIssueSource.Unpack);
+
+    public int LibraryIssueCount => CountOpenIssues(AppIssueSource.Library);
+
+    public string ProblemSummaryText => FormatIssueSummary(OpenIssueCount, HighestOpenIssueSeverity);
+
+    public string ScanIssueSummary => FormatIssueSummary(
+        ScanIssueCount,
+        HighestOpenIssueSeverityFor(AppIssueSource.Scan, AppIssueSource.Unpack));
+
+    public string LibraryIssueSummary => FormatIssueSummary(
+        LibraryIssueCount,
+        HighestOpenIssueSeverityFor(AppIssueSource.Library));
+
+    public AppIssueSeverity? HighestOpenIssueSeverity
+        => HighestOpenIssueSeverityFor(Enum.GetValues<AppIssueSource>());
 
     public IEnumerable<WallpaperCardViewModel> FilteredScannedWallpapers
         => FilterByTitle(ScannedWallpapers, ScanSearchText);
@@ -271,7 +361,8 @@ public sealed class ShellViewModel : ObservableObject
                     nameof(TaskState),
                     nameof(ActiveOperationId),
                     nameof(ActiveOperationKind),
-                    nameof(IsCancellationPending));
+                    nameof(IsCancellationPending),
+                    nameof(UnpackWorkText));
             }
         }
     }
@@ -408,7 +499,7 @@ public sealed class ShellViewModel : ObservableObject
         {
             if (SetProperty(ref _scannedCount, Math.Max(0, value)))
             {
-                OnPropertyChanged(nameof(ProgressSummary));
+                OnPropertiesChanged(nameof(ProgressSummary), nameof(UnpackWorkText));
             }
         }
     }
@@ -420,7 +511,7 @@ public sealed class ShellViewModel : ObservableObject
         {
             if (SetProperty(ref _totalCount, Math.Max(0, value)))
             {
-                OnPropertyChanged(nameof(ProgressSummary));
+                OnPropertiesChanged(nameof(ProgressSummary), nameof(UnpackWorkText));
             }
         }
     }
@@ -611,6 +702,20 @@ public sealed class ShellViewModel : ObservableObject
         RefreshLibraryCommand.TryCancel();
     }
 
+    public AppIssue? SelectedIssue
+    {
+        get => _selectedIssue;
+        set
+        {
+            if (SetProperty(ref _selectedIssue, value))
+            {
+                OnPropertyChanged(nameof(HasSelectedIssue));
+            }
+        }
+    }
+
+    public bool HasSelectedIssue => SelectedIssue is not null;
+
     public bool IsProgressIndeterminate
     {
         get => _isProgressIndeterminate;
@@ -702,6 +807,13 @@ public sealed class ShellViewModel : ObservableObject
     {
         get
         {
+            if (ActiveOperationKind != ForegroundOperationKind.Unpack)
+            {
+                return TotalCount > 0
+                    ? $"{ProgressSummary} ITEMS"
+                    : "等待扫描";
+            }
+
             if (IsProgressIndeterminate || UnpackTotalWork is null)
             {
                 return "正在估算工作量";
@@ -1841,7 +1953,92 @@ public sealed class ShellViewModel : ObservableObject
     }
 
     private void SynchronizeIssues()
-        => Issues.ReplaceRange(_issueStore.Snapshot());
+    {
+        Issues.ReplaceRange(_issueStore.Snapshot());
+        if (SelectedIssue is { } selected)
+        {
+            SelectedIssue = Issues.FirstOrDefault(issue => issue.Id == selected.Id);
+        }
+
+        OnPropertiesChanged(
+            nameof(FilteredIssues),
+            nameof(FilteredIssueCount),
+            nameof(OpenIssueCount),
+            nameof(ResolvedIssueCount),
+            nameof(ScanIssueCount),
+            nameof(LibraryIssueCount),
+            nameof(HighestOpenIssueSeverity),
+            nameof(ProblemSummaryText),
+            nameof(ScanIssueSummary),
+            nameof(LibraryIssueSummary));
+        ClearResolvedIssuesCommand.NotifyCanExecuteChanged();
+    }
+
+    private bool MatchesProblemFilters(AppIssue issue)
+    {
+        if (!string.Equals(ProblemSeverityFilter, "ALL", StringComparison.Ordinal)
+            && !string.Equals(
+                issue.Severity.ToString(),
+                ProblemSeverityFilter,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (!string.Equals(ProblemSourceFilter, "ALL", StringComparison.Ordinal)
+            && !string.Equals(
+                issue.Source.ToString(),
+                ProblemSourceFilter,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var search = ProblemSearchText.Trim();
+        return search.Length == 0
+            || issue.Code.Contains(search, StringComparison.OrdinalIgnoreCase)
+            || issue.Summary.Contains(search, StringComparison.CurrentCultureIgnoreCase)
+            || issue.Details.Contains(search, StringComparison.CurrentCultureIgnoreCase)
+            || issue.Source.ToString().Contains(search, StringComparison.OrdinalIgnoreCase)
+            || (issue.PathContext?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false);
+    }
+
+    private int CountOpenIssues(params AppIssueSource[] sources)
+        => Issues.Count(issue =>
+            issue.ResolutionState == AppIssueResolutionState.Open
+            && sources.Contains(issue.Source));
+
+    private AppIssueSeverity? HighestOpenIssueSeverityFor(params AppIssueSource[] sources)
+        => Issues
+            .Where(issue => issue.ResolutionState == AppIssueResolutionState.Open
+                && sources.Contains(issue.Source))
+            .Select(issue => (AppIssueSeverity?)issue.Severity)
+            .OrderByDescending(severity => severity)
+            .FirstOrDefault();
+
+    private static string FormatIssueSummary(int count, AppIssueSeverity? severity)
+        => count == 0
+            ? "暂无开放问题"
+            : $"{count:N0} 个开放问题 · 最高 {FormatIssueSeverity(severity)}";
+
+    private static string FormatIssueSeverity(AppIssueSeverity? severity)
+        => severity switch
+        {
+            AppIssueSeverity.Error => "错误",
+            AppIssueSeverity.Warning => "警告",
+            AppIssueSeverity.Information => "信息",
+            _ => "未知"
+        };
+
+    private static string NormalizeIssueFilter<TEnum>(string? value)
+        where TEnum : struct, Enum
+    {
+        var normalized = value?.Trim() ?? string.Empty;
+        return string.Equals(normalized, "ALL", StringComparison.OrdinalIgnoreCase)
+               || !Enum.TryParse<TEnum>(normalized, ignoreCase: true, out var parsed)
+            ? "ALL"
+            : parsed.ToString();
+    }
 
     private void SetStatus(string text, string kind)
     {

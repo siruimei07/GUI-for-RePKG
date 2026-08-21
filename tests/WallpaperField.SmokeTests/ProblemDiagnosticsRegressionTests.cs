@@ -512,7 +512,8 @@ internal static class ProblemDiagnosticsRegressionTests
                 144,
                 true,
                 true,
-                "Compact");
+                "Compact",
+                "1.2.2.0");
             var privatePath = Path.Combine(root, "private", "metadata.json");
             var issue = CreateIssue(
                 "EXPORT_FIXTURE",
@@ -531,6 +532,7 @@ internal static class ProblemDiagnosticsRegressionTests
             var defaultDocument = await ReadDocumentAsync(defaultPath);
             assert(defaultDocument.SchemaVersion == DiagnosticExportService.SchemaVersion
                    && defaultDocument.Environment == environment
+                   && defaultDocument.Environment.FileVersion == "1.2.2.0"
                    && defaultDocument.Counts.Visible == 1
                    && defaultDocument.Counts.TotalOccurrences == 1
                    && defaultDocument.Issues.Single().PathContext is null
@@ -543,8 +545,9 @@ internal static class ProblemDiagnosticsRegressionTests
                 "Default diagnostics did not preserve schema/environment/counts or leaked a full path.");
             var defaultJson = await File.ReadAllTextAsync(defaultPath, Encoding.UTF8);
             assert(!defaultJson.Contains("payload", StringComparison.OrdinalIgnoreCase)
-                   && !defaultJson.Contains("fileContent", StringComparison.OrdinalIgnoreCase),
-                "Diagnostics included a file-content or payload field.");
+                   && !defaultJson.Contains("fileContent", StringComparison.OrdinalIgnoreCase)
+                   && defaultJson.Contains("\"fileVersion\": \"1.2.2.0\"", StringComparison.Ordinal),
+                "Diagnostics omitted file identity or included a file-content/payload field.");
 
             var explicitPath = Path.Combine(root, "explicit.json");
             await service.ExportAsync(new DiagnosticExportRequest(

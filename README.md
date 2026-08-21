@@ -372,7 +372,7 @@ dotnet run --project .\tests\WallpaperField.SmokeTests\WallpaperField.SmokeTests
 
 ```text
 --source <目录> --output <目录> --scan
---page scan|library
+--page scan|library|problems
 --snapshot <png路径> --width <像素> --height <像素>
 --scroll-index <记录索引>
 --reduced-motion

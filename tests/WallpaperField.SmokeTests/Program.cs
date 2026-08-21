@@ -38,6 +38,7 @@ try
     await LibraryLifecycleRegressionTests.RunAsync(Assert);
     await InputValidationRegressionTests.RunAsync(Assert);
     await ProblemDiagnosticsRegressionTests.RunAsync(Assert);
+    UiStructureRegressionTests.Run(Assert);
     await UnpackLifecycleRegressionTests.RunAsync(Assert);
     await OutputPlanningRegressionTests.RunAsync(Assert);
     await TransactionRegressionTests.RunAsync(Assert);
@@ -521,7 +522,7 @@ try
     }
 
     Assert(overlapRejected, "Overlapping source/output paths must be rejected.");
-    RoadmapBehaviorRegressionTests.VerifyCatalogListsRetainVirtualization(Assert);
+    UiStructureRegressionTests.VerifyWpfWindow(Assert);
     Console.WriteLine("Wallpaper Field scan, library, safety, and RePKG unpack smoke tests passed.");
     Console.WriteLine(metrics.CreateSuccessSummary());
 }

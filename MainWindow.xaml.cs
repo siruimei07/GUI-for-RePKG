@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.IO;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
@@ -9,10 +10,20 @@ using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using Microsoft.Win32;
+using WallpaperField.Composition;
 using WallpaperField.Infrastructure;
+using WallpaperField.Models;
 using WallpaperField.ViewModels;
 
 namespace WallpaperField;
+
+public enum ShellLayoutMode
+{
+    Compact,
+    Regular,
+    Wide
+}
 
 public partial class MainWindow : Window
 {
@@ -25,9 +36,17 @@ public partial class MainWindow : Window
         typeof(MainWindow),
         new PropertyMetadata(SystemParameters.ClientAreaAnimation));
 
+    public static readonly DependencyProperty LayoutModeProperty = DependencyProperty.Register(
+        nameof(LayoutMode),
+        typeof(ShellLayoutMode),
+        typeof(MainWindow),
+        new PropertyMetadata(ShellLayoutMode.Wide));
+
     private string? _snapshotPath;
     private int _snapshotDelayMilliseconds = 1500;
     private int? _snapshotScrollIndex;
+    private readonly HashSet<Guid> _expandedProblemIssueIds = [];
+    private bool _restoringProblemExpansion;
 
     public MainWindow()
     {
@@ -42,6 +61,12 @@ public partial class MainWindow : Window
     {
         get => (bool)GetValue(MotionEnabledProperty);
         private set => SetValue(MotionEnabledProperty, value);
+    }
+
+    public ShellLayoutMode LayoutMode
+    {
+        get => (ShellLayoutMode)GetValue(LayoutModeProperty);
+        private set => SetValue(LayoutModeProperty, value);
     }
 
     public void ConfigureSnapshot(
@@ -75,7 +100,7 @@ public partial class MainWindow : Window
     private async void Window_Loaded(object sender, RoutedEventArgs e)
     {
         ApplyDwmWindowSettings();
-        UpdateResponsiveLayout(ActualWidth, ActualHeight);
+        UpdateResponsiveLayout(ActualWidth);
         StartAmbientMotion();
         AnimateCurrentPage();
         SetBusyAnimation(ViewModel?.IsBusy == true);
@@ -90,6 +115,7 @@ public partial class MainWindow : Window
     {
         if (e.PropertyName is nameof(ShellViewModel.IsScanPage)
             or nameof(ShellViewModel.IsLibraryPage)
+            or nameof(ShellViewModel.IsProblemsPage)
             or nameof(ShellViewModel.PageCode))
         {
             Dispatcher.BeginInvoke(AnimateCurrentPage, DispatcherPriority.Loaded);
@@ -179,20 +205,36 @@ public partial class MainWindow : Window
 
     private void AnimateCurrentPage()
     {
-        var target = ViewModel?.IsLibraryPage == true ? LibraryView : ScanView;
-        var other = ReferenceEquals(target, LibraryView) ? ScanView : LibraryView;
-        var targetStage = ViewModel?.IsLibraryPage == true ? LibraryStageOverlay : ScanStageOverlay;
-        var otherStage = ReferenceEquals(targetStage, LibraryStageOverlay)
-            ? ScanStageOverlay
-            : LibraryStageOverlay;
-        other.BeginAnimation(OpacityProperty, null);
-        otherStage.BeginAnimation(OpacityProperty, null);
+        var target = ViewModel?.IsProblemsPage == true
+            ? ProblemsView
+            : ViewModel?.IsLibraryPage == true
+                ? LibraryView
+                : ScanView;
+        var targetStage = ViewModel?.IsProblemsPage == true
+            ? null
+            : ViewModel?.IsLibraryPage == true
+                ? LibraryStageOverlay
+                : ScanStageOverlay;
+        foreach (var other in new[] { ScanView, LibraryView, ProblemsView }
+                     .Where(view => !ReferenceEquals(view, target)))
+        {
+            other.BeginAnimation(OpacityProperty, null);
+        }
+
+        foreach (var otherStage in new[] { ScanStageOverlay, LibraryStageOverlay }
+                     .Where(stage => !ReferenceEquals(stage, targetStage)))
+        {
+            otherStage.BeginAnimation(OpacityProperty, null);
+        }
 
         if (!MotionEnabled)
         {
             target.Opacity = 1;
             target.RenderTransform = Transform.Identity;
-            targetStage.Opacity = ViewModel?.IsLibraryPage == true ? 0.12 : 0.13;
+            if (targetStage is not null)
+            {
+                targetStage.Opacity = ViewModel?.IsLibraryPage == true ? 0.12 : 0.13;
+            }
             StartCalibrationLoop();
             return;
         }
@@ -207,7 +249,7 @@ public partial class MainWindow : Window
             {
                 EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
             });
-        targetStage.BeginAnimation(
+        targetStage?.BeginAnimation(
             OpacityProperty,
             new DoubleAnimation(
                 0,
@@ -227,7 +269,11 @@ public partial class MainWindow : Window
             RotateTransform.AngleProperty,
             new DoubleAnimation(
                 CalibrationRotation.Angle,
-                ViewModel?.IsLibraryPage == true ? 32 : 0,
+                ViewModel?.IsProblemsPage == true
+                    ? 58
+                    : ViewModel?.IsLibraryPage == true
+                        ? 32
+                        : 0,
                 TimeSpan.FromMilliseconds(620))
             {
                 EasingFunction = new QuarticEase { EasingMode = EasingMode.EaseOut }
@@ -238,38 +284,19 @@ public partial class MainWindow : Window
     {
         if (IsInitialized)
         {
-            UpdateResponsiveLayout(e.NewSize.Width, e.NewSize.Height);
+            UpdateResponsiveLayout(e.NewSize.Width);
         }
     }
 
-    private void UpdateResponsiveLayout(double width, double height)
-    {
-        var compact = width < 1190;
-        var narrow = width < 1060;
-        var shortWide = height < 760;
-        RailColumn.Width = new GridLength(compact ? 92 : 226);
-        BrandCopy.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
-        NavSectionLabel.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
-        ScanNavCopy.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
-        LibraryNavCopy.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
-        RailFooterCopy.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
-        RailFooterStatus.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
-        RailFooter.Margin = compact ? new Thickness(7, 0, 7, 0) : new Thickness(0);
-        PageBreadcrumb.Visibility = narrow ? Visibility.Collapsed : Visibility.Visible;
-        ScanStats.Visibility = narrow ? Visibility.Collapsed : Visibility.Visible;
-        LibraryStats.Visibility = narrow ? Visibility.Collapsed : Visibility.Visible;
-        CalibrationInstrument.Visibility = narrow ? Visibility.Collapsed : Visibility.Visible;
-        ScanSearchPanel.Width = narrow ? 350 : 430;
-        LibrarySearchPanel.Width = narrow ? 350 : 430;
-        ScanDescription.Visibility = shortWide ? Visibility.Collapsed : Visibility.Visible;
-        LibraryDescription.Visibility = shortWide ? Visibility.Collapsed : Visibility.Visible;
-        ScanResultsList.Height = shortWide ? 282 : 350;
-        LibraryResultsList.Height = shortWide ? 388 : 520;
-        ScanView.Margin = narrow || shortWide
-            ? new Thickness(22, 16, 18, 14)
-            : new Thickness(34, 24, 28, 20);
-        LibraryView.Margin = ScanView.Margin;
-    }
+    private void UpdateResponsiveLayout(double width)
+        => LayoutMode = ResolveLayoutMode(width);
+
+    internal static ShellLayoutMode ResolveLayoutMode(double width)
+        => width < 1060
+            ? ShellLayoutMode.Compact
+            : width < 1190
+                ? ShellLayoutMode.Regular
+                : ShellLayoutMode.Wide;
 
     private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
@@ -300,6 +327,230 @@ public partial class MainWindow : Window
         WindowFrame.CornerRadius = maximized ? new CornerRadius(0) : new CornerRadius(16);
         WindowFrame.BorderThickness = maximized ? new Thickness(0) : new Thickness(1);
         MaximizeGlyph.Text = maximized ? "\uE923" : "\uE922";
+    }
+
+    private void CopySelectedIssue_Click(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel?.SelectedIssue is not { } issue)
+        {
+            return;
+        }
+
+        CopyIssueText(
+            $"[{issue.Severity}] {issue.Source}/{issue.Code}{Environment.NewLine}" +
+            $"{issue.Summary}{Environment.NewLine}" +
+            $"{issue.Details}{Environment.NewLine}" +
+            $"磁盘：{issue.DiskFact} · 建议：{issue.SuggestedAction}" +
+            (string.IsNullOrWhiteSpace(issue.PathContext)
+                ? string.Empty
+                : $"{Environment.NewLine}路径：{issue.PathContext}"));
+    }
+
+    private void ProblemDetails_Loaded(object sender, RoutedEventArgs e)
+        => RestoreProblemDetailsState(sender as Expander);
+
+    private void ProblemDetails_DataContextChanged(
+        object sender,
+        DependencyPropertyChangedEventArgs e)
+        => RestoreProblemDetailsState(sender as Expander);
+
+    private void ProblemDetails_Expanded(object sender, RoutedEventArgs e)
+    {
+        if (!_restoringProblemExpansion
+            && sender is Expander { DataContext: AppIssue issue })
+        {
+            PruneExpandedProblemIssueIds();
+            _expandedProblemIssueIds.Add(issue.Id);
+        }
+    }
+
+    private void ProblemDetails_Collapsed(object sender, RoutedEventArgs e)
+    {
+        if (!_restoringProblemExpansion
+            && sender is Expander { DataContext: AppIssue issue })
+        {
+            _expandedProblemIssueIds.Remove(issue.Id);
+        }
+    }
+
+    private void RestoreProblemDetailsState(Expander? expander)
+    {
+        if (expander?.DataContext is not AppIssue issue)
+        {
+            return;
+        }
+
+        var expected = _expandedProblemIssueIds.Contains(issue.Id);
+        if (expander.IsExpanded == expected)
+        {
+            return;
+        }
+
+        _restoringProblemExpansion = true;
+        try
+        {
+            expander.IsExpanded = expected;
+        }
+        finally
+        {
+            _restoringProblemExpansion = false;
+        }
+    }
+
+    private void PruneExpandedProblemIssueIds()
+    {
+        if (_expandedProblemIssueIds.Count < AppIssueStore.MaxVisibleIssues)
+        {
+            return;
+        }
+
+        _expandedProblemIssueIds.IntersectWith(
+            ViewModel?.Issues.Select(issue => issue.Id) ?? []);
+    }
+
+    private void CopyAllIssues_Click(object sender, RoutedEventArgs e)
+        => CopyIssueText(ViewModel?.CopyAllIssuesText() ?? string.Empty);
+
+    private void CopyIssueText(string text)
+    {
+        const string context = "problem-center-clipboard";
+        try
+        {
+            Clipboard.SetText(string.IsNullOrWhiteSpace(text) ? "当前没有问题记录。" : text);
+            ViewModel?.ResolveIssues(
+                AppIssueSource.Diagnostics,
+                "CLIPBOARD_WRITE_FAILED",
+                context);
+        }
+        catch (Exception exception)
+        {
+            ViewModel?.PublishIssue(AppIssue.Create(
+                "CLIPBOARD_WRITE_FAILED",
+                AppIssueSeverity.Warning,
+                AppIssueSource.Diagnostics,
+                "无法把问题记录写入剪贴板。",
+                exception.Message,
+                AppDiskFact.NotModified,
+                AppIssueAction.ExportDiagnostics,
+                context));
+        }
+    }
+
+    private void OpenLogs_Click(object sender, RoutedEventArgs e)
+    {
+        AppLog.Write("Problem center requested the local log directory.");
+        var logDirectory = Path.GetDirectoryName(AppLog.FilePath);
+        if (!string.IsNullOrWhiteSpace(logDirectory))
+        {
+            ViewModel?.OpenFolderCommand.Execute(logDirectory);
+        }
+    }
+
+    private async void ExportDiagnostics_Click(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel is not { } viewModel)
+        {
+            return;
+        }
+
+        var includePaths = IncludePathContextsCheckBox.IsChecked == true;
+        var preview = includePaths
+            ? "将导出版本、系统、显示设置、问题记录及完整本地路径。不会导出文件内容、PKG/TEX 数据或预览。"
+            : "将导出版本、系统、显示设置和问题记录；完整本地路径默认排除。不会导出文件内容、PKG/TEX 数据或预览。";
+        if (MessageBox.Show(
+                this,
+                preview,
+                "确认诊断字段",
+                MessageBoxButton.OKCancel,
+                MessageBoxImage.Information) != MessageBoxResult.OK)
+        {
+            return;
+        }
+
+        var dialog = new SaveFileDialog
+        {
+            AddExtension = true,
+            DefaultExt = ".json",
+            Filter = "JSON 诊断文件 (*.json)|*.json",
+            FileName = $"wallpaper-field-diagnostics-{DateTime.Now:yyyyMMdd-HHmmss}.json",
+            Title = "导出 Wallpaper Field 诊断"
+        };
+        if (dialog.ShowDialog(this) != true)
+        {
+            return;
+        }
+
+        try
+        {
+            await AppComposition.CreateDiagnosticExportService(viewModel).ExportAsync(
+                new DiagnosticExportRequest(
+                    dialog.FileName,
+                    CreateDiagnosticEnvironment(),
+                    viewModel.Issues.ToArray(),
+                    includePaths));
+            MessageBox.Show(
+                this,
+                "诊断文件已导出。",
+                "Wallpaper Field",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+        }
+        catch (Exception)
+        {
+            MessageBox.Show(
+                this,
+                "诊断导出失败，详情已记录到问题中心，可复制后重试。",
+                "Wallpaper Field",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+        }
+    }
+
+    private void About_Click(object sender, RoutedEventArgs e)
+    {
+        var identity = ReadApplicationIdentity();
+        MessageBox.Show(
+            this,
+            $"Wallpaper Field\n版本 {identity.ApplicationVersion}\n文件版本 {identity.FileVersion}\n本地只读扫描与安全 scene.pkg/TEX 提取工具",
+            "关于 Wallpaper Field",
+            MessageBoxButton.OK,
+            MessageBoxImage.Information);
+    }
+
+    private DiagnosticEnvironment CreateDiagnosticEnvironment()
+    {
+        var identity = ReadApplicationIdentity();
+        var dpi = VisualTreeHelper.GetDpi(this);
+        return new DiagnosticEnvironment(
+            identity.ApplicationVersion,
+            identity.Commit,
+            RuntimeInformation.OSDescription,
+            RuntimeInformation.ProcessArchitecture.ToString(),
+            96 * dpi.DpiScaleX,
+            SystemParameters.HighContrast,
+            !MotionEnabled,
+            "Comfortable",
+            identity.FileVersion);
+    }
+
+    private static (string ApplicationVersion, string FileVersion, string Commit)
+        ReadApplicationIdentity()
+    {
+        var assembly = typeof(MainWindow).Assembly;
+        var applicationVersion = assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
+            .InformationalVersion
+            ?? assembly.GetName().Version?.ToString()
+            ?? "unknown";
+        var fileVersion = assembly
+            .GetCustomAttribute<AssemblyFileVersionAttribute>()?
+            .Version
+            ?? "unknown";
+        var separator = applicationVersion.IndexOf('+');
+        var commit = separator >= 0 && separator + 1 < applicationVersion.Length
+            ? applicationVersion[(separator + 1)..]
+            : "unknown";
+        return (applicationVersion, fileVersion, commit);
     }
 
     private void ApplyDwmWindowSettings()
@@ -369,9 +620,11 @@ public partial class MainWindow : Window
         ListBox targetList;
         do
         {
-            targetList = ViewModel?.IsLibraryPage == true
-                ? LibraryResultsList
-                : ScanResultsList;
+            targetList = ViewModel?.IsProblemsPage == true
+                ? ProblemResultsList
+                : ViewModel?.IsLibraryPage == true
+                    ? LibraryResultsList
+                    : ScanResultsList;
             if (targetList.Items.Count > requestedIndex && ViewModel?.IsBusy != true)
             {
                 break;
@@ -394,10 +647,6 @@ public partial class MainWindow : Window
 
         if (targetList.ItemContainerGenerator.ContainerFromIndex(index) is FrameworkElement container)
         {
-            container.BringIntoView();
-            targetList.UpdateLayout();
-            await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.Render);
-
             var previewVerified = true;
             if (targetList.Items[index] is WallpaperCardViewModel { HasPreview: true })
             {

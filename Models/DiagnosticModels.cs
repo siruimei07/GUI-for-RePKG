@@ -12,7 +12,8 @@ public sealed record DiagnosticEnvironment(
     double Dpi,
     bool HighContrast,
     bool ReducedMotion,
-    string Density);
+    string Density,
+    string FileVersion = "unknown");
 
 public sealed record DiagnosticExportRequest(
     string DestinationPath,
