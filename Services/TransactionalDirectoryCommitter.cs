@@ -28,7 +28,9 @@ internal static class TransactionalDirectoryCommitter
         string stagingRoot,
         string itemRoot,
         IReadOnlySet<string> allowedFinalRelativePaths,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<WallpaperUnpackStage>? stageChanged = null,
+        Action<int>? beforePublish = null)
     {
         ArgumentNullException.ThrowIfNull(allowedFinalRelativePaths);
 
@@ -98,6 +100,7 @@ internal static class TransactionalDirectoryCommitter
         PreflightDestinations(normalizedItemRoot, actions);
 
         var createdDestinationDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        NotifyStageSafely(stageChanged, WallpaperUnpackStage.Committing);
         try
         {
             foreach (var relativeDirectory in relativeDirectories
@@ -115,9 +118,12 @@ internal static class TransactionalDirectoryCommitter
                     createdDestinationDirectories);
             }
 
+            var publishIndex = 0;
             foreach (var action in actions)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                beforePublish?.Invoke(publishIndex);
+                publishIndex++;
                 CreateSafeDirectoryChain(
                     normalizedItemRoot,
                     Path.GetDirectoryName(action.DestinationPath)!,
@@ -157,6 +163,7 @@ internal static class TransactionalDirectoryCommitter
         }
         catch (Exception exception)
         {
+            NotifyStageSafely(stageChanged, WallpaperUnpackStage.RollingBack);
             var rollbackErrors = Rollback(
                 actions,
                 createdDestinationDirectories,
@@ -203,6 +210,20 @@ internal static class TransactionalDirectoryCommitter
         }
 
         return normalized;
+    }
+
+    private static void NotifyStageSafely(
+        Action<WallpaperUnpackStage>? stageChanged,
+        WallpaperUnpackStage stage)
+    {
+        try
+        {
+            stageChanged?.Invoke(stage);
+        }
+        catch
+        {
+            // Progress is advisory and must never interrupt commit or rollback.
+        }
     }
 
     private static string[] EnumerateRelativeFiles(string stagingRoot)

@@ -826,12 +826,34 @@
                                                     Content="取消解包" />
                                             <StackPanel Grid.RowSpan="2" Grid.Column="2" Margin="24,0,0,0" VerticalAlignment="Center">
                                                 <Grid>
-                                                    <ProgressBar Height="5" Minimum="0" Maximum="100" Value="{Binding ProgressValue, Mode=OneWay}" />
+                                                    <ProgressBar x:Name="UnpackProgressBar"
+                                                                 Height="5"
+                                                                 Minimum="0"
+                                                                 Maximum="100"
+                                                                 IsIndeterminate="{Binding IsProgressIndeterminate}"
+                                                                 Value="{Binding ProgressValue, Mode=OneWay}" />
                                                     <Border Height="1" VerticalAlignment="Bottom" Background="#35FFFFFF" />
                                                 </Grid>
                                                 <Grid Margin="0,8,0,0">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                    </Grid.ColumnDefinitions>
                                                     <TextBlock Style="{StaticResource TechnicalLabel}" Foreground="#AFFFFFFF" Text="{Binding StatusText}" TextTrimming="CharacterEllipsis" />
-                                                    <TextBlock HorizontalAlignment="Right" Style="{StaticResource TechnicalLabel}" Foreground="White" Text="{Binding ProgressValue, StringFormat={}{0:0}%}" />
+                                                    <TextBlock x:Name="UnpackStageText"
+                                                               Grid.Column="1"
+                                                               Margin="16,0,0,0"
+                                                               Style="{StaticResource TechnicalLabel}"
+                                                               Foreground="#BFFFFFFF"
+                                                               Text="{Binding CurrentStage}" />
+                                                    <TextBlock x:Name="UnpackWorkText"
+                                                               Grid.Column="2"
+                                                               Margin="16,0,0,0"
+                                                               HorizontalAlignment="Right"
+                                                               Style="{StaticResource TechnicalLabel}"
+                                                               Foreground="White"
+                                                               Text="{Binding UnpackWorkText}" />
                                                 </Grid>
                                             </StackPanel>
                                         </Grid>

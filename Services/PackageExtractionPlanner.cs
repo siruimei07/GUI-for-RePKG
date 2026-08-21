@@ -7,7 +7,8 @@ internal sealed record PlannedPackageEntry(SafePackageEntry Entry, string Output
 
 internal sealed record PackageExtractionPlan(
     IReadOnlyList<PlannedPackageEntry> Entries,
-    IReadOnlySet<string> AllowedFinalRelativePaths);
+    IReadOnlySet<string> AllowedFinalRelativePaths,
+    long PhysicalByteCount);
 
 internal static class PackageExtractionPlanner
 {
@@ -18,9 +19,11 @@ internal static class PackageExtractionPlanner
         var plannedEntries = new List<PlannedPackageEntry>(package.Entries.Count);
         var intermediatePaths = new PlannedFileSet("包内条目");
         var finalPaths = CreateRequiredFinalPaths();
+        var physicalByteCount = 0L;
 
         foreach (var entry in package.Entries)
         {
+            physicalByteCount = checked(physicalByteCount + entry.DataLength);
             var outputPath = OutputPathPolicy.ResolveUnderRoot(
                 stagingUnpackedRoot,
                 entry.FullPath,
@@ -54,7 +57,10 @@ internal static class PackageExtractionPlanner
             plannedEntries.Add(new PlannedPackageEntry(entry, outputPath));
         }
 
-        return new PackageExtractionPlan(plannedEntries, finalPaths.Paths);
+        return new PackageExtractionPlan(
+            plannedEntries,
+            finalPaths.Paths,
+            physicalByteCount);
     }
 
     internal static IReadOnlySet<string> BuildVideoFinalPaths(string videoRelativePath)

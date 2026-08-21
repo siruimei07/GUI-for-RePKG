@@ -83,7 +83,14 @@ internal static class TransactionRegressionTests
                 result.CommittedCount == 0
                 && result.UnchangedFailureCount == 1
                 && result.AdditionalEffectsPossibleCount == 0
-                && result.Errors.Single().CommitState == WallpaperItemCommitState.NotModified,
+                && result.Errors.Single().CommitState == WallpaperItemCommitState.NotModified
+                && result.ItemResults.Single() is
+                {
+                    Outcome: WallpaperUnpackOutcome.Failed,
+                    CommitState: WallpaperItemCommitState.NotModified,
+                    CompletedWork: 15,
+                    WorkUnit: WallpaperWorkUnit.Bytes
+                },
                 $"A locked {caseName} destination must report an unchanged failure.");
             assert(
                 before.SequenceEqual(after),

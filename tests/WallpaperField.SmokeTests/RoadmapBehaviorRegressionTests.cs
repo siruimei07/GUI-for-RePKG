@@ -160,6 +160,7 @@ internal static class RoadmapBehaviorRegressionTests
                 };
                 window.Show();
                 TaskLifecycleRegressionTests.VerifyWindowCancelActions(window, assert);
+                UnpackLifecycleRegressionTests.VerifyWindowProgressBindings(window, assert);
 
                 var scanList = window.FindName("ScanResultsList") as ListBox
                     ?? throw new InvalidOperationException("ScanResultsList was not created.");

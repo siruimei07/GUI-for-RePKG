@@ -33,6 +33,55 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
         var outputRoot = Path.GetFullPath(request.OutputDirectory.Trim());
         var items = request.Items?.ToArray() ?? Array.Empty<WallpaperRecord>();
         var eligibleCount = items.Count(item => item.HasUnpackableContent);
+        var outputTargets = items.Select(GetReportedOutputTarget).ToArray();
+        var duplicateTargets = outputTargets
+            .Where(target => !string.IsNullOrWhiteSpace(target))
+            .GroupBy(target => target, StringComparer.OrdinalIgnoreCase)
+            .Where(group => group.Count() > 1)
+            .Select(group => group.Key)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (duplicateTargets.Count > 0)
+        {
+            var duplicateErrors = items
+                .Select((item, index) => new WallpaperUnpackError
+                {
+                    WorkshopId = item.WorkshopId,
+                    ScenePackagePath = item.ScenePackagePath ?? item.VideoFilePath,
+                    Message = duplicateTargets.Contains(outputTargets[index])
+                        ? "多个项目映射到同一输出目标，整批已在写盘前拒绝。"
+                        : "同批请求包含重复输出目标，整批已在写盘前拒绝。",
+                    ExceptionType = nameof(InvalidDataException),
+                    CommitState = WallpaperItemCommitState.NotModified
+                })
+                .ToArray();
+            var duplicateResults = items
+                .Select((item, index) => new WallpaperUnpackItemResult
+                {
+                    WorkshopId = item.WorkshopId,
+                    OutputTarget = outputTargets[index],
+                    Outcome = WallpaperUnpackOutcome.Failed,
+                    CommitState = WallpaperItemCommitState.NotModified,
+                    WorkUnit = WallpaperWorkUnit.Items,
+                    IssueCodes = duplicateTargets.Contains(outputTargets[index])
+                        ? ["UNPACK_DUPLICATE_OUTPUT_TARGET"]
+                        : ["UNPACK_BATCH_REJECTED"]
+                })
+                .ToArray();
+
+            return new WallpaperUnpackResult
+            {
+                Succeeded = false,
+                ProcessedCount = items.Length,
+                TotalCount = items.Length,
+                EligibleCount = eligibleCount,
+                FailedCount = items.Length,
+                UnchangedFailureCount = items.Length,
+                Message = "处理未开始：所选项目包含重复输出目标，磁盘未修改。",
+                Errors = duplicateErrors,
+                ItemResults = duplicateResults
+            };
+        }
+
         var errors = new List<WallpaperUnpackError>();
         var processedCount = 0;
         var succeededCount = 0;
@@ -44,7 +93,57 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
         var unchangedFailureCount = 0;
         var additionalEffectsPossibleCount = 0;
         var warnings = new List<WallpaperUnpackWarning>();
+        var itemResults = new List<WallpaperUnpackItemResult>(items.Length);
         var textureBudget = new TexDecodeBudget();
+
+        WallpaperUnpackCanceledException CreateCancellationException(
+            int cancelledItemIndex,
+            ItemWorkProgress cancelledItemProgress,
+            OperationCanceledException innerException)
+        {
+            for (var index = cancelledItemIndex; index < items.Length; index++)
+            {
+                var isCurrentItem = index == cancelledItemIndex;
+                itemResults.Add(new WallpaperUnpackItemResult
+                {
+                    WorkshopId = items[index].WorkshopId,
+                    OutputTarget = outputTargets[index],
+                    Outcome = WallpaperUnpackOutcome.Cancelled,
+                    CommitState = WallpaperItemCommitState.NotModified,
+                    CompletedWork = isCurrentItem
+                        ? cancelledItemProgress.CompletedWork
+                        : 0,
+                    WorkUnit = isCurrentItem
+                        ? cancelledItemProgress.WorkUnit
+                        : WallpaperWorkUnit.Items,
+                    IssueCodes = ["UNPACK_CANCELLED"]
+                });
+            }
+
+            return new WallpaperUnpackCanceledException(
+                new WallpaperUnpackResult
+                {
+                    Succeeded = false,
+                    ProcessedCount = processedCount,
+                    TotalCount = items.Length,
+                    EligibleCount = eligibleCount,
+                    SucceededCount = succeededCount,
+                    SkippedCount = skippedCount,
+                    FailedCount = errors.Count,
+                    CommittedCount = committedCount,
+                    UnchangedFailureCount = unchangedFailureCount,
+                    AdditionalEffectsPossibleCount = additionalEffectsPossibleCount,
+                    ExtractedEntryCount = extractedEntryCount,
+                    ConvertedTextureCount = convertedTextureCount,
+                    CopiedVideoCount = copiedVideoCount,
+                    Message = $"处理已取消：{committedCount} 个已提交，其余项目保持未修改或可重试。",
+                    Errors = errors.ToArray(),
+                    Warnings = warnings.ToArray(),
+                    ItemResults = itemResults.ToArray()
+                },
+                cancellationToken,
+                innerException);
+        }
 
         ReportProgress(
             progress,
@@ -61,14 +160,42 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
                 ? "所选记录中没有可处理的 PKG 或视频；将全部跳过。"
                 : $"已识别 {eligibleCount} 个可处理项目。 ");
 
-        foreach (var item in items)
+        for (var itemIndex = 0; itemIndex < items.Length; itemIndex++)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            var item = items[itemIndex];
+            var outputTarget = outputTargets[itemIndex];
+            var currentItemProgress = new ItemWorkProgress(
+                null,
+                WallpaperUnpackStage.Planning,
+                0,
+                null,
+                WallpaperWorkUnit.Items,
+                0,
+                0,
+                true,
+                true);
+            if (cancellationToken.IsCancellationRequested)
+            {
+                throw CreateCancellationException(
+                    itemIndex,
+                    currentItemProgress,
+                    new OperationCanceledException(cancellationToken));
+            }
 
             if (!item.HasUnpackableContent)
             {
                 skippedCount++;
                 processedCount++;
+                itemResults.Add(new WallpaperUnpackItemResult
+                {
+                    WorkshopId = item.WorkshopId,
+                    OutputTarget = outputTarget,
+                    Outcome = WallpaperUnpackOutcome.Skipped,
+                    CommitState = WallpaperItemCommitState.NotModified,
+                    CompletedWork = 1,
+                    WorkUnit = WallpaperWorkUnit.Items,
+                    IssueCodes = ["UNPACK_NO_ELIGIBLE_CONTENT"]
+                });
                 ReportProgress(
                     progress,
                     processedCount,
@@ -80,27 +207,40 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
                     item.WorkshopId,
                     null,
                     0,
-                    $"{item.WorkshopId} 没有可处理的 PKG 或视频，已跳过。");
+                    $"{item.WorkshopId} 没有可处理的 PKG 或视频，已跳过。",
+                    WallpaperUnpackStage.Completed,
+                    1,
+                    1,
+                    WallpaperWorkUnit.Items,
+                    false,
+                    itemIndex < items.Length - 1);
                 continue;
             }
 
             try
             {
-                var entryProgress = new Action<string, int, int>(
-                    (entryName, currentEntry, totalEntries) => ReportProgress(
+                var entryProgress = new Action<ItemWorkProgress>(value =>
+                {
+                    currentItemProgress = value;
+                    ReportProgress(
                         progress,
                         processedCount,
                         items.Length,
                         succeededCount,
                         skippedCount,
                         errors.Count,
-                        extractedEntryCount + currentEntry,
+                        extractedEntryCount + value.CompletedEntries,
                         item.WorkshopId,
-                        entryName,
-                        totalEntries,
-                        item.HasVideoFile
-                            ? $"正在复制视频 {item.WorkshopId}"
-                            : $"正在解包 {item.WorkshopId} · {currentEntry}/{totalEntries}"));
+                        value.EntryName,
+                        value.TotalEntries,
+                        FormatWorkMessage(item.WorkshopId, value),
+                        value.Stage,
+                        value.CompletedWork,
+                        value.TotalWork,
+                        value.WorkUnit,
+                        value.IsIndeterminate,
+                        value.CanCancel);
+                });
 
                 var itemResult = item.HasVideoFile
                     ? await CopyVideoItemAsync(
@@ -121,10 +261,26 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
                 warnings.AddRange(itemResult.Warnings);
                 succeededCount++;
                 committedCount++;
+                itemResults.Add(new WallpaperUnpackItemResult
+                {
+                    WorkshopId = item.WorkshopId,
+                    OutputTarget = outputTarget,
+                    Outcome = WallpaperUnpackOutcome.Succeeded,
+                    CommitState = WallpaperItemCommitState.Committed,
+                    CompletedWork = itemResult.CompletedWork,
+                    WorkUnit = itemResult.WorkUnit,
+                    IssueCodes = itemResult.Warnings.Count == 0
+                        ? Array.Empty<string>()
+                        : ["TEX_CONVERSION_WARNING"]
+                });
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException exception)
+                when (cancellationToken.IsCancellationRequested)
             {
-                throw;
+                throw CreateCancellationException(
+                    itemIndex,
+                    currentItemProgress,
+                    exception);
             }
             catch (Exception exception)
             {
@@ -148,9 +304,20 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
                     ExceptionType = exception.GetType().Name,
                     CommitState = commitState
                 });
+                itemResults.Add(new WallpaperUnpackItemResult
+                {
+                    WorkshopId = item.WorkshopId,
+                    OutputTarget = outputTarget,
+                    Outcome = WallpaperUnpackOutcome.Failed,
+                    CommitState = commitState,
+                    CompletedWork = currentItemProgress.CompletedWork,
+                    WorkUnit = currentItemProgress.WorkUnit,
+                    IssueCodes = ["UNPACK_ITEM_FAILED"]
+                });
             }
 
             processedCount++;
+            var completedItem = itemResults[^1];
             ReportProgress(
                 progress,
                 processedCount,
@@ -164,7 +331,15 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
                 0,
                 errors.LastOrDefault()?.WorkshopId == item.WorkshopId
                     ? $"{item.WorkshopId} 解包失败，继续处理下一项。"
-                    : $"{item.WorkshopId} 处理完成。");
+                    : $"{item.WorkshopId} 处理完成。",
+                WallpaperUnpackStage.Completed,
+                completedItem.CompletedWork,
+                completedItem.Outcome == WallpaperUnpackOutcome.Succeeded
+                    ? completedItem.CompletedWork
+                    : null,
+                completedItem.WorkUnit,
+                completedItem.Outcome != WallpaperUnpackOutcome.Succeeded,
+                itemIndex < items.Length - 1);
         }
 
         var warningSuffix = warnings.Count == 0
@@ -194,14 +369,15 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
             CopiedVideoCount = copiedVideoCount,
             Message = message,
             Errors = errors.ToArray(),
-            Warnings = warnings.ToArray()
+            Warnings = warnings.ToArray(),
+            ItemResults = itemResults.ToArray()
         };
     }
 
     private static async Task<ItemExtractionResult> ExtractItemAsync(
         WallpaperRecord item,
         string outputRoot,
-        Action<string, int, int> entryProgress,
+        Action<ItemWorkProgress> entryProgress,
         TexDecodeBudget textureBudget,
         CancellationToken cancellationToken)
     {
@@ -229,9 +405,20 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
             $"{TransactionalDirectoryCommitter.StagingPrefix}{Guid.NewGuid():N}");
         var stagingDirectory = Path.Combine(stagingRoot, UnpackFolderName);
         var extractionPlan = PackageExtractionPlanner.Build(package, stagingDirectory);
+        entryProgress(new ItemWorkProgress(
+            null,
+            WallpaperUnpackStage.Extracting,
+            0,
+            extractionPlan.PhysicalByteCount,
+            WallpaperWorkUnit.Bytes,
+            0,
+            extractionPlan.Entries.Count,
+            false,
+            true));
         var convertedTextureCount = 0;
         var warnings = new List<WallpaperUnpackWarning>();
         var createdItemOutputDirectory = !Directory.Exists(itemOutputDirectory);
+        var completedBytes = 0L;
 
         try
         {
@@ -291,6 +478,16 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
                         if (isTextureIntermediate)
                         {
                             cancellationToken.ThrowIfCancellationRequested();
+                            entryProgress(new ItemWorkProgress(
+                                plannedEntry.Entry.FullPath,
+                                WallpaperUnpackStage.Converting,
+                                checked(completedBytes + plannedEntry.Entry.DataLength),
+                                extractionPlan.PhysicalByteCount,
+                                WallpaperWorkUnit.Bytes,
+                                index,
+                                extractionPlan.Entries.Count,
+                                false,
+                                true));
                             try
                             {
                                 _ = await Task.Run(
@@ -333,10 +530,17 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
                         }
                     }
 
-                    entryProgress(
+                    completedBytes = checked(completedBytes + plannedEntry.Entry.DataLength);
+                    entryProgress(new ItemWorkProgress(
                         plannedEntry.Entry.FullPath,
+                        WallpaperUnpackStage.Extracting,
+                        completedBytes,
+                        extractionPlan.PhysicalByteCount,
+                        WallpaperWorkUnit.Bytes,
                         index + 1,
-                        extractionPlan.Entries.Count);
+                        extractionPlan.Entries.Count,
+                        false,
+                        true));
                 }
             }
             finally
@@ -372,15 +576,40 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
                 stagingRoot,
                 itemOutputDirectory,
                 extractionPlan.AllowedFinalRelativePaths,
-                cancellationToken);
+                cancellationToken,
+                stage => entryProgress(new ItemWorkProgress(
+                    null,
+                    stage,
+                    completedBytes,
+                    extractionPlan.PhysicalByteCount,
+                    WallpaperWorkUnit.Bytes,
+                    extractionPlan.Entries.Count,
+                    extractionPlan.Entries.Count,
+                    false,
+                    false)));
             return new ItemExtractionResult(
                 extractionPlan.Entries.Count,
                 convertedTextureCount,
                 0,
-                warnings.ToArray());
+                warnings.ToArray(),
+                extractionPlan.PhysicalByteCount,
+                WallpaperWorkUnit.Bytes);
         }
         catch (Exception exception)
         {
+            if (Directory.Exists(stagingRoot))
+            {
+                entryProgress(new ItemWorkProgress(
+                    null,
+                    WallpaperUnpackStage.RollingBack,
+                    completedBytes,
+                    extractionPlan.PhysicalByteCount,
+                    WallpaperWorkUnit.Bytes,
+                    0,
+                    extractionPlan.Entries.Count,
+                    false,
+                    false));
+            }
             RethrowAfterFailedItemCleanup(
                 exception,
                 stagingRoot,
@@ -393,7 +622,7 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
     private static async Task<ItemExtractionResult> CopyVideoItemAsync(
         WallpaperRecord item,
         string outputRoot,
-        Action<string, int, int> entryProgress,
+        Action<ItemWorkProgress> entryProgress,
         CancellationToken cancellationToken)
     {
         var (videoFilePath, videoRelativePath) = ValidateVideoFile(item);
@@ -407,6 +636,18 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
         var destinationDirectory = Path.GetDirectoryName(destinationPath)
             ?? throw new InvalidDataException("无法确定视频文件的输出目录。");
         var createdItemOutputDirectory = !Directory.Exists(itemOutputDirectory);
+        var videoInfo = new FileInfo(videoFilePath);
+        var completedBytes = 0L;
+        entryProgress(new ItemWorkProgress(
+            videoRelativePath,
+            WallpaperUnpackStage.Extracting,
+            0,
+            videoInfo.Length,
+            WallpaperWorkUnit.Bytes,
+            0,
+            1,
+            false,
+            true));
 
         try
         {
@@ -438,10 +679,19 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
                 await destinationStream.FlushAsync(cancellationToken).ConfigureAwait(false);
             }
 
-            entryProgress(videoRelativePath, 1, 1);
+            completedBytes = videoInfo.Length;
+            entryProgress(new ItemWorkProgress(
+                videoRelativePath,
+                WallpaperUnpackStage.Extracting,
+                completedBytes,
+                videoInfo.Length,
+                WallpaperWorkUnit.Bytes,
+                1,
+                1,
+                false,
+                true));
             cancellationToken.ThrowIfCancellationRequested();
 
-            var videoInfo = new FileInfo(videoFilePath);
             await WallpaperStorage.WriteJsonAtomicallyAsync(
                 Path.Combine(stagingDirectory, ManifestFileName),
                 new VideoCopyManifest
@@ -465,11 +715,40 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
                 stagingRoot,
                 itemOutputDirectory,
                 PackageExtractionPlanner.BuildVideoFinalPaths(videoRelativePath),
-                cancellationToken);
-            return new ItemExtractionResult(1, 0, 1, Array.Empty<WallpaperUnpackWarning>());
+                cancellationToken,
+                stage => entryProgress(new ItemWorkProgress(
+                    videoRelativePath,
+                    stage,
+                    videoInfo.Length,
+                    videoInfo.Length,
+                    WallpaperWorkUnit.Bytes,
+                    1,
+                    1,
+                    false,
+                    false)));
+            return new ItemExtractionResult(
+                1,
+                0,
+                1,
+                Array.Empty<WallpaperUnpackWarning>(),
+                videoInfo.Length,
+                WallpaperWorkUnit.Bytes);
         }
         catch (Exception exception)
         {
+            if (Directory.Exists(stagingRoot))
+            {
+                entryProgress(new ItemWorkProgress(
+                    videoRelativePath,
+                    WallpaperUnpackStage.RollingBack,
+                    completedBytes,
+                    videoInfo.Length,
+                    WallpaperWorkUnit.Bytes,
+                    0,
+                    1,
+                    false,
+                    false));
+            }
             RethrowAfterFailedItemCleanup(
                 exception,
                 stagingRoot,
@@ -754,6 +1033,23 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
     private static bool PathsEqual(string left, string right)
         => OutputPathPolicy.PathsEqual(left, right);
 
+    private static string GetReportedOutputTarget(WallpaperRecord item)
+    {
+        if (string.IsNullOrWhiteSpace(item.OutputDirectory))
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            return Path.TrimEndingDirectorySeparator(Path.GetFullPath(item.OutputDirectory));
+        }
+        catch
+        {
+            return item.OutputDirectory;
+        }
+    }
+
     private static void ReportProgress(
         IProgress<WallpaperUnpackProgress>? progress,
         int processedCount,
@@ -765,9 +1061,20 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
         string? currentWorkshopId,
         string? currentEntry,
         int currentPackageEntryCount,
-        string message)
+        string message,
+        WallpaperUnpackStage stage = WallpaperUnpackStage.Planning,
+        long completedWork = 0,
+        long? totalWork = null,
+        WallpaperWorkUnit workUnit = WallpaperWorkUnit.Items,
+        bool isIndeterminate = true,
+        bool canCancel = true)
     {
-        progress?.Report(new WallpaperUnpackProgress
+        if (progress is null)
+        {
+            return;
+        }
+
+        var snapshot = new WallpaperUnpackProgress
         {
             ProcessedCount = processedCount,
             TotalCount = totalCount,
@@ -778,15 +1085,53 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
             CurrentWorkshopId = currentWorkshopId,
             CurrentEntry = currentEntry,
             CurrentPackageEntryCount = currentPackageEntryCount,
-            Message = message
-        });
+            Message = message,
+            Stage = stage,
+            CompletedWork = completedWork,
+            TotalWork = totalWork,
+            WorkUnit = workUnit,
+            IsIndeterminate = isIndeterminate,
+            CanCancel = canCancel
+        };
+        try
+        {
+            progress.Report(snapshot);
+        }
+        catch
+        {
+            // Progress is advisory; observer failures cannot define disk outcome.
+        }
     }
+
+    private static string FormatWorkMessage(string workshopId, ItemWorkProgress progress)
+        => progress.Stage switch
+        {
+            WallpaperUnpackStage.Planning => $"正在规划 {workshopId}",
+            WallpaperUnpackStage.Extracting => $"正在提取 {workshopId}",
+            WallpaperUnpackStage.Converting => $"正在转换 TEX {workshopId}",
+            WallpaperUnpackStage.Committing => $"正在提交 {workshopId}",
+            WallpaperUnpackStage.RollingBack => $"正在回滚 {workshopId}",
+            _ => $"正在处理 {workshopId}"
+        };
+
+    private sealed record ItemWorkProgress(
+        string? EntryName,
+        WallpaperUnpackStage Stage,
+        long CompletedWork,
+        long? TotalWork,
+        WallpaperWorkUnit WorkUnit,
+        int CompletedEntries,
+        int TotalEntries,
+        bool IsIndeterminate,
+        bool CanCancel);
 
     private sealed record ItemExtractionResult(
         int EntryCount,
         int ConvertedTextureCount,
         int CopiedVideoCount,
-        IReadOnlyList<WallpaperUnpackWarning> Warnings);
+        IReadOnlyList<WallpaperUnpackWarning> Warnings,
+        long CompletedWork,
+        WallpaperWorkUnit WorkUnit);
 
     private sealed record UnpackManifest
     {

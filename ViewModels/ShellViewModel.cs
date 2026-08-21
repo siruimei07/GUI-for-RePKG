@@ -31,6 +31,11 @@ public sealed class ShellViewModel : ObservableObject
     private bool _isUnpacking;
     private bool _isRefreshingLibrary;
     private double _progressValue;
+    private bool _isProgressIndeterminate;
+    private long _unpackCompletedWork;
+    private long? _unpackTotalWork;
+    private WallpaperWorkUnit _unpackWorkUnit = WallpaperWorkUnit.Items;
+    private bool _unpackProgressCanCancel = true;
     private int _scannedCount;
     private int _totalCount;
     private int _successCount;
@@ -306,7 +311,8 @@ public sealed class ShellViewModel : ObservableObject
 
     public bool CanCancelScan => IsScanning && ScanCommand.CanBeCanceled;
 
-    public bool CanCancelUnpack => IsUnpacking && UnpackCommand.CanBeCanceled;
+    public bool CanCancelUnpack
+        => IsUnpacking && _unpackProgressCanCancel && UnpackCommand.CanBeCanceled;
 
     public bool CanCancelLibraryRefresh
         => IsRefreshingLibrary && RefreshLibraryCommand.CanBeCanceled;
@@ -539,14 +545,86 @@ public sealed class ShellViewModel : ObservableObject
         var canCancel = ScanCommand.CanBeCanceled
             || UnpackCommand.CanBeCanceled
             || RefreshLibraryCommand.CanBeCanceled;
-        if (canCancel && TaskState != TaskLifecycleState.CommitCritical)
+        if (canCancel)
         {
-            SetTaskState(TaskLifecycleState.CancellationRequested, cancellationPending: true);
+            SetTaskState(
+                TaskState == TaskLifecycleState.CommitCritical
+                    ? TaskLifecycleState.CommitCritical
+                    : TaskLifecycleState.CancellationRequested,
+                cancellationPending: true);
         }
 
         ScanCommand.TryCancel();
         UnpackCommand.TryCancel();
         RefreshLibraryCommand.TryCancel();
+    }
+
+    public bool IsProgressIndeterminate
+    {
+        get => _isProgressIndeterminate;
+        private set
+        {
+            if (SetProperty(ref _isProgressIndeterminate, value))
+            {
+                OnPropertyChanged(nameof(UnpackWorkText));
+            }
+        }
+    }
+
+    public long UnpackCompletedWork
+    {
+        get => _unpackCompletedWork;
+        private set
+        {
+            if (SetProperty(ref _unpackCompletedWork, Math.Max(0, value)))
+            {
+                OnPropertyChanged(nameof(UnpackWorkText));
+            }
+        }
+    }
+
+    public long? UnpackTotalWork
+    {
+        get => _unpackTotalWork;
+        private set
+        {
+            long? normalized = value is null ? null : Math.Max(0, value.Value);
+            if (SetProperty(ref _unpackTotalWork, normalized))
+            {
+                OnPropertyChanged(nameof(UnpackWorkText));
+            }
+        }
+    }
+
+    public WallpaperWorkUnit UnpackWorkUnit
+    {
+        get => _unpackWorkUnit;
+        private set
+        {
+            if (SetProperty(ref _unpackWorkUnit, value))
+            {
+                OnPropertyChanged(nameof(UnpackWorkText));
+            }
+        }
+    }
+
+    public string UnpackWorkText
+    {
+        get
+        {
+            if (IsProgressIndeterminate || UnpackTotalWork is null)
+            {
+                return "正在估算工作量";
+            }
+
+            var unit = UnpackWorkUnit switch
+            {
+                WallpaperWorkUnit.Bytes => "B",
+                WallpaperWorkUnit.Entries => "ENTRIES",
+                _ => "ITEMS"
+            };
+            return $"{UnpackCompletedWork:N0} / {UnpackTotalWork.Value:N0} {unit}";
+        }
     }
 
     public async Task<bool> WaitForPendingWorkAsync(TimeSpan timeout)
@@ -813,9 +891,13 @@ public sealed class ShellViewModel : ObservableObject
 
     private void RequestCancellation(AsyncRelayCommand command)
     {
-        if (command.CanBeCanceled && TaskState != TaskLifecycleState.CommitCritical)
+        if (command.CanBeCanceled)
         {
-            SetTaskState(TaskLifecycleState.CancellationRequested, cancellationPending: true);
+            SetTaskState(
+                TaskState == TaskLifecycleState.CommitCritical
+                    ? TaskLifecycleState.CommitCritical
+                    : TaskLifecycleState.CancellationRequested,
+                cancellationPending: true);
         }
 
         if (command.TryCancel())
@@ -924,9 +1006,15 @@ public sealed class ShellViewModel : ObservableObject
 
         ClearError();
         BeginForegroundOperation(ForegroundOperationKind.Unpack);
+        var operationId = ActiveOperationId;
         IsBusy = true;
         IsUnpacking = true;
         CurrentStage = "UNPACK";
+        IsProgressIndeterminate = true;
+        UnpackCompletedWork = 0;
+        UnpackTotalWork = null;
+        UnpackWorkUnit = WallpaperWorkUnit.Items;
+        SetUnpackProgressCanCancel(true);
         ScannedCount = 0;
         TotalCount = selectedItems.Length;
         ProgressValue = 0;
@@ -945,9 +1033,12 @@ public sealed class ShellViewModel : ObservableObject
                 .UnpackAsync(request, progress, cancellationToken)
                 .ConfigureAwait(true);
 
+            ApplyUnpackItemResults(operationId, result.ItemResults);
             ScannedCount = result.ProcessedCount;
             TotalCount = result.TotalCount;
             ProgressValue = 100;
+            SetUnpackSummaryWork(result.ProcessedCount, result.TotalCount);
+            SetUnpackProgressCanCancel(false);
             CurrentStage = result.FailedCount == 0 ? "COMPLETE" : "CHECK";
 
             if (result.Errors.Count > 0 || result.Warnings.Count > 0)
@@ -968,15 +1059,37 @@ public sealed class ShellViewModel : ObservableObject
 
             SetTaskState(TaskLifecycleState.Succeeded);
         }
+        catch (WallpaperUnpackCanceledException exception)
+            when (cancellationToken.IsCancellationRequested)
+        {
+            ApplyUnpackItemResults(operationId, exception.Result.ItemResults);
+            ScannedCount = exception.Result.ProcessedCount;
+            TotalCount = exception.Result.TotalCount;
+            SetUnpackSummaryWork(
+                exception.Result.ProcessedCount,
+                exception.Result.TotalCount);
+            ProgressValue = TotalCount == 0
+                ? 0
+                : (double)ScannedCount / TotalCount * 100d;
+            CurrentStage = "CANCELED";
+            IsProgressIndeterminate = false;
+            SetUnpackProgressCanCancel(false);
+            SetStatus(exception.Result.Message, "Neutral");
+            SetTaskState(TaskLifecycleState.Cancelled);
+        }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             CurrentStage = "CANCELED";
+            IsProgressIndeterminate = false;
+            SetUnpackProgressCanCancel(false);
             SetStatus($"解包已取消 · 已处理 {ScannedCount}/{TotalCount}", "Neutral");
             SetTaskState(TaskLifecycleState.Cancelled);
         }
         catch (Exception exception)
         {
             CurrentStage = "FAILED";
+            IsProgressIndeterminate = false;
+            SetUnpackProgressCanCancel(false);
             PresentError("解包未能完成", exception);
             SetTaskState(TaskLifecycleState.Failed);
         }
@@ -991,13 +1104,99 @@ public sealed class ShellViewModel : ObservableObject
     {
         ScannedCount = progress.ProcessedCount;
         TotalCount = progress.TotalCount;
-        ProgressValue = progress.Percent;
+        ProgressValue = progress is
+        {
+            IsIndeterminate: false,
+            TotalWork: > 0
+        }
+            ? (double)progress.CompletedWork / progress.TotalWork.Value * 100d
+            : progress.Percent;
         CurrentTitle = progress.CurrentWorkshopId ?? string.Empty;
         CurrentFolder = progress.CurrentEntry ?? string.Empty;
-        CurrentStage = "UNPACK";
+        CurrentStage = progress.Stage.ToString().ToUpperInvariant();
+        IsProgressIndeterminate = progress.IsIndeterminate;
+        UnpackCompletedWork = progress.CompletedWork;
+        UnpackTotalWork = progress.TotalWork;
+        UnpackWorkUnit = progress.WorkUnit;
+        SetUnpackProgressCanCancel(progress.CanCancel);
+        if (progress.Stage is WallpaperUnpackStage.Committing
+            or WallpaperUnpackStage.RollingBack)
+        {
+            SetTaskState(
+                TaskLifecycleState.CommitCritical,
+                TaskLifecycle.CancellationPending);
+        }
+        else if (TaskState == TaskLifecycleState.CommitCritical)
+        {
+            SetTaskState(
+                TaskLifecycle.CancellationPending
+                    ? TaskLifecycleState.CancellationRequested
+                    : TaskLifecycleState.Running,
+                TaskLifecycle.CancellationPending);
+        }
         if (!string.IsNullOrWhiteSpace(progress.Message))
         {
             SetStatus(progress.Message, "Working");
+        }
+    }
+
+    private void SetUnpackProgressCanCancel(bool value)
+    {
+        if (_unpackProgressCanCancel == value)
+        {
+            return;
+        }
+
+        _unpackProgressCanCancel = value;
+        OnPropertyChanged(nameof(CanCancelUnpack));
+        CancelUnpackCommand.NotifyCanExecuteChanged();
+    }
+
+    private void SetUnpackSummaryWork(int completedItems, int totalItems)
+    {
+        UnpackCompletedWork = Math.Max(0, completedItems);
+        UnpackTotalWork = Math.Max(0, totalItems);
+        UnpackWorkUnit = WallpaperWorkUnit.Items;
+        IsProgressIndeterminate = false;
+    }
+
+    private void ApplyUnpackItemResults(
+        Guid? operationId,
+        IReadOnlyList<WallpaperUnpackItemResult> itemResults)
+    {
+        if (operationId is null || ActiveOperationId != operationId)
+        {
+            return;
+        }
+
+        foreach (var result in itemResults.Where(item =>
+                     item.Outcome == WallpaperUnpackOutcome.Succeeded
+                     && item.CommitState == WallpaperItemCommitState.Committed))
+        {
+            var card = ScannedWallpapers.FirstOrDefault(candidate =>
+                string.Equals(
+                    candidate.WorkshopId,
+                    result.WorkshopId,
+                    StringComparison.OrdinalIgnoreCase)
+                && PathsEqualOrFalse(candidate.OutputFolder, result.OutputTarget));
+            if (card is not null)
+            {
+                card.IsSelectedForUnpack = false;
+            }
+        }
+    }
+
+    private static bool PathsEqualOrFalse(string left, string right)
+    {
+        try
+        {
+            return !string.IsNullOrWhiteSpace(left)
+                && !string.IsNullOrWhiteSpace(right)
+                && PathsEqual(left, right);
+        }
+        catch
+        {
+            return false;
         }
     }
 
