@@ -1,4 +1,3 @@
-using System.Text.Json;
 using WallpaperField.Contracts;
 using WallpaperField.Models;
 
@@ -15,11 +14,12 @@ public sealed class WallpaperLibraryService : IWallpaperLibraryService
             throw new ArgumentException("输出目录不能为空。", nameof(outputDirectory));
         }
 
-        var root = Path.GetFullPath(outputDirectory.Trim());
+        var root = OutputPathPolicy.NormalizeDirectoryPath(outputDirectory, "输出目录");
         if (!Directory.Exists(root))
         {
             return new WallpaperLibraryResult();
         }
+        OutputPathPolicy.RejectReparsePointsInExistingPath(root, "输出目录");
 
         var candidates = new List<LibraryCandidate>();
         var errors = new List<LibraryLoadError>();
@@ -33,17 +33,12 @@ public sealed class WallpaperLibraryService : IWallpaperLibraryService
 
             try
             {
-                await using var stream = new FileStream(
-                    metadataPath,
-                    FileMode.Open,
-                    FileAccess.Read,
-                    FileShare.ReadWrite | FileShare.Delete,
-                    64 * 1024,
-                    FileOptions.Asynchronous | FileOptions.SequentialScan);
-                var storedRecord = await JsonSerializer.DeserializeAsync<WallpaperRecord>(
-                    stream,
-                    WallpaperStorage.JsonOptions,
-                    cancellationToken).ConfigureAwait(false)
+                var storedRecord = await BoundedJsonReader
+                    .DeserializeAsync<WallpaperRecord>(
+                        metadataPath,
+                        WallpaperStorage.JsonOptions,
+                        cancellationToken)
+                    .ConfigureAwait(false)
                     ?? throw new InvalidDataException("metadata.json 内容为空。");
 
                 var itemDirectory = Path.GetDirectoryName(metadataPath)

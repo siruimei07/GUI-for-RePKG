@@ -3,22 +3,41 @@ using System.Collections.Specialized;
 using System.IO;
 using WallpaperField.Contracts;
 using WallpaperField.Models;
+using WallpaperField.Services;
 
 namespace WallpaperField.ViewModels;
 
 /// <summary>
-/// Coordinates the two application surfaces: workshop scanning and the local output library.
+/// Coordinates navigation and the application surfaces.
 /// </summary>
 public sealed class ShellViewModel : ObservableObject
 {
     private const string ScanPage = "SCAN";
     private const string LibraryPage = "LIBRARY";
+    private const string ProblemsPage = "PROBLEMS";
 
     private readonly IWallpaperScanService _scanService;
     private readonly IWallpaperLibraryService _libraryService;
     private readonly IFolderPickerService _folderPickerService;
     private readonly ISystemFolderService _systemFolderService;
     private readonly IWallpaperUnpackService _unpackService;
+    private readonly PathInputValidator _pathInputValidator;
+    private CancellationTokenSource? _pathValidationCancellation;
+    private long _pathValidationVersion;
+    private PathValidationResult _sourcePathValidation = new(
+        string.Empty,
+        null,
+        ValidationSeverity.Error,
+        "PATH_REQUIRED",
+        "壁纸源目录不能为空。",
+        0);
+    private PathValidationResult _outputPathValidation = new(
+        string.Empty,
+        null,
+        ValidationSeverity.Error,
+        "PATH_REQUIRED",
+        "输出目录不能为空。",
+        0);
 
     private string _currentPage = ScanPage;
     private string _sourcePath = string.Empty;
@@ -61,13 +80,15 @@ public sealed class ShellViewModel : ObservableObject
         IWallpaperLibraryService libraryService,
         IFolderPickerService folderPickerService,
         ISystemFolderService systemFolderService,
-        IWallpaperUnpackService unpackService)
+        IWallpaperUnpackService unpackService,
+        PathInputValidator? pathInputValidator = null)
     {
         _scanService = scanService ?? throw new ArgumentNullException(nameof(scanService));
         _libraryService = libraryService ?? throw new ArgumentNullException(nameof(libraryService));
         _folderPickerService = folderPickerService ?? throw new ArgumentNullException(nameof(folderPickerService));
         _systemFolderService = systemFolderService ?? throw new ArgumentNullException(nameof(systemFolderService));
         _unpackService = unpackService ?? throw new ArgumentNullException(nameof(unpackService));
+        _pathInputValidator = pathInputValidator ?? new PathInputValidator();
 
         ScannedWallpapers.CollectionChanged += OnScanCollectionChanged;
         LibraryWallpapers.CollectionChanged += OnLibraryCollectionChanged;
@@ -98,6 +119,8 @@ public sealed class ShellViewModel : ObservableObject
     public RangeObservableCollection<WallpaperCardViewModel> ScannedWallpapers { get; } = [];
 
     public RangeObservableCollection<WallpaperCardViewModel> LibraryWallpapers { get; } = [];
+
+    public RangeObservableCollection<AppIssue> Issues { get; } = [];
 
     // Explicit aliases make alternate card/list templates easy to bind without copying data.
     public ObservableCollection<WallpaperCardViewModel> ScanItems => ScannedWallpapers;
@@ -156,6 +179,20 @@ public sealed class ShellViewModel : ObservableObject
         set => SetOutputPath(value);
     }
 
+    public PathValidationResult SourcePathValidation
+    {
+        get => _sourcePathValidation;
+        private set => SetProperty(ref _sourcePathValidation, value);
+    }
+
+    public PathValidationResult OutputPathValidation
+    {
+        get => _outputPathValidation;
+        private set => SetProperty(ref _outputPathValidation, value);
+    }
+
+    public long PathValidationVersion => _pathValidationVersion;
+
     public string ScanSearchText
     {
         get => _scanSearchText;
@@ -202,17 +239,25 @@ public sealed class ShellViewModel : ObservableObject
         ? $"没有名称包含“{LibrarySearchText.Trim()}”的壁纸，请尝试其他关键词"
         : "先处理至少一个勾选项目，或选择一个已有的输出目录";
 
-    public string PageCode => IsScanPage ? "01" : "02";
+    public string PageCode => IsScanPage ? "01" : IsLibraryPage ? "02" : "03";
 
-    public string CurrentPageTitle => IsScanPage ? "扫描中心" : "输出壁纸库";
+    public string CurrentPageTitle => IsScanPage
+        ? "扫描中心"
+        : IsLibraryPage
+            ? "输出壁纸库"
+            : "问题中心";
 
     public string CurrentPageSubtitle => IsScanPage
         ? "读取 Workshop 项目元数据，并在内存中选择待处理内容"
-        : "浏览已写入输出目录的壁纸记录";
+        : IsLibraryPage
+            ? "浏览已写入输出目录的壁纸记录"
+            : "查看启动、扫描、解包、图库与诊断问题";
 
     public bool IsScanPage => string.Equals(_currentPage, ScanPage, StringComparison.Ordinal);
 
     public bool IsLibraryPage => string.Equals(_currentPage, LibraryPage, StringComparison.Ordinal);
+
+    public bool IsProblemsPage => string.Equals(_currentPage, ProblemsPage, StringComparison.Ordinal);
 
     public TaskLifecycleSnapshot TaskLifecycle
     {
@@ -510,8 +555,12 @@ public sealed class ShellViewModel : ObservableObject
         {
             target = ScanPage;
         }
+        else if (target is "03" or "PROBLEM" or "PROBLEM CENTER")
+        {
+            target = ProblemsPage;
+        }
 
-        if (target is not (ScanPage or LibraryPage))
+        if (target is not (ScanPage or LibraryPage or ProblemsPage))
         {
             return;
         }
@@ -524,6 +573,7 @@ public sealed class ShellViewModel : ObservableObject
         OnPropertiesChanged(
             nameof(IsScanPage),
             nameof(IsLibraryPage),
+            nameof(IsProblemsPage),
             nameof(CurrentPageTitle),
             nameof(CurrentPageSubtitle));
 
@@ -542,6 +592,7 @@ public sealed class ShellViewModel : ObservableObject
 
     public void CancelPendingWork()
     {
+        _pathValidationCancellation?.Cancel();
         var canCancel = ScanCommand.CanBeCanceled
             || UnpackCommand.CanBeCanceled
             || RefreshLibraryCommand.CanBeCanceled;
@@ -568,6 +619,15 @@ public sealed class ShellViewModel : ObservableObject
             {
                 OnPropertyChanged(nameof(UnpackWorkText));
             }
+        }
+    }
+
+    public void PublishIssues(IEnumerable<AppIssue> issues)
+    {
+        ArgumentNullException.ThrowIfNull(issues);
+        foreach (var issue in issues)
+        {
+            Issues.Add(issue);
         }
     }
 
@@ -660,6 +720,7 @@ public sealed class ShellViewModel : ObservableObject
         value ??= string.Empty;
         if (SetProperty(ref _sourcePath, value, nameof(SourcePath)))
         {
+            SchedulePathValidation();
             OnPropertiesChanged(
                 nameof(SourceDirectory),
                 nameof(CanScan),
@@ -674,6 +735,7 @@ public sealed class ShellViewModel : ObservableObject
         value ??= string.Empty;
         if (SetProperty(ref _outputPath, value, nameof(OutputPath)))
         {
+            SchedulePathValidation();
             OnPropertiesChanged(
                 nameof(OutputDirectory),
                 nameof(CanScan),
@@ -682,6 +744,97 @@ public sealed class ShellViewModel : ObservableObject
                 nameof(UnpackToolTip));
             UpdateCommandStates();
         }
+    }
+
+    private void SchedulePathValidation()
+    {
+        _pathValidationCancellation?.Cancel();
+        _pathValidationCancellation?.Dispose();
+        var cancellation = new CancellationTokenSource();
+        _pathValidationCancellation = cancellation;
+        var version = Interlocked.Increment(ref _pathValidationVersion);
+        OnPropertyChanged(nameof(PathValidationVersion));
+
+        var sourceRequest = new PathValidationRequest(
+            SourcePath,
+            PathInputRole.Source,
+            OutputPath,
+            version);
+        var outputRequest = new PathValidationRequest(
+            OutputPath,
+            PathInputRole.Output,
+            SourcePath,
+            version);
+        SourcePathValidation = _pathInputValidator.ValidateSyntax(sourceRequest);
+        OutputPathValidation = _pathInputValidator.ValidateSyntax(outputRequest);
+        NotifyPathValidationChanged();
+
+        _ = ValidatePathsAfterDelayAsync(
+            sourceRequest,
+            outputRequest,
+            cancellation.Token);
+    }
+
+    private async Task ValidatePathsAfterDelayAsync(
+        PathValidationRequest sourceRequest,
+        PathValidationRequest outputRequest,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(250), cancellationToken)
+                .ConfigureAwait(true);
+            var sourceTask = _pathInputValidator.ValidateAsync(sourceRequest, cancellationToken);
+            var outputTask = _pathInputValidator.ValidateAsync(outputRequest, cancellationToken);
+            await Task.WhenAll(sourceTask, outputTask).ConfigureAwait(true);
+
+            if (cancellationToken.IsCancellationRequested
+                || sourceRequest.Version != PathValidationVersion)
+            {
+                return;
+            }
+
+            SourcePathValidation = await sourceTask.ConfigureAwait(true);
+            OutputPathValidation = await outputTask.ConfigureAwait(true);
+            NotifyPathValidationChanged();
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception exception)
+        {
+            if (sourceRequest.Version != PathValidationVersion)
+            {
+                return;
+            }
+
+            var message = GetFriendlyExceptionMessage(exception);
+            SourcePathValidation = new PathValidationResult(
+                sourceRequest.Value,
+                null,
+                ValidationSeverity.Error,
+                "PATH_VALIDATION_FAILED",
+                message,
+                sourceRequest.Version);
+            OutputPathValidation = new PathValidationResult(
+                outputRequest.Value,
+                null,
+                ValidationSeverity.Error,
+                "PATH_VALIDATION_FAILED",
+                message,
+                outputRequest.Version);
+            NotifyPathValidationChanged();
+        }
+    }
+
+    private void NotifyPathValidationChanged()
+    {
+        OnPropertiesChanged(
+            nameof(CanScan),
+            nameof(CanRefreshOutput),
+            nameof(IsUnpackAvailable),
+            nameof(UnpackToolTip));
+        UpdateCommandStates();
     }
 
     private void SetScanSearchText(string? value)
@@ -752,7 +905,9 @@ public sealed class ShellViewModel : ObservableObject
     private bool CanStartScan()
         => !IsBusy
            && !string.IsNullOrWhiteSpace(SourcePath)
-           && !string.IsNullOrWhiteSpace(OutputPath);
+           && !string.IsNullOrWhiteSpace(OutputPath)
+           && SourcePathValidation.IsValid
+           && OutputPathValidation.IsValid;
 
     private bool CanStartUnpack()
         => !IsBusy
@@ -932,7 +1087,9 @@ public sealed class ShellViewModel : ObservableObject
     }
 
     private bool CanRefreshLibrary()
-        => !IsBusy && !string.IsNullOrWhiteSpace(OutputPath);
+        => !IsBusy
+           && !string.IsNullOrWhiteSpace(OutputPath)
+           && OutputPathValidation.IsValid;
 
     private async Task RefreshLibraryAsync(CancellationToken cancellationToken)
     {
@@ -1402,10 +1559,7 @@ public sealed class ShellViewModel : ObservableObject
     }
 
     private static bool PathsEqual(string left, string right)
-        => string.Equals(
-            Path.TrimEndingDirectorySeparator(Path.GetFullPath(left.Trim())),
-            Path.TrimEndingDirectorySeparator(Path.GetFullPath(right.Trim())),
-            StringComparison.OrdinalIgnoreCase);
+        => OutputPathPolicy.PathsEqual(left, right);
 
     private void BeginForegroundOperation(ForegroundOperationKind operationKind)
         => TaskLifecycle = new TaskLifecycleSnapshot(

@@ -14,9 +14,28 @@ public sealed class WallpaperScanService : IWallpaperScanService
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var sourceRoot = RequireExistingDirectory(request.SourceDirectory, nameof(request.SourceDirectory));
-        var outputRoot = RequireDirectoryPath(request.OutputDirectory, nameof(request.OutputDirectory));
-        EnsureDirectoriesDoNotOverlap(sourceRoot, outputRoot);
+        var sourceRoot = OutputPathPolicy.NormalizeDirectoryPath(
+            request.SourceDirectory,
+            "壁纸源目录");
+        if (!Directory.Exists(sourceRoot))
+        {
+            throw new DirectoryNotFoundException($"目录不存在：{sourceRoot}");
+        }
+
+        var outputRoot = OutputPathPolicy.NormalizeDirectoryPath(
+            request.OutputDirectory,
+            "输出目录");
+        try
+        {
+            OutputPathPolicy.RejectOverlappingRoots(sourceRoot, outputRoot);
+        }
+        catch (InvalidDataException exception)
+        {
+            throw new ArgumentException(
+                exception.Message,
+                nameof(request.OutputDirectory),
+                exception);
+        }
         var startedAtUtc = DateTimeOffset.UtcNow;
 
         cancellationToken.ThrowIfCancellationRequested();
@@ -43,6 +62,9 @@ public sealed class WallpaperScanService : IWallpaperScanService
 
             try
             {
+                OutputPathPolicy.RejectReparsePointsInExistingPath(
+                    sourceFolder,
+                    "壁纸项目目录");
                 progress?.Report(CreateProgress(
                     index,
                     sourceFolders.Length,
@@ -149,16 +171,12 @@ public sealed class WallpaperScanService : IWallpaperScanService
         {
             try
             {
-                await using var stream = new FileStream(
+                OutputPathPolicy.RejectReparsePointsInExistingPath(
                     projectPath,
-                    FileMode.Open,
-                    FileAccess.Read,
-                    FileShare.ReadWrite | FileShare.Delete,
-                    64 * 1024,
-                    FileOptions.Asynchronous | FileOptions.SequentialScan);
-                using var document = await JsonDocument.ParseAsync(
-                    stream,
-                    cancellationToken: cancellationToken).ConfigureAwait(false);
+                    "project.json");
+                using var document = await BoundedJsonReader
+                    .ParseDocumentAsync(projectPath, cancellationToken)
+                    .ConfigureAwait(false);
 
                 if (document.RootElement.ValueKind != JsonValueKind.Object)
                 {
@@ -173,6 +191,10 @@ public sealed class WallpaperScanService : IWallpaperScanService
                 }
             }
             catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (InputBudgetExceededException)
             {
                 throw;
             }
@@ -209,6 +231,20 @@ public sealed class WallpaperScanService : IWallpaperScanService
         }
 
         var scenePackagePath = FindScenePackage(sourceFolder);
+        if (scenePackagePath is not null)
+        {
+            try
+            {
+                OutputPathPolicy.RejectReparsePointsInExistingPath(
+                    scenePackagePath,
+                    "scene.pkg");
+            }
+            catch (IOException exception)
+            {
+                warnings.Add($"scene.pkg 路径无效：{exception.Message}");
+                scenePackagePath = null;
+            }
+        }
         var (videoFilePath, videoRelativePath) = ResolveVideoFile(
             sourceFolder,
             wallpaperType,
@@ -232,7 +268,10 @@ public sealed class WallpaperScanService : IWallpaperScanService
         ScanCandidate candidate,
         string outputRoot)
     {
-        var itemOutputDirectory = Path.Combine(outputRoot, candidate.WorkshopId);
+        var itemOutputDirectory = OutputPathPolicy.ResolveUnderRoot(
+            outputRoot,
+            candidate.WorkshopId,
+            "workshopid 输出目录");
 
         return new WallpaperRecord
         {
@@ -288,19 +327,18 @@ public sealed class WallpaperScanService : IWallpaperScanService
                 throw new InvalidDataException("视频 file 字段不能使用绝对路径。");
             }
 
-            var fullPath = Path.GetFullPath(Path.Combine(sourceFolder, normalizedReference));
+            var fullPath = OutputPathPolicy.ResolveUnderRoot(
+                sourceFolder,
+                normalizedReference,
+                "视频 file 字段");
             var normalizedSource = Path.TrimEndingDirectorySeparator(Path.GetFullPath(sourceFolder));
-            var sourcePrefix = normalizedSource + Path.DirectorySeparatorChar;
-            if (!fullPath.StartsWith(sourcePrefix, StringComparison.OrdinalIgnoreCase))
-            {
-                throw new InvalidDataException("视频 file 字段指向了壁纸目录之外的位置。");
-            }
-
             if (!File.Exists(fullPath))
             {
                 warnings.Add($"视频文件不存在：{projectFile}");
                 return (null, null);
             }
+
+            OutputPathPolicy.RejectReparsePointsInExistingPath(fullPath, "视频文件");
 
             var relativePath = Path.GetRelativePath(normalizedSource, fullPath);
             return (fullPath, relativePath);
@@ -363,57 +401,16 @@ public sealed class WallpaperScanService : IWallpaperScanService
             safeName = fallback;
         }
 
+        if (OutputPathPolicy.IsReservedWindowsName(safeName))
+        {
+            safeName = $"_{safeName}";
+        }
+
         return safeName;
     }
 
-    private static string RequireExistingDirectory(string path, string parameterName)
-    {
-        var fullPath = RequireDirectoryPath(path, parameterName);
-        return Directory.Exists(fullPath)
-            ? fullPath
-            : throw new DirectoryNotFoundException($"目录不存在：{fullPath}");
-    }
-
-    private static string RequireDirectoryPath(string path, string parameterName)
-    {
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            throw new ArgumentException("目录地址不能为空。", parameterName);
-        }
-
-        return Path.GetFullPath(path.Trim());
-    }
-
     private static bool PathsEqual(string left, string right)
-    {
-        return string.Equals(
-            Path.TrimEndingDirectorySeparator(Path.GetFullPath(left)),
-            Path.TrimEndingDirectorySeparator(Path.GetFullPath(right)),
-            StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static void EnsureDirectoriesDoNotOverlap(string sourceRoot, string outputRoot)
-    {
-        var normalizedSource = Path.TrimEndingDirectorySeparator(Path.GetFullPath(sourceRoot));
-        var normalizedOutput = Path.TrimEndingDirectorySeparator(Path.GetFullPath(outputRoot));
-
-        if (PathsEqual(normalizedSource, normalizedOutput)
-            || IsDirectoryWithin(normalizedSource, normalizedOutput)
-            || IsDirectoryWithin(normalizedOutput, normalizedSource))
-        {
-            throw new ArgumentException(
-                "壁纸源目录与输出目录不能相同，也不能互相包含。请选择两个彼此独立的目录。",
-                nameof(outputRoot));
-        }
-    }
-
-    private static bool IsDirectoryWithin(string parentDirectory, string candidateDirectory)
-    {
-        var parentWithSeparator = Path.EndsInDirectorySeparator(parentDirectory)
-            ? parentDirectory
-            : parentDirectory + Path.DirectorySeparatorChar;
-        return candidateDirectory.StartsWith(parentWithSeparator, StringComparison.OrdinalIgnoreCase);
-    }
+        => OutputPathPolicy.PathsEqual(left, right);
 
     private static ScanProgress CreateProgress(
         int scannedCount,

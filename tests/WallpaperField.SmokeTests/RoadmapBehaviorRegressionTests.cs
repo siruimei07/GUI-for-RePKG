@@ -19,7 +19,7 @@ internal static class RoadmapBehaviorRegressionTests
     private static void VerifyValidStartupOptionsRemainOrderIndependent(
         Action<bool, string> assert)
     {
-        var options = LaunchOptions.Parse(
+        var startup = StartupOptions.Parse(
         [
             "--height", "720",
             "--source", @"C:\Workshop Source",
@@ -31,6 +31,10 @@ internal static class RoadmapBehaviorRegressionTests
             "--snapshot", @"D:\snapshots\catalog.png",
             "--scan"
         ]);
+        var options = startup.Options;
+
+        assert(startup.Issues.Count == 0,
+            "Valid legacy startup options unexpectedly produced issues.");
 
         assert(options.SourceDirectory == @"C:\Workshop Source",
             "A valid --source value stopped parsing when options were reordered.");

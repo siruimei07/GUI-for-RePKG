@@ -36,6 +36,7 @@ try
     await TaskLifecycleRegressionTests.RunAsync(Assert);
     await ScanLifecycleRegressionTests.RunAsync(Assert);
     await LibraryLifecycleRegressionTests.RunAsync(Assert);
+    await InputValidationRegressionTests.RunAsync(Assert);
     await UnpackLifecycleRegressionTests.RunAsync(Assert);
     await OutputPlanningRegressionTests.RunAsync(Assert);
     await TransactionRegressionTests.RunAsync(Assert);

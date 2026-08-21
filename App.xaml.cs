@@ -11,16 +11,18 @@ public partial class App : Application
 {
     private void Application_Startup(object sender, StartupEventArgs e)
     {
-        AppLog.Write($"Startup begin. Args: {string.Join(' ', e.Args)}");
+        AppLog.Write($"Startup begin. ArgumentCount={e.Args.Length}.");
         DispatcherUnhandledException += OnDispatcherUnhandledException;
 
         try
         {
-            var options = LaunchOptions.Parse(e.Args);
-            AppLog.Write("Launch options parsed.");
+            var startup = StartupOptions.Parse(e.Args);
+            var options = startup.Options;
+            AppLog.Write($"Launch options parsed. IssueCount={startup.Issues.Count}.");
             var settingsStore = new UserSettingsStore();
             var savedSettings = settingsStore.Load();
             var viewModel = AppComposition.CreateShellViewModel();
+            viewModel.PublishIssues(startup.Issues);
             AppLog.Write("Application services composed.");
 
             viewModel.SourcePath = savedSettings.SourcePath;
@@ -77,10 +79,10 @@ public partial class App : Application
 
             window.Dispatcher.BeginInvoke(() =>
             {
-                if (options.Page is "library" or "output" or "02")
-                {
-                    viewModel.NavigateTo("LIBRARY");
-                }
+                var initialPage = startup.Issues.Any(issue => issue.Severity == AppIssueSeverity.Error)
+                    ? "PROBLEMS"
+                    : options.Page;
+                viewModel.NavigateTo(initialPage);
 
                 if (options.StartScan && viewModel.ScanCommand.CanExecute(null))
                 {
