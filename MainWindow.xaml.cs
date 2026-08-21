@@ -30,6 +30,7 @@ public partial class MainWindow : Window
 {
     private const int DwmWindowCornerPreference = 33;
     private const int DwmRoundCorners = 2;
+    private static readonly TimeSpan CloseWaitTimeout = TimeSpan.FromSeconds(30);
     private static readonly string[] HighContrastResourceKeys =
     [
         "PaperBrush",
@@ -85,6 +86,11 @@ public partial class MainWindow : Window
     private readonly HashSet<Guid> _expandedProblemIssueIds = [];
     private readonly MotionPolicy _motionPolicy = new();
     private bool _restoringProblemExpansion;
+    private UserSettingsStore? _settingsStore;
+    private bool _persistSettingsOnClose;
+    private bool _closePrepared;
+    private bool _closeInProgress;
+    private bool _allowCloseWithoutSettings;
 
     public MainWindow()
     {
@@ -120,6 +126,21 @@ public partial class MainWindow : Window
         _snapshotPath = Path.GetFullPath(path);
         _snapshotDelayMilliseconds = Math.Max(250, delayMilliseconds);
         _snapshotScrollIndex = scrollIndex is >= 0 ? scrollIndex : null;
+    }
+
+    internal void ConfigureCloseWorkflow(
+        UserSettingsStore settingsStore,
+        bool persistSettings)
+    {
+        ArgumentNullException.ThrowIfNull(settingsStore);
+        if (_settingsStore is not null)
+        {
+            throw new InvalidOperationException("The close workflow is already configured.");
+        }
+
+        _settingsStore = settingsStore;
+        _persistSettingsOnClose = persistSettings;
+        Closing += Window_Closing;
     }
 
     public void SetReducedMotion(bool reduceMotion)
@@ -171,6 +192,7 @@ public partial class MainWindow : Window
 
     private void Window_Closed(object? sender, EventArgs e)
     {
+        Closing -= Window_Closing;
         DataContextChanged -= OnDataContextChanged;
         if (DataContext is INotifyPropertyChanged viewModel)
         {
@@ -180,6 +202,108 @@ public partial class MainWindow : Window
         SystemParameters.StaticPropertyChanged -= SystemParameters_StaticPropertyChanged;
         _motionPolicy.PropertyChanged -= MotionPolicy_PropertyChanged;
         _motionPolicy.Dispose();
+    }
+
+    private async void Window_Closing(object? sender, CancelEventArgs e)
+    {
+        if (_closePrepared)
+        {
+            return;
+        }
+
+        if (_allowCloseWithoutSettings && ViewModel?.IsBusy != true)
+        {
+            _closePrepared = true;
+            return;
+        }
+
+        e.Cancel = true;
+        if (_closeInProgress || ViewModel is not { } viewModel || _settingsStore is null)
+        {
+            return;
+        }
+
+        _closeInProgress = true;
+        try
+        {
+            var result = await PrepareForCloseAsync(
+                viewModel,
+                _settingsStore,
+                _persistSettingsOnClose && !_allowCloseWithoutSettings,
+                CloseWaitTimeout);
+            switch (result)
+            {
+                case ClosePreparationResult.ReadyToClose:
+                    _closePrepared = true;
+                    _ = Dispatcher.BeginInvoke(Close, DispatcherPriority.ApplicationIdle);
+                    break;
+                case ClosePreparationResult.SettingsSaveFailed:
+                    _allowCloseWithoutSettings = true;
+                    break;
+            }
+        }
+        catch (Exception exception)
+        {
+            viewModel.PublishIssue(AppIssue.Create(
+                "CLOSE_PREPARATION_FAILED",
+                AppIssueSeverity.Error,
+                AppIssueSource.Diagnostics,
+                "应用未能完成安全关闭准备；窗口仍保持打开。",
+                $"{exception.GetType().Name}：{exception.Message}",
+                AppDiskFact.AdditionalEffectsPossible,
+                AppIssueAction.ExportDiagnostics,
+                "WINDOW_CLOSE",
+                viewModel.ActiveOperationId));
+            viewModel.ResumeAfterBlockedClose("安全关闭准备失败；请在问题中心查看详情后重试");
+        }
+        finally
+        {
+            _closeInProgress = false;
+        }
+    }
+
+    internal static async Task<ClosePreparationResult> PrepareForCloseAsync(
+        ShellViewModel viewModel,
+        UserSettingsStore settingsStore,
+        bool persistSettings,
+        TimeSpan timeout)
+    {
+        ArgumentNullException.ThrowIfNull(viewModel);
+        ArgumentNullException.ThrowIfNull(settingsStore);
+
+        viewModel.BeginClosePreparation();
+        if (!await viewModel.WaitForPendingWorkAsync(timeout).ConfigureAwait(true))
+        {
+            var operation = viewModel.ActiveOperationKind?.ToString() ?? "Unknown";
+            var operationId = viewModel.ActiveOperationId;
+            viewModel.PublishIssue(AppIssue.Create(
+                "CLOSE_WAIT_TIMEOUT",
+                AppIssueSeverity.Warning,
+                AppIssueSource.Diagnostics,
+                "安全关闭等待已超时；应用没有强制终止仍在清理的任务。",
+                $"Operation={operation}; OperationId={operationId?.ToString() ?? "none"}; "
+                + $"State={viewModel.TaskState}。请等待任务结束后重试关闭。",
+                AppDiskFact.AdditionalEffectsPossible,
+                AppIssueAction.Retry,
+                $"CLOSE:{operation}:{operationId?.ToString() ?? "none"}",
+                operationId));
+            viewModel.ResumeAfterBlockedClose("安全停止等待超时；任务仍在运行，请查看问题中心后重试");
+            return ClosePreparationResult.TimedOut;
+        }
+
+        if (persistSettings
+            && !settingsStore.Save(new UserSettings
+            {
+                SourcePath = viewModel.SourcePath.Trim(),
+                OutputPath = viewModel.OutputPath.Trim(),
+                Density = viewModel.Density
+            }))
+        {
+            viewModel.ResumeAfterBlockedClose("用户设置未能保存；再次关闭可跳过保存并退出");
+            return ClosePreparationResult.SettingsSaveFailed;
+        }
+
+        return ClosePreparationResult.ReadyToClose;
     }
 
     private void OnDataContextChanged(object sender, DependencyPropertyChangedEventArgs e)

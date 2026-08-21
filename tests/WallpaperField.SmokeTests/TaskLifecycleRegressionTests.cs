@@ -3,6 +3,7 @@ using System.Windows.Automation;
 using System.Windows.Controls;
 using WallpaperField.Contracts;
 using WallpaperField.Models;
+using WallpaperField.Services;
 using WallpaperField.ViewModels;
 
 internal static class TaskLifecycleRegressionTests
@@ -12,10 +13,162 @@ internal static class TaskLifecycleRegressionTests
         await VerifyAsyncCommandCanBeAwaitedAndCanceledIdempotentlyAsync(assert);
         await VerifyNavigationRemainsAvailableDuringScanAsync(assert);
         await VerifyShellPublishesLifecycleAndAwaitsCleanupAsync(assert);
+        await VerifyClosePreparationCancelsAndAwaitsCleanupAsync(assert);
         await VerifyCancelActionDisablesDuringCleanupAsync(assert);
         await VerifyUnpackCancelCommandRequestsTokenAsync(assert);
         await VerifyLibraryCancelCommandRequestsTokenAsync(assert);
     }
+
+    private static async Task VerifyClosePreparationCancelsAndAwaitsCleanupAsync(
+        Action<bool, string> assert)
+    {
+        var prepareMethod = typeof(WallpaperField.MainWindow).GetMethod(
+            "PrepareForCloseAsync",
+            System.Reflection.BindingFlags.Static
+            | System.Reflection.BindingFlags.NonPublic);
+        assert(prepareMethod is not null,
+            "The window close workflow does not expose an awaitable preparation seam.");
+        if (prepareMethod is null)
+        {
+            return;
+        }
+
+        var testRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"WallpaperField-CloseLifecycle-{Guid.NewGuid():N}");
+        var sourceRoot = Path.Combine(testRoot, "source");
+        var outputRoot = Path.Combine(testRoot, "output");
+        var settingsPath = Path.Combine(testRoot, "settings.json");
+
+        try
+        {
+            Directory.CreateDirectory(sourceRoot);
+            Directory.CreateDirectory(outputRoot);
+
+            var timeoutService = new BlockingScanService();
+            var timeoutShell = CreateShell(timeoutService, sourceRoot, outputRoot);
+            var timeoutExecution = timeoutShell.ScanCommand.ExecuteAsync();
+            await timeoutService.Started.WaitAsync(TimeSpan.FromSeconds(2));
+
+            var timeoutPreparation = InvokeClosePreparation(
+                prepareMethod,
+                timeoutShell,
+                new UserSettingsStore(settingsPath),
+                persistSettings: false,
+                TimeSpan.FromMilliseconds(50));
+            await timeoutService.CancellationObserved.WaitAsync(TimeSpan.FromSeconds(2));
+            var timeoutResult = await GetClosePreparationResultAsync(timeoutPreparation);
+
+            assert(timeoutResult == "TimedOut",
+                "A close wait timeout did not keep the window workflow open for recovery.");
+            assert(GetIsClosing(timeoutShell) == false,
+                "A timed-out close attempt left all foreground commands permanently disabled.");
+            assert(timeoutShell.IsProblemsPage
+                   && timeoutShell.Issues.Any(issue => issue.Code == "CLOSE_WAIT_TIMEOUT"),
+                "A close wait timeout did not navigate to a structured problem record.");
+
+            timeoutService.AllowCleanup();
+            await timeoutExecution.WaitAsync(TimeSpan.FromSeconds(2));
+
+            var blockedSettingsParent = Path.Combine(testRoot, "blocked-settings-parent");
+            File.WriteAllText(blockedSettingsParent, "not-a-directory");
+            var saveFailureShell = CreateShell(
+                new ImmediateScanService(),
+                sourceRoot,
+                outputRoot);
+            var saveFailurePreparation = InvokeClosePreparation(
+                prepareMethod,
+                saveFailureShell,
+                new UserSettingsStore(
+                    Path.Combine(blockedSettingsParent, "settings.json"),
+                    saveFailureShell.PublishIssue,
+                    (source, code, contextKey) =>
+                    {
+                        _ = saveFailureShell.ResolveIssues(source, code, contextKey);
+                    }),
+                persistSettings: true,
+                TimeSpan.FromSeconds(2));
+            var saveFailureResult = await GetClosePreparationResultAsync(saveFailurePreparation);
+            assert(saveFailureResult == "SettingsSaveFailed"
+                   && GetIsClosing(saveFailureShell) == false
+                   && saveFailureShell.IsProblemsPage,
+                "A settings-save failure did not keep the quiescent window available for diagnostics.");
+            assert(saveFailureShell.Issues.Any(issue => issue.Code == "SETTINGS_SAVE_FAILED"),
+                "A settings-save failure did not publish its structured close-time problem.");
+
+            var successService = new BlockingScanService();
+            var successShell = CreateShell(successService, sourceRoot, outputRoot);
+            var successExecution = successShell.ScanCommand.ExecuteAsync();
+            await successService.Started.WaitAsync(TimeSpan.FromSeconds(2));
+
+            var successPreparation = InvokeClosePreparation(
+                prepareMethod,
+                successShell,
+                new UserSettingsStore(settingsPath),
+                persistSettings: true,
+                TimeSpan.FromSeconds(2));
+            await successService.CancellationObserved.WaitAsync(TimeSpan.FromSeconds(2));
+            assert(!successPreparation.IsCompleted,
+                "Close preparation returned before foreground cleanup was released.");
+
+            successService.AllowCleanup();
+            var successResult = await GetClosePreparationResultAsync(successPreparation);
+            await successExecution.WaitAsync(TimeSpan.FromSeconds(2));
+
+            assert(successResult == "ReadyToClose" && GetIsClosing(successShell) == true,
+                "A quiescent close preparation did not remain guarded until the second Close call.");
+            assert(!successShell.ScanCommand.CanExecute(null),
+                "A new foreground task remained executable after close preparation succeeded.");
+            assert(File.Exists(settingsPath),
+                "Close preparation did not persist settings after foreground cleanup completed.");
+        }
+        finally
+        {
+            if (Directory.Exists(testRoot))
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+        }
+    }
+
+    private static ShellViewModel CreateShell(
+        IWallpaperScanService scanService,
+        string sourceRoot,
+        string outputRoot)
+        => new(
+            scanService,
+            new EmptyLibraryService(),
+            new NullFolderPickerService(),
+            new NullSystemFolderService(),
+            new EmptyUnpackService())
+        {
+            SourcePath = sourceRoot,
+            OutputPath = outputRoot
+        };
+
+    private static Task InvokeClosePreparation(
+        System.Reflection.MethodInfo method,
+        ShellViewModel shell,
+        UserSettingsStore settingsStore,
+        bool persistSettings,
+        TimeSpan timeout)
+        => method.Invoke(null, [shell, settingsStore, persistSettings, timeout]) as Task
+           ?? throw new InvalidOperationException(
+               "PrepareForCloseAsync did not return an awaitable task.");
+
+    private static async Task<string?> GetClosePreparationResultAsync(Task preparation)
+    {
+        await preparation.WaitAsync(TimeSpan.FromSeconds(3));
+        return preparation.GetType()
+            .GetProperty("Result")
+            ?.GetValue(preparation)
+            ?.ToString();
+    }
+
+    private static bool? GetIsClosing(ShellViewModel shell)
+        => typeof(ShellViewModel)
+            .GetProperty("IsClosing")
+            ?.GetValue(shell) as bool?;
 
     private static async Task VerifyUnpackCancelCommandRequestsTokenAsync(
         Action<bool, string> assert)

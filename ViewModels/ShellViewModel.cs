@@ -55,6 +55,7 @@ public sealed class ShellViewModel : ObservableObject
     private bool _isBatchUpdatingUnpackSelection;
     private bool _batchUnpackSelectionChanged;
     private bool _isBusy;
+    private bool _isClosing;
     private bool _isScanning;
     private bool _isUnpacking;
     private bool _isRefreshingLibrary;
@@ -537,19 +538,21 @@ public sealed class ShellViewModel : ObservableObject
                 ? "请先勾选至少一个 PKG 或视频项目。"
                 : $"仅处理已勾选的 {SelectedUnpackCount} 个项目。";
 
-    public string StateLabel => IsScanning
-        ? "SCANNING"
-        : IsUnpacking
+    public string StateLabel => IsClosing
+        ? "CLOSING"
+        : IsScanning
+            ? "SCANNING"
+            : IsUnpacking
             ? "UNPACKING"
-        : IsRefreshingLibrary
-            ? "REFRESHING"
-            : IsBusy
-                ? "WORKING"
-                : StatusKind == "Error"
-                    ? "CHECK"
-                    : StatusKind == "Warning"
-                        ? "ATTENTION"
-                        : "READY";
+            : IsRefreshingLibrary
+                ? "REFRESHING"
+                : IsBusy
+                    ? "WORKING"
+                    : StatusKind == "Error"
+                        ? "CHECK"
+                        : StatusKind == "Warning"
+                            ? "ATTENTION"
+                            : "READY";
 
     public double ProgressValue
     {
@@ -770,6 +773,24 @@ public sealed class ShellViewModel : ObservableObject
         RefreshLibraryCommand.TryCancel();
     }
 
+    internal void BeginClosePreparation()
+    {
+        IsClosing = true;
+        SetStatus(
+            TaskState == TaskLifecycleState.CommitCritical
+                ? "正在完成安全提交；完成前窗口将保持打开…"
+                : "正在安全停止后台工作；完成前窗口将保持打开…",
+            "Working");
+        CancelPendingWork();
+    }
+
+    internal void ResumeAfterBlockedClose(string message)
+    {
+        IsClosing = false;
+        NavigateTo(ProblemsPage);
+        SetStatus(message, "Warning");
+    }
+
     public AppIssue? SelectedIssue
     {
         get => _selectedIssue;
@@ -778,6 +799,23 @@ public sealed class ShellViewModel : ObservableObject
             if (SetProperty(ref _selectedIssue, value))
             {
                 OnPropertyChanged(nameof(HasSelectedIssue));
+            }
+        }
+    }
+
+    public bool IsClosing
+    {
+        get => _isClosing;
+        private set
+        {
+            if (SetProperty(ref _isClosing, value))
+            {
+                OnPropertiesChanged(
+                    nameof(StateLabel),
+                    nameof(CanScan),
+                    nameof(CanRefreshOutput),
+                    nameof(IsUnpackAvailable));
+                UpdateCommandStates();
             }
         }
     }
@@ -1113,14 +1151,16 @@ public sealed class ShellViewModel : ObservableObject
     }
 
     private bool CanStartScan()
-        => !IsBusy
+        => !IsClosing
+           && !IsBusy
            && !string.IsNullOrWhiteSpace(SourcePath)
            && !string.IsNullOrWhiteSpace(OutputPath)
            && SourcePathValidation.IsValid
            && OutputPathValidation.IsValid;
 
     private bool CanStartUnpack()
-        => !IsBusy
+        => !IsClosing
+           && !IsBusy
            && SelectedUnpackCount > 0
            && IsCurrentScanIdentity();
 
@@ -1371,7 +1411,8 @@ public sealed class ShellViewModel : ObservableObject
     }
 
     private bool CanRefreshLibrary()
-        => !IsBusy
+        => !IsClosing
+           && !IsBusy
            && !string.IsNullOrWhiteSpace(OutputPath)
            && OutputPathValidation.IsValid;
 

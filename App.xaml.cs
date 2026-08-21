@@ -62,19 +62,9 @@ public partial class App : Application
                 window.ConfigureSnapshot(options.SnapshotPath, scrollIndex: options.ScrollIndex);
             }
 
-            window.Closing += (_, _) =>
-            {
-                if (string.IsNullOrWhiteSpace(options.SnapshotPath))
-                {
-                    _ = settingsStore.Save(new UserSettings
-                    {
-                        SourcePath = viewModel.SourcePath.Trim(),
-                        OutputPath = viewModel.OutputPath.Trim(),
-                        Density = viewModel.Density
-                    });
-                }
-            };
-            window.Closed += (_, _) => viewModel.CancelPendingWork();
+            window.ConfigureCloseWorkflow(
+                settingsStore,
+                persistSettings: string.IsNullOrWhiteSpace(options.SnapshotPath));
             MainWindow = window;
             window.Show();
             AppLog.Write("Main window shown.");

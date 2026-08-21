@@ -369,8 +369,9 @@ internal static class SelectionEfficiencyRegressionTests
         }
 
         var appSource = File.ReadAllText(FindRepositoryFile("App.xaml.cs"));
+        var windowSource = File.ReadAllText(FindRepositoryFile("MainWindow.xaml.cs"));
         assert(appSource.Contains("Density = savedSettings.Density", StringComparison.Ordinal)
-               && appSource.Contains("Density = viewModel.Density", StringComparison.Ordinal),
+               && windowSource.Contains("Density = viewModel.Density", StringComparison.Ordinal),
             "App startup/closing does not restore and persist the density preference.");
     }
 

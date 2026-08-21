@@ -24,3 +24,10 @@ public sealed record TaskLifecycleSnapshot(
     TaskLifecycleState State,
     bool CancellationPending,
     DateTimeOffset ChangedAtUtc);
+
+internal enum ClosePreparationResult
+{
+    ReadyToClose,
+    TimedOut,
+    SettingsSaveFailed
+}
