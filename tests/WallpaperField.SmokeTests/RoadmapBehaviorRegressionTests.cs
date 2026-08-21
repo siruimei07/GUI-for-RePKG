@@ -151,7 +151,15 @@ internal static class RoadmapBehaviorRegressionTests
             {
                 application = new WallpaperField.App();
                 application.InitializeComponent();
-                window = new WallpaperField.MainWindow();
+                window = new WallpaperField.MainWindow
+                {
+                    Left = -10_000,
+                    Top = -10_000,
+                    ShowInTaskbar = false,
+                    ShowActivated = false
+                };
+                window.Show();
+                TaskLifecycleRegressionTests.VerifyWindowCancelActions(window, assert);
 
                 var scanList = window.FindName("ScanResultsList") as ListBox
                     ?? throw new InvalidOperationException("ScanResultsList was not created.");
@@ -185,7 +193,7 @@ internal static class RoadmapBehaviorRegressionTests
         if (failure is not null)
         {
             throw new InvalidOperationException(
-                "The WPF virtualization characterization failed.",
+                "The WPF window characterization failed.",
                 failure);
         }
 

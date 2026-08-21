@@ -777,6 +777,10 @@
                                         </Grid>
 
                                         <Grid Grid.Row="3" Margin="120,22,0,0">
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                            </Grid.RowDefinitions>
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="Auto" />
                                                 <ColumnDefinition Width="Auto" />
@@ -790,6 +794,15 @@
                                                     <TextBlock Text="{Binding ScanButtonText}" />
                                                 </StackPanel>
                                             </Button>
+                                            <Button x:Name="CancelScanButton"
+                                                    Grid.Row="1"
+                                                    Grid.Column="0"
+                                                    MinWidth="168"
+                                                    Margin="0,8,0,0"
+                                                    Style="{StaticResource GhostButton}"
+                                                    Command="{Binding CancelScanCommand}"
+                                                    AutomationProperties.Name="取消扫描"
+                                                    Content="取消扫描" />
                                             <Button Grid.Column="1"
                                                     MinWidth="152"
                                                     Margin="12,0,0,0"
@@ -802,7 +815,16 @@
                                                     <TextBlock Text="{Binding UnpackButtonText}" />
                                                 </StackPanel>
                                             </Button>
-                                            <StackPanel Grid.Column="2" Margin="24,0,0,0" VerticalAlignment="Center">
+                                            <Button x:Name="CancelUnpackButton"
+                                                    Grid.Row="1"
+                                                    Grid.Column="1"
+                                                    MinWidth="152"
+                                                    Margin="12,8,0,0"
+                                                    Style="{StaticResource GhostButton}"
+                                                    Command="{Binding CancelUnpackCommand}"
+                                                    AutomationProperties.Name="取消解包"
+                                                    Content="取消解包" />
+                                            <StackPanel Grid.RowSpan="2" Grid.Column="2" Margin="24,0,0,0" VerticalAlignment="Center">
                                                 <Grid>
                                                     <ProgressBar Height="5" Minimum="0" Maximum="100" Value="{Binding ProgressValue, Mode=OneWay}" />
                                                     <Border Height="1" VerticalAlignment="Bottom" Background="#35FFFFFF" />
@@ -1137,6 +1159,13 @@
                                                 <TextBlock Text="刷新输出库" />
                                             </StackPanel>
                                         </Button>
+                                        <Button x:Name="CancelLibraryRefreshButton"
+                                                MinWidth="144"
+                                                Margin="0,8,0,0"
+                                                Style="{StaticResource GhostButton}"
+                                                Command="{Binding CancelLibraryRefreshCommand}"
+                                                AutomationProperties.Name="取消图库刷新"
+                                                Content="取消图库刷新" />
                                     </StackPanel>
                                 </Grid>
 

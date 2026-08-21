@@ -10,6 +10,7 @@ public sealed class AsyncRelayCommand : ObservableObject, ICommand
     private readonly Func<CancellationToken, Task> _execute;
     private readonly Func<bool>? _canExecute;
     private CancellationTokenSource? _executionCancellation;
+    private Task _executionTask = Task.CompletedTask;
     private bool _isRunning;
     private bool _isCancellationRequested;
 
@@ -63,6 +64,23 @@ public sealed class AsyncRelayCommand : ObservableObject, ICommand
         }
     }
 
+    /// <summary>
+    /// The most recently started execution. While the command is running this
+    /// is the task a close workflow can await through the command's finally block.
+    /// </summary>
+    public Task ExecutionTask
+    {
+        get => _executionTask;
+        private set
+        {
+            if (!ReferenceEquals(_executionTask, value))
+            {
+                _executionTask = value;
+                OnPropertyChanged();
+            }
+        }
+    }
+
     public bool CanExecute(object? parameter)
         => !IsRunning && (_canExecute?.Invoke() ?? true);
 
@@ -82,13 +100,20 @@ public sealed class AsyncRelayCommand : ObservableObject, ICommand
         }
     }
 
-    public async Task ExecuteAsync()
+    public Task ExecuteAsync()
     {
         if (!CanExecute(null))
         {
-            return;
+            return Task.CompletedTask;
         }
 
+        var execution = ExecuteCoreAsync();
+        ExecutionTask = execution;
+        return execution;
+    }
+
+    private async Task ExecuteCoreAsync()
+    {
         using var cancellation = new CancellationTokenSource();
         _executionCancellation = cancellation;
         IsCancellationRequested = false;
@@ -106,16 +131,21 @@ public sealed class AsyncRelayCommand : ObservableObject, ICommand
         }
     }
 
-    public void Cancel()
+    public void Cancel() => TryCancel();
+
+    public bool TryCancel()
     {
         if (!CanBeCanceled || _executionCancellation is null)
         {
-            return;
+            return false;
         }
 
         IsCancellationRequested = true;
         _executionCancellation.Cancel();
+        return true;
     }
+
+    public Task WaitForCompletionAsync() => ExecutionTask;
 
     public void NotifyCanExecuteChanged()
         => CanExecuteChanged?.Invoke(this, EventArgs.Empty);
