@@ -938,8 +938,11 @@ public sealed class ShellViewModel : ObservableObject
     {
         if (!Directory.Exists(OutputPath))
         {
-            LibraryWallpapers.Clear();
+            ClearError();
+            BeginForegroundOperation(ForegroundOperationKind.LibraryRefresh);
+            CurrentStage = "FAILED";
             PresentError("输出目录不存在或当前不可访问");
+            SetTaskState(TaskLifecycleState.Failed);
             return;
         }
 
@@ -959,7 +962,9 @@ public sealed class ShellViewModel : ObservableObject
             ReplaceItems(LibraryWallpapers, result.Items);
             LastLibraryRefresh = DateTimeOffset.Now;
 
-            var issues = JoinIssues(result.Errors);
+            var issues = JoinVisibleNotes(
+                JoinIssues(result.Errors),
+                FormatLibraryConflicts(result.Conflicts));
             var recordWarnings = FormatRecordWarnings(result.Items);
             if (issues.Length > 0 || recordWarnings.Length > 0)
             {
@@ -1298,6 +1303,13 @@ public sealed class ShellViewModel : ObservableObject
             ? location
             : $"{location}：{message}";
     }
+
+    private static string FormatLibraryConflicts(IEnumerable<LibraryConflict> conflicts)
+        => string.Join(
+            Environment.NewLine,
+            conflicts.Select(conflict =>
+                $"重复 Workshop ID {conflict.WorkshopId}："
+                + string.Join("；", conflict.CandidatePaths)));
 
     private static void ReplaceItems(
         RangeObservableCollection<WallpaperCardViewModel> target,

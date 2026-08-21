@@ -21,7 +21,7 @@ public sealed class WallpaperLibraryService : IWallpaperLibraryService
             return new WallpaperLibraryResult();
         }
 
-        var items = new Dictionary<string, WallpaperRecord>(StringComparer.OrdinalIgnoreCase);
+        var candidates = new List<LibraryCandidate>();
         var errors = new List<LibraryLoadError>();
         var metadataFiles = await Task.Run(
             () => DiscoverMetadataFiles(root, errors, cancellationToken),
@@ -69,15 +69,9 @@ public sealed class WallpaperLibraryService : IWallpaperLibraryService
                     Warnings = storedRecord.Warnings ?? Array.Empty<string>()
                 };
 
-                if (!items.TryAdd(workshopId, record))
-                {
-                    errors.Add(new LibraryLoadError
-                    {
-                        Path = metadataPath,
-                        Message = $"发现重复 workshopid“{workshopId}”，已保留先读取的记录。",
-                        ExceptionType = nameof(InvalidDataException)
-                    });
-                }
+                candidates.Add(new LibraryCandidate(
+                    GetNormalizedRelativePath(root, metadataPath),
+                    record));
             }
             catch (OperationCanceledException)
             {
@@ -94,13 +88,44 @@ public sealed class WallpaperLibraryService : IWallpaperLibraryService
             }
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var items = new List<WallpaperRecord>();
+        var conflicts = new List<LibraryConflict>();
+        foreach (var group in candidates.GroupBy(
+                     candidate => candidate.Record.WorkshopId,
+                     StringComparer.OrdinalIgnoreCase))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var groupedCandidates = group.ToArray();
+            if (groupedCandidates.Length == 1)
+            {
+                items.Add(groupedCandidates[0].Record);
+                continue;
+            }
+
+            conflicts.Add(new LibraryConflict
+            {
+                WorkshopId = groupedCandidates[0].Record.WorkshopId,
+                CandidatePaths = groupedCandidates
+                    .Select(candidate => candidate.RelativePath)
+                    .ToArray()
+            });
+        }
+
         return new WallpaperLibraryResult
         {
-            Items = items.Values
+            Items = items
                 .OrderBy(item => item.Title, StringComparer.CurrentCultureIgnoreCase)
                 .ThenBy(item => item.WorkshopId, StringComparer.OrdinalIgnoreCase)
                 .ToArray(),
-            Errors = errors.ToArray()
+            Errors = errors
+                .OrderBy(
+                    error => GetNormalizedRelativePath(root, error.Path),
+                    StringComparer.OrdinalIgnoreCase)
+                .ThenBy(error => error.Path, StringComparer.Ordinal)
+                .ToArray(),
+            Conflicts = conflicts.ToArray()
         };
     }
 
@@ -175,7 +200,25 @@ public sealed class WallpaperLibraryService : IWallpaperLibraryService
             }
         }
 
-        return results;
+        return results
+            .OrderBy(
+                path => GetNormalizedRelativePath(root, path),
+                StringComparer.OrdinalIgnoreCase)
+            .ThenBy(path => path, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static string GetNormalizedRelativePath(string root, string path)
+    {
+        try
+        {
+            return Path.GetRelativePath(root, Path.GetFullPath(path))
+                .Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
+        }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException)
+        {
+            return path;
+        }
     }
 
     private static string? ResolvePreviewPath(string itemDirectory, WallpaperRecord storedRecord)
@@ -236,4 +279,6 @@ public sealed class WallpaperLibraryService : IWallpaperLibraryService
 
         return null;
     }
+
+    private sealed record LibraryCandidate(string RelativePath, WallpaperRecord Record);
 }

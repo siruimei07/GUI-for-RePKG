@@ -9,9 +9,18 @@ public sealed record LibraryLoadError
     public string? ExceptionType { get; init; }
 }
 
+public sealed record LibraryConflict
+{
+    public string WorkshopId { get; init; } = string.Empty;
+
+    public IReadOnlyList<string> CandidatePaths { get; init; } = Array.Empty<string>();
+}
+
 public sealed record WallpaperLibraryResult
 {
     public IReadOnlyList<WallpaperRecord> Items { get; init; } = Array.Empty<WallpaperRecord>();
 
     public IReadOnlyList<LibraryLoadError> Errors { get; init; } = Array.Empty<LibraryLoadError>();
+
+    public IReadOnlyList<LibraryConflict> Conflicts { get; init; } = Array.Empty<LibraryConflict>();
 }
