@@ -121,6 +121,7 @@ internal static class UiStructureRegressionTests
                     () => { },
                     System.Windows.Threading.DispatcherPriority.DataBind);
 
+                AccessibilityRegressionTests.VerifyWindow(window, assert);
                 VerifyLayoutMode(window, "Compact", assert);
                 VerifyAlwaysAvailableActions(window, shell, assert);
                 VerifyPage(window, shell, "SCAN", "ScanView", "ScanResultsList", assert);

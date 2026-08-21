@@ -105,7 +105,7 @@ public sealed class AnimatedPreviewImage : Image
     private static void OnAnimationEnabledChanged(
         DependencyObject dependencyObject,
         DependencyPropertyChangedEventArgs args)
-        => ((AnimatedPreviewImage)dependencyObject).UpdatePlaybackState();
+        => ((AnimatedPreviewImage)dependencyObject).RestartLoad();
 
     private static object CoerceDecodePixelWidth(DependencyObject dependencyObject, object baseValue)
         => Math.Clamp((int)baseValue, 1, 4096);
@@ -163,16 +163,25 @@ public sealed class AnimatedPreviewImage : Image
         }
 
         var path = Path.GetFullPath(SourcePath);
+        var animateGif = AnimationEnabled;
+        var decodePixelWidth = DecodePixelWidth;
         var version = _loadVersion;
         var cancellation = new CancellationTokenSource();
         _loadCancellation = cancellation;
         _ = IsGifPath(path)
-            ? LoadGifPreviewAsync(path, version, cancellation.Token)
-            : LoadStaticPreviewAsync(path, DecodePixelWidth, version, cancellation.Token);
+            ? LoadGifPreviewAsync(
+                path,
+                decodePixelWidth,
+                animateGif,
+                version,
+                cancellation.Token)
+            : LoadStaticPreviewAsync(path, decodePixelWidth, version, cancellation.Token);
     }
 
     private async Task LoadGifPreviewAsync(
         string path,
+        int decodePixelWidth,
+        bool animate,
         int version,
         CancellationToken cancellationToken)
     {
@@ -207,16 +216,28 @@ public sealed class AnimatedPreviewImage : Image
                 return;
             }
 
-            await Dispatcher.InvokeAsync(
-                () => ApplyGifPreview(path, memory, version, cancellationToken));
-            memory = null;
+            if (animate)
+            {
+                await Dispatcher.InvokeAsync(
+                    () => ApplyGifPreview(path, memory, version, cancellationToken));
+                memory = null;
+            }
+            else
+            {
+                var bitmap = DecodeGifFirstFrame(
+                    memory,
+                    decodePixelWidth,
+                    cancellationToken);
+                await Dispatcher.InvokeAsync(
+                    () => ApplyStaticPreview(path, bitmap, version, cancellationToken));
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
         }
         catch (Exception exception)
         {
-            AppLog.Write($"Animated GIF preview load failed for '{path}': {exception}");
+            AppLog.Write($"GIF preview load failed for '{path}': {exception}");
         }
         finally
         {
@@ -314,6 +335,24 @@ public sealed class AnimatedPreviewImage : Image
         {
             throw new InvalidDataException("GIF preview dimensions or signature are invalid.");
         }
+    }
+
+    private static BitmapSource DecodeGifFirstFrame(
+        Stream stream,
+        int decodePixelWidth,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        stream.Position = 0;
+        var image = new BitmapImage();
+        image.BeginInit();
+        image.CacheOption = BitmapCacheOption.OnLoad;
+        image.DecodePixelWidth = decodePixelWidth;
+        image.StreamSource = stream;
+        image.EndInit();
+        image.Freeze();
+        cancellationToken.ThrowIfCancellationRequested();
+        return image;
     }
 
     private void ApplyGifPreview(

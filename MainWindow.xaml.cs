@@ -14,6 +14,7 @@ using Microsoft.Win32;
 using WallpaperField.Composition;
 using WallpaperField.Infrastructure;
 using WallpaperField.Models;
+using WallpaperField.Services;
 using WallpaperField.ViewModels;
 
 namespace WallpaperField;
@@ -29,6 +30,42 @@ public partial class MainWindow : Window
 {
     private const int DwmWindowCornerPreference = 33;
     private const int DwmRoundCorners = 2;
+    private static readonly string[] HighContrastResourceKeys =
+    [
+        "PaperBrush",
+        "PaperElevatedBrush",
+        "PaperMutedBrush",
+        "PaperPressedBrush",
+        "Paper08Brush",
+        "Paper14Brush",
+        "Paper24Brush",
+        "BackgroundBrush",
+        "SurfaceBrush",
+        "InkBrush",
+        "InkRaisedBrush",
+        "InkSoftBrush",
+        "TextPrimaryBrush",
+        "TextSecondaryBrush",
+        "TextMutedBrush",
+        "TextOnDarkMutedBrush",
+        "ForegroundBrush",
+        "BorderBrush",
+        "BorderStrongBrush",
+        "SignalBrush",
+        "SignalPressedBrush",
+        "AccentBrush",
+        "SelectionBackgroundBrush",
+        "SelectionTextBrush",
+        "SignalTextBrush",
+        "FocusOuterBrush",
+        "FocusInnerBrush",
+        "SuccessBrush",
+        "SuccessInkBrush",
+        "SuccessSoftBrush",
+        "DisabledBrush",
+        "OverlayBrush",
+        "ShadowBrush"
+    ];
 
     public static readonly DependencyProperty MotionEnabledProperty = DependencyProperty.Register(
         nameof(MotionEnabled),
@@ -46,6 +83,7 @@ public partial class MainWindow : Window
     private int _snapshotDelayMilliseconds = 1500;
     private int? _snapshotScrollIndex;
     private readonly HashSet<Guid> _expandedProblemIssueIds = [];
+    private readonly MotionPolicy _motionPolicy = new();
     private bool _restoringProblemExpansion;
 
     public MainWindow()
@@ -53,6 +91,11 @@ public partial class MainWindow : Window
         InitializeComponent();
         DataContextChanged += OnDataContextChanged;
         StateChanged += (_, _) => UpdateWindowStateVisuals();
+        Closed += Window_Closed;
+        _motionPolicy.PropertyChanged += MotionPolicy_PropertyChanged;
+        SystemParameters.StaticPropertyChanged += SystemParameters_StaticPropertyChanged;
+        MotionEnabled = _motionPolicy.MotionEnabled;
+        ApplyHighContrastPalette(SystemParameters.HighContrast);
     }
 
     private ShellViewModel? ViewModel => DataContext as ShellViewModel;
@@ -80,8 +123,63 @@ public partial class MainWindow : Window
     }
 
     public void SetReducedMotion(bool reduceMotion)
+        => _motionPolicy.SetReducedMotionRequested(reduceMotion);
+
+    private void MotionPolicy_PropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        MotionEnabled = SystemParameters.ClientAreaAnimation && !reduceMotion;
+        if (e.PropertyName != nameof(MotionPolicy.MotionEnabled))
+        {
+            return;
+        }
+
+        if (Dispatcher.CheckAccess())
+        {
+            ApplyMotionPolicy();
+        }
+        else
+        {
+            Dispatcher.BeginInvoke(ApplyMotionPolicy, DispatcherPriority.Render);
+        }
+    }
+
+    private void ApplyMotionPolicy()
+    {
+        MotionEnabled = _motionPolicy.MotionEnabled;
+        StartAmbientMotion();
+        AnimateCurrentPage();
+    }
+
+    private void SystemParameters_StaticPropertyChanged(
+        object? sender,
+        PropertyChangedEventArgs e)
+    {
+        if (string.IsNullOrEmpty(e.PropertyName)
+            || e.PropertyName == nameof(SystemParameters.HighContrast))
+        {
+            if (Dispatcher.CheckAccess())
+            {
+                ApplyHighContrastPalette(SystemParameters.HighContrast);
+            }
+            else
+            {
+                Dispatcher.BeginInvoke(
+                    () => ApplyHighContrastPalette(SystemParameters.HighContrast),
+                    DispatcherPriority.Render);
+            }
+        }
+    }
+
+    private void Window_Closed(object? sender, EventArgs e)
+    {
+        DataContextChanged -= OnDataContextChanged;
+        if (DataContext is INotifyPropertyChanged viewModel)
+        {
+            viewModel.PropertyChanged -= ViewModel_PropertyChanged;
+        }
+
+        SystemParameters.StaticPropertyChanged -= SystemParameters_StaticPropertyChanged;
+        _motionPolicy.PropertyChanged -= MotionPolicy_PropertyChanged;
+        _motionPolicy.Dispose();
     }
 
     private void OnDataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
@@ -103,7 +201,6 @@ public partial class MainWindow : Window
         UpdateResponsiveLayout(ActualWidth);
         StartAmbientMotion();
         AnimateCurrentPage();
-        SetBusyAnimation(ViewModel?.IsBusy == true);
 
         if (!string.IsNullOrWhiteSpace(_snapshotPath))
         {
@@ -131,11 +228,15 @@ public partial class MainWindow : Window
 
     private void StartAmbientMotion()
     {
+        BackgroundGridOffset.ApplyAnimationClock(TranslateTransform.XProperty, null);
+        BackgroundGridOffset.ApplyAnimationClock(TranslateTransform.YProperty, null);
+        SignalBeacon.ApplyAnimationClock(OpacityProperty, null);
+        BackgroundGridOffset.X = 0;
+        BackgroundGridOffset.Y = 0;
+        SignalBeacon.Opacity = 1;
+
         if (!MotionEnabled)
         {
-            BackgroundGridOffset.X = 0;
-            BackgroundGridOffset.Y = 0;
-            SignalBeacon.Opacity = 1;
             return;
         }
 
@@ -158,13 +259,12 @@ public partial class MainWindow : Window
 
     private void StartCalibrationLoop()
     {
-        CalibrationInstrument.BeginAnimation(OpacityProperty, null);
+        CalibrationInstrument.ApplyAnimationClock(OpacityProperty, null);
         CalibrationInstrument.Opacity = 0.17;
-        CalibrationRotation.BeginAnimation(RotateTransform.AngleProperty, null);
+        CalibrationRotation.ApplyAnimationClock(RotateTransform.AngleProperty, null);
 
         if (!MotionEnabled)
         {
-            CalibrationRotation.Angle = ViewModel?.IsLibraryPage == true ? 24 : 0;
             return;
         }
 
@@ -215,69 +315,30 @@ public partial class MainWindow : Window
             : ViewModel?.IsLibraryPage == true
                 ? LibraryStageOverlay
                 : ScanStageOverlay;
-        foreach (var other in new[] { ScanView, LibraryView, ProblemsView }
-                     .Where(view => !ReferenceEquals(view, target)))
+        foreach (var view in new[] { ScanView, LibraryView, ProblemsView })
         {
-            other.BeginAnimation(OpacityProperty, null);
+            view.ApplyAnimationClock(OpacityProperty, null);
+            view.RenderTransform = Transform.Identity;
         }
 
-        foreach (var otherStage in new[] { ScanStageOverlay, LibraryStageOverlay }
-                     .Where(stage => !ReferenceEquals(stage, targetStage)))
+        foreach (var stage in new[] { ScanStageOverlay, LibraryStageOverlay })
         {
-            otherStage.BeginAnimation(OpacityProperty, null);
+            stage.ApplyAnimationClock(OpacityProperty, null);
         }
 
-        if (!MotionEnabled)
+        target.Opacity = 1;
+        if (targetStage is not null)
         {
-            target.Opacity = 1;
-            target.RenderTransform = Transform.Identity;
-            if (targetStage is not null)
-            {
-                targetStage.Opacity = ViewModel?.IsLibraryPage == true ? 0.12 : 0.13;
-            }
-            StartCalibrationLoop();
-            return;
+            targetStage.Opacity = ViewModel?.IsLibraryPage == true ? 0.12 : 0.13;
         }
 
-        target.Opacity = 0;
-        var translate = new TranslateTransform(22, 0);
-        target.RenderTransform = translate;
-
-        target.BeginAnimation(
-            OpacityProperty,
-            new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(420))
-            {
-                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
-            });
-        targetStage?.BeginAnimation(
-            OpacityProperty,
-            new DoubleAnimation(
-                0,
-                ViewModel?.IsLibraryPage == true ? 0.12 : 0.13,
-                TimeSpan.FromMilliseconds(720))
-            {
-                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
-            });
-        translate.BeginAnimation(
-            TranslateTransform.XProperty,
-            new DoubleAnimation(22, 0, TimeSpan.FromMilliseconds(560))
-            {
-                EasingFunction = new QuarticEase { EasingMode = EasingMode.EaseOut }
-            });
-
-        CalibrationRotation.BeginAnimation(
-            RotateTransform.AngleProperty,
-            new DoubleAnimation(
-                CalibrationRotation.Angle,
-                ViewModel?.IsProblemsPage == true
-                    ? 58
-                    : ViewModel?.IsLibraryPage == true
-                        ? 32
-                        : 0,
-                TimeSpan.FromMilliseconds(620))
-            {
-                EasingFunction = new QuarticEase { EasingMode = EasingMode.EaseOut }
-            });
+        CalibrationRotation.ApplyAnimationClock(RotateTransform.AngleProperty, null);
+        CalibrationRotation.Angle = ViewModel?.IsProblemsPage == true
+            ? 58
+            : ViewModel?.IsLibraryPage == true
+                ? 32
+                : 0;
+        SetBusyAnimation(ViewModel?.IsBusy == true);
     }
 
     private void Window_SizeChanged(object sender, SizeChangedEventArgs e)
@@ -551,6 +612,82 @@ public partial class MainWindow : Window
             ? applicationVersion[(separator + 1)..]
             : "unknown";
         return (applicationVersion, fileVersion, commit);
+    }
+
+    private void ApplyHighContrastPalette(bool enabled)
+    {
+        var resources = Application.Current?.Resources;
+        if (resources is null)
+        {
+            return;
+        }
+
+        foreach (var key in HighContrastResourceKeys)
+        {
+            resources.Remove(key);
+        }
+
+        if (!enabled)
+        {
+            return;
+        }
+
+        SetResourceBrushes(
+            resources,
+            SystemColors.WindowBrush,
+            "PaperBrush",
+            "PaperElevatedBrush",
+            "PaperMutedBrush",
+            "PaperPressedBrush",
+            "Paper08Brush",
+            "Paper14Brush",
+            "Paper24Brush",
+            "BackgroundBrush",
+            "SurfaceBrush",
+            "TextOnDarkMutedBrush");
+        SetResourceBrushes(
+            resources,
+            SystemColors.WindowTextBrush,
+            "InkBrush",
+            "InkRaisedBrush",
+            "InkSoftBrush",
+            "TextPrimaryBrush",
+            "TextSecondaryBrush",
+            "TextMutedBrush",
+            "ForegroundBrush",
+            "BorderBrush",
+            "BorderStrongBrush",
+            "FocusOuterBrush");
+        SetResourceBrushes(
+            resources,
+            SystemColors.HighlightBrush,
+            "SignalBrush",
+            "SignalPressedBrush",
+            "AccentBrush",
+            "SelectionBackgroundBrush",
+            "FocusInnerBrush",
+            "SuccessBrush",
+            "SuccessSoftBrush");
+        SetResourceBrushes(
+            resources,
+            SystemColors.HighlightTextBrush,
+            "SelectionTextBrush",
+            "SignalTextBrush",
+            "SuccessInkBrush");
+        resources["DisabledBrush"] = SystemColors.GrayTextBrush;
+        resources["OverlayBrush"] = SystemColors.WindowTextBrush;
+        resources["ShadowBrush"] = SystemColors.WindowTextBrush;
+    }
+
+    private static void SetResourceBrushes(
+        ResourceDictionary resources,
+        Brush brush,
+        params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            resources[key] = brush;
+        }
     }
 
     private void ApplyDwmWindowSettings()

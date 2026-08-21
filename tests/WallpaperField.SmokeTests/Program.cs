@@ -39,6 +39,7 @@ try
     await InputValidationRegressionTests.RunAsync(Assert);
     await ProblemDiagnosticsRegressionTests.RunAsync(Assert);
     UiStructureRegressionTests.Run(Assert);
+    AccessibilityRegressionTests.Run(Assert);
     await UnpackLifecycleRegressionTests.RunAsync(Assert);
     await OutputPlanningRegressionTests.RunAsync(Assert);
     await TransactionRegressionTests.RunAsync(Assert);
@@ -157,6 +158,7 @@ try
         "The animated GIF preview path was not preserved.");
     await ValidateStaticPreviewAsync(item101.PreviewPath!);
     await ValidateAnimatedGifPreviewAsync(item202.PreviewPath!);
+    await ValidateReducedMotionGifPreviewAsync(item202.PreviewPath!);
 
     var libraryBeforeUnpack = await new WallpaperLibraryService().LoadAsync(outputRoot);
     Assert(libraryBeforeUnpack.Items.Count == 0,
@@ -965,6 +967,184 @@ async Task ValidateAnimatedGifPreviewAsync(string path)
         "Animated GIF preview dispatcher stopped responding after its WPF host became ready.");
     Assert(thread.Join(TimeSpan.FromSeconds(2)),
         "Animated GIF validation dispatcher did not shut down.");
+}
+
+async Task ValidateReducedMotionGifPreviewAsync(string path)
+{
+    var hostReady = new TaskCompletionSource<bool>(
+        TaskCreationOptions.RunContinuationsAsynchronously);
+    var completion = new TaskCompletionSource<bool>(
+        TaskCreationOptions.RunContinuationsAsynchronously);
+    var thread = new Thread(() =>
+    {
+        var dispatcher = Dispatcher.CurrentDispatcher;
+        Window? window = null;
+        DispatcherTimer? poll = null;
+        DispatcherTimer? timeout = null;
+        var finished = false;
+        var phase = 0;
+
+        void Finish(Exception? exception)
+        {
+            if (finished)
+            {
+                return;
+            }
+
+            finished = true;
+            poll?.Stop();
+            timeout?.Stop();
+            try
+            {
+                window?.Close();
+                using var exclusiveRead = new FileStream(
+                    path,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.None);
+            }
+            catch (Exception closeOrLockException)
+            {
+                exception ??= new IOException(
+                    "Reduced-motion GIF preview retained a source-file lock after unload.",
+                    closeOrLockException);
+            }
+
+            if (exception is null)
+            {
+                completion.TrySetResult(true);
+            }
+            else
+            {
+                completion.TrySetException(exception);
+            }
+
+            dispatcher.BeginInvokeShutdown(DispatcherPriority.Background);
+        }
+
+        try
+        {
+            var image = new AnimatedPreviewImage
+            {
+                AnimationEnabled = false,
+                Width = 16,
+                Height = 16
+            };
+            window = new Window
+            {
+                Content = image,
+                Width = 32,
+                Height = 32,
+                Left = -10_000,
+                Top = -10_000,
+                ShowInTaskbar = false,
+                ShowActivated = false,
+                WindowStyle = WindowStyle.None,
+                ResizeMode = ResizeMode.NoResize
+            };
+
+            poll = new DispatcherTimer(DispatcherPriority.Background, dispatcher)
+            {
+                Interval = TimeSpan.FromMilliseconds(25)
+            };
+            poll.Tick += (_, _) =>
+            {
+                var animator = AnimationBehavior.GetAnimator(image);
+                if (phase == 0 && image.Source is not null)
+                {
+                    if (animator is not null)
+                    {
+                        Finish(new InvalidOperationException(
+                            "Reduced motion started the GIF animation engine instead of decoding one static frame."));
+                        return;
+                    }
+
+                    if (image.Source is not System.Windows.Media.Imaging.BitmapImage { IsFrozen: true })
+                    {
+                        Finish(new InvalidOperationException(
+                            "Reduced motion did not publish a frozen BitmapImage first frame."));
+                        return;
+                    }
+
+                    phase = 1;
+                    image.AnimationEnabled = true;
+                    return;
+                }
+
+                if (phase == 1 && animator is { FrameCount: >= 2 })
+                {
+                    phase = 2;
+                    image.AnimationEnabled = false;
+                    return;
+                }
+
+                if (phase == 2 && image.Source is not null)
+                {
+                    if (animator is not null
+                        || image.Source is not System.Windows.Media.Imaging.BitmapImage { IsFrozen: true })
+                    {
+                        Finish(new InvalidOperationException(
+                            "Runtime reduced-motion toggle did not replace the animator with a frozen first frame."));
+                        return;
+                    }
+
+                    try
+                    {
+                        using var exclusiveRead = new FileStream(
+                            path,
+                            FileMode.Open,
+                            FileAccess.Read,
+                            FileShare.None);
+                    }
+                    catch (Exception lockException)
+                    {
+                        Finish(new IOException(
+                            "Reduced-motion GIF preview retained a source-file lock while loaded.",
+                            lockException));
+                        return;
+                    }
+
+                    Finish(null);
+                }
+            };
+            timeout = new DispatcherTimer(DispatcherPriority.Background, dispatcher)
+            {
+                Interval = TimeSpan.FromSeconds(8)
+            };
+            timeout.Tick += (_, _) => Finish(
+                new TimeoutException(
+                    $"Reduced-motion GIF lifecycle did not finish in time (phase={phase})."));
+
+            window.Show();
+            poll.Start();
+            timeout.Start();
+            hostReady.TrySetResult(true);
+            image.SourcePath = path;
+            Dispatcher.Run();
+        }
+        catch (Exception exception)
+        {
+            hostReady.TrySetException(exception);
+            Finish(exception);
+        }
+    })
+    {
+        IsBackground = true,
+        Name = "WallpaperField.ReducedGifPreviewSmoke"
+    };
+
+    thread.SetApartmentState(ApartmentState.STA);
+    thread.Start();
+    await WaitForPreviewStageAsync(
+        hostReady.Task,
+        TimeSpan.FromSeconds(30),
+        "Reduced-motion GIF WPF host did not become ready within 30 seconds.");
+    await WaitForPreviewStageAsync(
+        completion.Task,
+        TimeSpan.FromSeconds(12),
+        "Reduced-motion GIF dispatcher stopped responding after its WPF host became ready.");
+    Assert(thread.Join(TimeSpan.FromSeconds(2)),
+        "Reduced-motion GIF validation dispatcher did not shut down.");
 }
 
 static async Task WaitForPreviewStageAsync(

@@ -57,6 +57,23 @@
     <SolidColorBrush x:Key="DisabledBrush" Color="#5C696962" />
     <SolidColorBrush x:Key="OverlayBrush" Color="#A6191919" />
     <SolidColorBrush x:Key="ShadowBrush" Color="#4D000000" />
+    <SolidColorBrush x:Key="SelectionBackgroundBrush" Color="{StaticResource SignalColor}" />
+    <SolidColorBrush x:Key="SelectionTextBrush" Color="{StaticResource InkColor}" />
+    <SolidColorBrush x:Key="SignalTextBrush" Color="{StaticResource InkColor}" />
+    <SolidColorBrush x:Key="FocusOuterBrush" Color="{StaticResource InkColor}" />
+    <SolidColorBrush x:Key="FocusInnerBrush" Color="{StaticResource SignalColor}" />
+
+    <!-- Runtime high-contrast overrides use these system-owned colors. -->
+    <SolidColorBrush x:Key="HighContrastWindowBrush"
+                     Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}" />
+    <SolidColorBrush x:Key="HighContrastWindowTextBrush"
+                     Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}" />
+    <SolidColorBrush x:Key="HighContrastHighlightBrush"
+                     Color="{DynamicResource {x:Static SystemColors.HighlightColorKey}}" />
+    <SolidColorBrush x:Key="HighContrastHighlightTextBrush"
+                     Color="{DynamicResource {x:Static SystemColors.HighlightTextColorKey}}" />
+    <SolidColorBrush x:Key="HighContrastDisabledBrush"
+                     Color="{DynamicResource {x:Static SystemColors.GrayTextColorKey}}" />
 
     <!-- Common semantic aliases make view XAML read by purpose. -->
     <SolidColorBrush x:Key="BackgroundBrush" Color="{StaticResource PaperColor}" />
@@ -132,10 +149,6 @@
     <CornerRadius x:Key="PillCornerRadius">999</CornerRadius>
     <CornerRadius x:Key="PanelCornerRadius">0</CornerRadius>
 
-    <CubicEase x:Key="DirectEaseOut" EasingMode="EaseOut" />
-    <CubicEase x:Key="DirectEaseInOut" EasingMode="EaseInOut" />
-    <QuinticEase x:Key="RevealEaseOut" EasingMode="EaseOut" />
-
     <DropShadowEffect x:Key="ButtonShadow"
                       BlurRadius="18"
                       Direction="270"
@@ -156,11 +169,15 @@
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate>
-                    <Border Margin="-4"
-                            BorderBrush="{DynamicResource SignalBrush}"
-                            BorderThickness="2"
-                            CornerRadius="16"
-                            SnapsToDevicePixels="True" />
+                    <Grid Margin="-6" SnapsToDevicePixels="True">
+                        <Border BorderBrush="{DynamicResource FocusOuterBrush}"
+                                BorderThickness="2"
+                                CornerRadius="18" />
+                        <Border Margin="3"
+                                BorderBrush="{DynamicResource FocusInnerBrush}"
+                                BorderThickness="2"
+                                CornerRadius="15" />
+                    </Grid>
                 </ControlTemplate>
             </Setter.Value>
         </Setter>
@@ -170,15 +187,7 @@
     <ControlTemplate x:Key="RoundedButtonTemplate" TargetType="{x:Type Button}">
         <Grid x:Name="Root"
               Background="Transparent"
-              RenderTransformOrigin="0.5,0.5"
               SnapsToDevicePixels="True">
-            <Grid.RenderTransform>
-                <TransformGroup>
-                    <ScaleTransform x:Name="ButtonScale" ScaleX="1" ScaleY="1" />
-                    <TranslateTransform x:Name="ButtonShift" Y="0" />
-                </TransformGroup>
-            </Grid.RenderTransform>
-
             <Border x:Name="Chrome"
                     Background="{TemplateBinding Background}"
                     BorderBrush="{TemplateBinding BorderBrush}"
@@ -201,112 +210,11 @@
 
         <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
-                <Trigger.EnterActions>
-                    <BeginStoryboard HandoffBehavior="SnapshotAndReplace">
-                        <Storyboard>
-                            <DoubleAnimation Storyboard.TargetName="HoverWash"
-                                             Storyboard.TargetProperty="Opacity"
-                                             To="0"
-                                             Duration="0:0:0.20"
-                                             EasingFunction="{StaticResource DirectEaseOut}" />
-                            <DoubleAnimation Storyboard.TargetName="ButtonScale"
-                                             Storyboard.TargetProperty="ScaleX"
-                                             To="1"
-                                             Duration="0:0:0.20"
-                                             EasingFunction="{StaticResource DirectEaseOut}" />
-                            <DoubleAnimation Storyboard.TargetName="ButtonScale"
-                                             Storyboard.TargetProperty="ScaleY"
-                                             To="1"
-                                             Duration="0:0:0.20"
-                                             EasingFunction="{StaticResource DirectEaseOut}" />
-                            <DoubleAnimation Storyboard.TargetName="ButtonShift"
-                                             Storyboard.TargetProperty="Y"
-                                             To="0"
-                                             Duration="0:0:0.20"
-                                             EasingFunction="{StaticResource DirectEaseOut}" />
-                        </Storyboard>
-                    </BeginStoryboard>
-                </Trigger.EnterActions>
-                <Trigger.ExitActions>
-                    <BeginStoryboard HandoffBehavior="SnapshotAndReplace">
-                        <Storyboard>
-                            <DoubleAnimation Storyboard.TargetName="HoverWash"
-                                             Storyboard.TargetProperty="Opacity"
-                                             To="0"
-                                             Duration="0:0:0.22"
-                                             EasingFunction="{StaticResource DirectEaseOut}" />
-                            <DoubleAnimation Storyboard.TargetName="ButtonScale"
-                                             Storyboard.TargetProperty="ScaleX"
-                                             To="1"
-                                             Duration="0:0:0.22"
-                                             EasingFunction="{StaticResource DirectEaseOut}" />
-                            <DoubleAnimation Storyboard.TargetName="ButtonScale"
-                                             Storyboard.TargetProperty="ScaleY"
-                                             To="1"
-                                             Duration="0:0:0.22"
-                                             EasingFunction="{StaticResource DirectEaseOut}" />
-                            <DoubleAnimation Storyboard.TargetName="ButtonShift"
-                                             Storyboard.TargetProperty="Y"
-                                             To="0"
-                                             Duration="0:0:0.22"
-                                             EasingFunction="{StaticResource DirectEaseOut}" />
-                        </Storyboard>
-                    </BeginStoryboard>
-                </Trigger.ExitActions>
+                <Setter TargetName="HoverWash" Property="Opacity" Value="0.10" />
             </Trigger>
 
             <Trigger Property="IsPressed" Value="True">
-                <Trigger.EnterActions>
-                    <BeginStoryboard HandoffBehavior="SnapshotAndReplace">
-                        <Storyboard>
-                            <DoubleAnimation Storyboard.TargetName="HoverWash"
-                                             Storyboard.TargetProperty="Opacity"
-                                             To="0.18"
-                                             Duration="0:0:0.18" />
-                            <DoubleAnimation Storyboard.TargetName="ButtonScale"
-                                             Storyboard.TargetProperty="ScaleX"
-                                             To="0.975"
-                                             Duration="0:0:0.18"
-                                             EasingFunction="{StaticResource DirectEaseOut}" />
-                            <DoubleAnimation Storyboard.TargetName="ButtonScale"
-                                             Storyboard.TargetProperty="ScaleY"
-                                             To="0.975"
-                                             Duration="0:0:0.18"
-                                             EasingFunction="{StaticResource DirectEaseOut}" />
-                            <DoubleAnimation Storyboard.TargetName="ButtonShift"
-                                             Storyboard.TargetProperty="Y"
-                                             To="1"
-                                             Duration="0:0:0.18"
-                                             EasingFunction="{StaticResource DirectEaseOut}" />
-                        </Storyboard>
-                    </BeginStoryboard>
-                </Trigger.EnterActions>
-                <Trigger.ExitActions>
-                    <BeginStoryboard HandoffBehavior="SnapshotAndReplace">
-                        <Storyboard>
-                            <DoubleAnimation Storyboard.TargetName="HoverWash"
-                                             Storyboard.TargetProperty="Opacity"
-                                             To="0.10"
-                                             Duration="0:0:0.24"
-                                             EasingFunction="{StaticResource DirectEaseOut}" />
-                            <DoubleAnimation Storyboard.TargetName="ButtonScale"
-                                             Storyboard.TargetProperty="ScaleX"
-                                             To="1.015"
-                                             Duration="0:0:0.24"
-                                             EasingFunction="{StaticResource DirectEaseOut}" />
-                            <DoubleAnimation Storyboard.TargetName="ButtonScale"
-                                             Storyboard.TargetProperty="ScaleY"
-                                             To="1.015"
-                                             Duration="0:0:0.24"
-                                             EasingFunction="{StaticResource DirectEaseOut}" />
-                            <DoubleAnimation Storyboard.TargetName="ButtonShift"
-                                             Storyboard.TargetProperty="Y"
-                                             To="-1"
-                                             Duration="0:0:0.24"
-                                             EasingFunction="{StaticResource DirectEaseOut}" />
-                        </Storyboard>
-                    </BeginStoryboard>
-                </Trigger.ExitActions>
+                <Setter TargetName="HoverWash" Property="Opacity" Value="0.18" />
             </Trigger>
 
             <Trigger Property="IsEnabled" Value="False">
@@ -336,7 +244,7 @@
            BasedOn="{StaticResource EndfieldButtonBase}"
            TargetType="{x:Type Button}">
         <Setter Property="Background" Value="{DynamicResource SignalBrush}" />
-        <Setter Property="Foreground" Value="{DynamicResource InkBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource SignalTextBrush}" />
         <Setter Property="BorderBrush" Value="{DynamicResource InkBrush}" />
         <Setter Property="Effect" Value="{StaticResource ButtonShadow}" />
         <Setter Property="MinWidth" Value="116" />
@@ -393,11 +301,7 @@
             <Setter.Value>
                 <ControlTemplate TargetType="{x:Type Button}">
                     <Grid x:Name="NavRoot"
-                          Background="Transparent"
-                          RenderTransformOrigin="0.5,0.5">
-                        <Grid.RenderTransform>
-                            <TranslateTransform x:Name="NavShift" X="0" />
-                        </Grid.RenderTransform>
+                          Background="Transparent">
                         <Border x:Name="NavChrome"
                                 Background="{TemplateBinding Background}"
                                 BorderBrush="{TemplateBinding BorderBrush}"
@@ -423,63 +327,10 @@
                     </Grid>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Trigger.EnterActions>
-                                <BeginStoryboard HandoffBehavior="SnapshotAndReplace">
-                                    <Storyboard>
-                                        <DoubleAnimation Storyboard.TargetName="NavHover"
-                                                         Storyboard.TargetProperty="Opacity"
-                                                         To="0.08"
-                                                         Duration="0:0:0.20"
-                                                         EasingFunction="{StaticResource DirectEaseOut}" />
-                                        <DoubleAnimation Storyboard.TargetName="NavShift"
-                                                         Storyboard.TargetProperty="X"
-                                                         To="0"
-                                                         Duration="0:0:0.20"
-                                                         EasingFunction="{StaticResource DirectEaseOut}" />
-                                    </Storyboard>
-                                </BeginStoryboard>
-                            </Trigger.EnterActions>
-                            <Trigger.ExitActions>
-                                <BeginStoryboard HandoffBehavior="SnapshotAndReplace">
-                                    <Storyboard>
-                                        <DoubleAnimation Storyboard.TargetName="NavHover"
-                                                         Storyboard.TargetProperty="Opacity"
-                                                         To="0"
-                                                         Duration="0:0:0.22"
-                                                         EasingFunction="{StaticResource DirectEaseOut}" />
-                                        <DoubleAnimation Storyboard.TargetName="NavShift"
-                                                         Storyboard.TargetProperty="X"
-                                                         To="0"
-                                                         Duration="0:0:0.22"
-                                                         EasingFunction="{StaticResource DirectEaseOut}" />
-                                    </Storyboard>
-                                </BeginStoryboard>
-                            </Trigger.ExitActions>
+                            <Setter TargetName="NavHover" Property="Opacity" Value="0.08" />
                         </Trigger>
                         <Trigger Property="IsPressed" Value="True">
                             <Setter TargetName="NavHover" Property="Opacity" Value="0.16" />
-                            <Trigger.EnterActions>
-                                <BeginStoryboard HandoffBehavior="SnapshotAndReplace">
-                                    <Storyboard>
-                                        <DoubleAnimation Storyboard.TargetName="NavShift"
-                                                         Storyboard.TargetProperty="X"
-                                                         To="1"
-                                                         Duration="0:0:0.18"
-                                                         EasingFunction="{StaticResource DirectEaseOut}" />
-                                    </Storyboard>
-                                </BeginStoryboard>
-                            </Trigger.EnterActions>
-                            <Trigger.ExitActions>
-                                <BeginStoryboard HandoffBehavior="SnapshotAndReplace">
-                                    <Storyboard>
-                                        <DoubleAnimation Storyboard.TargetName="NavShift"
-                                                         Storyboard.TargetProperty="X"
-                                                         To="3"
-                                                         Duration="0:0:0.22"
-                                                         EasingFunction="{StaticResource DirectEaseOut}" />
-                                    </Storyboard>
-                                </BeginStoryboard>
-                            </Trigger.ExitActions>
                         </Trigger>
                         <Trigger Property="IsDefault" Value="True">
                             <Setter Property="Foreground" Value="{DynamicResource PaperBrush}" />
@@ -523,14 +374,7 @@
             <Setter.Value>
                 <ControlTemplate TargetType="{x:Type Button}">
                     <Grid x:Name="CardRoot"
-                          Background="Transparent"
-                          RenderTransformOrigin="0.5,0.5">
-                        <Grid.RenderTransform>
-                            <TransformGroup>
-                                <ScaleTransform x:Name="CardScale" ScaleX="1" ScaleY="1" />
-                                <TranslateTransform x:Name="CardShift" Y="0" />
-                            </TransformGroup>
-                        </Grid.RenderTransform>
+                          Background="Transparent">
                         <Border x:Name="CardChrome"
                                 Background="{TemplateBinding Background}"
                                 BorderBrush="{TemplateBinding BorderBrush}"
@@ -554,128 +398,16 @@
                                 VerticalAlignment="Bottom"
                                 Background="{DynamicResource SignalBrush}"
                                 IsHitTestVisible="False"
-                                Opacity="0">
-                            <Border.RenderTransform>
-                                <TranslateTransform x:Name="CardRuleShift" X="-24" />
-                            </Border.RenderTransform>
-                        </Border>
+                                Opacity="0" />
                     </Grid>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
                             <Setter TargetName="CardChrome" Property="BorderBrush" Value="{DynamicResource InkBrush}" />
-                            <Trigger.EnterActions>
-                                <BeginStoryboard HandoffBehavior="SnapshotAndReplace">
-                                    <Storyboard>
-                                        <DoubleAnimation Storyboard.TargetName="CardHoverWash"
-                                                         Storyboard.TargetProperty="Opacity"
-                                                         To="0.035"
-                                                         Duration="0:0:0.22"
-                                                         EasingFunction="{StaticResource DirectEaseOut}" />
-                                        <DoubleAnimation Storyboard.TargetName="CardSignalRule"
-                                                         Storyboard.TargetProperty="Opacity"
-                                                         To="1"
-                                                         Duration="0:0:0.22" />
-                                        <DoubleAnimation Storyboard.TargetName="CardRuleShift"
-                                                         Storyboard.TargetProperty="X"
-                                                         To="0"
-                                                         Duration="0:0:0.30"
-                                                         EasingFunction="{StaticResource RevealEaseOut}" />
-                                        <DoubleAnimation Storyboard.TargetName="CardScale"
-                                                         Storyboard.TargetProperty="ScaleX"
-                                                         To="1"
-                                                         Duration="0:0:0.24"
-                                                         EasingFunction="{StaticResource DirectEaseOut}" />
-                                        <DoubleAnimation Storyboard.TargetName="CardScale"
-                                                         Storyboard.TargetProperty="ScaleY"
-                                                         To="1"
-                                                         Duration="0:0:0.24"
-                                                         EasingFunction="{StaticResource DirectEaseOut}" />
-                                        <DoubleAnimation Storyboard.TargetName="CardShift"
-                                                         Storyboard.TargetProperty="Y"
-                                                         To="0"
-                                                         Duration="0:0:0.24"
-                                                         EasingFunction="{StaticResource DirectEaseOut}" />
-                                    </Storyboard>
-                                </BeginStoryboard>
-                            </Trigger.EnterActions>
-                            <Trigger.ExitActions>
-                                <BeginStoryboard HandoffBehavior="SnapshotAndReplace">
-                                    <Storyboard>
-                                        <DoubleAnimation Storyboard.TargetName="CardHoverWash"
-                                                         Storyboard.TargetProperty="Opacity"
-                                                         To="0"
-                                                         Duration="0:0:0.24" />
-                                        <DoubleAnimation Storyboard.TargetName="CardSignalRule"
-                                                         Storyboard.TargetProperty="Opacity"
-                                                         To="0"
-                                                         Duration="0:0:0.20" />
-                                        <DoubleAnimation Storyboard.TargetName="CardRuleShift"
-                                                         Storyboard.TargetProperty="X"
-                                                         To="-24"
-                                                         Duration="0:0:0.20" />
-                                        <DoubleAnimation Storyboard.TargetName="CardScale"
-                                                         Storyboard.TargetProperty="ScaleX"
-                                                         To="1"
-                                                         Duration="0:0:0.26"
-                                                         EasingFunction="{StaticResource DirectEaseOut}" />
-                                        <DoubleAnimation Storyboard.TargetName="CardScale"
-                                                         Storyboard.TargetProperty="ScaleY"
-                                                         To="1"
-                                                         Duration="0:0:0.26"
-                                                         EasingFunction="{StaticResource DirectEaseOut}" />
-                                        <DoubleAnimation Storyboard.TargetName="CardShift"
-                                                         Storyboard.TargetProperty="Y"
-                                                         To="0"
-                                                         Duration="0:0:0.26"
-                                                         EasingFunction="{StaticResource DirectEaseOut}" />
-                                    </Storyboard>
-                                </BeginStoryboard>
-                            </Trigger.ExitActions>
+                            <Setter TargetName="CardHoverWash" Property="Opacity" Value="0.035" />
+                            <Setter TargetName="CardSignalRule" Property="Opacity" Value="1" />
                         </Trigger>
                         <Trigger Property="IsPressed" Value="True">
                             <Setter TargetName="CardHoverWash" Property="Opacity" Value="0.07" />
-                            <Trigger.EnterActions>
-                                <BeginStoryboard HandoffBehavior="SnapshotAndReplace">
-                                    <Storyboard>
-                                        <DoubleAnimation Storyboard.TargetName="CardScale"
-                                                         Storyboard.TargetProperty="ScaleX"
-                                                         To="0.99"
-                                                         Duration="0:0:0.18"
-                                                         EasingFunction="{StaticResource DirectEaseOut}" />
-                                        <DoubleAnimation Storyboard.TargetName="CardScale"
-                                                         Storyboard.TargetProperty="ScaleY"
-                                                         To="0.99"
-                                                         Duration="0:0:0.18"
-                                                         EasingFunction="{StaticResource DirectEaseOut}" />
-                                        <DoubleAnimation Storyboard.TargetName="CardShift"
-                                                         Storyboard.TargetProperty="Y"
-                                                         To="0"
-                                                         Duration="0:0:0.18"
-                                                         EasingFunction="{StaticResource DirectEaseOut}" />
-                                    </Storyboard>
-                                </BeginStoryboard>
-                            </Trigger.EnterActions>
-                            <Trigger.ExitActions>
-                                <BeginStoryboard HandoffBehavior="SnapshotAndReplace">
-                                    <Storyboard>
-                                        <DoubleAnimation Storyboard.TargetName="CardScale"
-                                                         Storyboard.TargetProperty="ScaleX"
-                                                         To="1.012"
-                                                         Duration="0:0:0.24"
-                                                         EasingFunction="{StaticResource DirectEaseOut}" />
-                                        <DoubleAnimation Storyboard.TargetName="CardScale"
-                                                         Storyboard.TargetProperty="ScaleY"
-                                                         To="1.012"
-                                                         Duration="0:0:0.24"
-                                                         EasingFunction="{StaticResource DirectEaseOut}" />
-                                        <DoubleAnimation Storyboard.TargetName="CardShift"
-                                                         Storyboard.TargetProperty="Y"
-                                                         To="-3"
-                                                         Duration="0:0:0.24"
-                                                         EasingFunction="{StaticResource DirectEaseOut}" />
-                                    </Storyboard>
-                                </BeginStoryboard>
-                            </Trigger.ExitActions>
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
                             <Setter TargetName="CardRoot" Property="Opacity" Value="0.42" />
@@ -693,8 +425,9 @@
         <Setter Property="Background" Value="{DynamicResource PaperElevatedBrush}" />
         <Setter Property="Foreground" Value="{DynamicResource InkBrush}" />
         <Setter Property="CaretBrush" Value="{DynamicResource InkBrush}" />
-        <Setter Property="SelectionBrush" Value="{DynamicResource SignalBrush}" />
-        <Setter Property="SelectionOpacity" Value="0.72" />
+        <Setter Property="SelectionBrush" Value="{DynamicResource SelectionBackgroundBrush}" />
+        <Setter Property="SelectionTextBrush" Value="{DynamicResource SelectionTextBrush}" />
+        <Setter Property="SelectionOpacity" Value="1" />
         <Setter Property="BorderBrush" Value="{DynamicResource BorderStrongBrush}" />
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="FontFamily" Value="{StaticResource UiFontFamily}" />
@@ -724,74 +457,31 @@
                                 Background="{DynamicResource SignalBrush}"
                                 IsHitTestVisible="False"
                                 Opacity="0" />
-                        <Border x:Name="InputFocusRing"
-                                Margin="-2"
-                                BorderBrush="{DynamicResource SignalBrush}"
+                        <Border x:Name="InputFocusOuter"
+                                Margin="-4"
+                                BorderBrush="{DynamicResource FocusOuterBrush}"
                                 BorderThickness="2"
-                                CornerRadius="14"
+                                CornerRadius="16"
+                                IsHitTestVisible="False"
+                                Opacity="0" />
+                        <Border x:Name="InputFocusInner"
+                                Margin="-1"
+                                BorderBrush="{DynamicResource FocusInnerBrush}"
+                                BorderThickness="2"
+                                CornerRadius="13"
                                 IsHitTestVisible="False"
                                 Opacity="0" />
                     </Grid>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
                             <Setter TargetName="InputChrome" Property="BorderBrush" Value="{DynamicResource InkBrush}" />
-                            <Trigger.EnterActions>
-                                <BeginStoryboard HandoffBehavior="SnapshotAndReplace">
-                                    <Storyboard>
-                                        <DoubleAnimation Storyboard.TargetName="InputIndicator"
-                                                         Storyboard.TargetProperty="Opacity"
-                                                         To="0.35"
-                                                         Duration="0:0:0.20"
-                                                         EasingFunction="{StaticResource DirectEaseOut}" />
-                                    </Storyboard>
-                                </BeginStoryboard>
-                            </Trigger.EnterActions>
-                            <Trigger.ExitActions>
-                                <BeginStoryboard HandoffBehavior="SnapshotAndReplace">
-                                    <Storyboard>
-                                        <DoubleAnimation Storyboard.TargetName="InputIndicator"
-                                                         Storyboard.TargetProperty="Opacity"
-                                                         To="0"
-                                                         Duration="0:0:0.22"
-                                                         EasingFunction="{StaticResource DirectEaseOut}" />
-                                    </Storyboard>
-                                </BeginStoryboard>
-                            </Trigger.ExitActions>
+                            <Setter TargetName="InputIndicator" Property="Opacity" Value="0.35" />
                         </Trigger>
                         <Trigger Property="IsKeyboardFocusWithin" Value="True">
                             <Setter TargetName="InputChrome" Property="BorderBrush" Value="{DynamicResource InkBrush}" />
-                            <Trigger.EnterActions>
-                                <BeginStoryboard HandoffBehavior="SnapshotAndReplace">
-                                    <Storyboard>
-                                        <DoubleAnimation Storyboard.TargetName="InputIndicator"
-                                                         Storyboard.TargetProperty="Opacity"
-                                                         To="1"
-                                                         Duration="0:0:0.20"
-                                                         EasingFunction="{StaticResource DirectEaseOut}" />
-                                        <DoubleAnimation Storyboard.TargetName="InputFocusRing"
-                                                         Storyboard.TargetProperty="Opacity"
-                                                         To="1"
-                                                         Duration="0:0:0.20"
-                                                         EasingFunction="{StaticResource DirectEaseOut}" />
-                                    </Storyboard>
-                                </BeginStoryboard>
-                            </Trigger.EnterActions>
-                            <Trigger.ExitActions>
-                                <BeginStoryboard HandoffBehavior="SnapshotAndReplace">
-                                    <Storyboard>
-                                        <DoubleAnimation Storyboard.TargetName="InputIndicator"
-                                                         Storyboard.TargetProperty="Opacity"
-                                                         To="0"
-                                                         Duration="0:0:0.22"
-                                                         EasingFunction="{StaticResource DirectEaseOut}" />
-                                        <DoubleAnimation Storyboard.TargetName="InputFocusRing"
-                                                         Storyboard.TargetProperty="Opacity"
-                                                         To="0"
-                                                         Duration="0:0:0.22"
-                                                         EasingFunction="{StaticResource DirectEaseOut}" />
-                                    </Storyboard>
-                                </BeginStoryboard>
-                            </Trigger.ExitActions>
+                            <Setter TargetName="InputIndicator" Property="Opacity" Value="1" />
+                            <Setter TargetName="InputFocusOuter" Property="Opacity" Value="1" />
+                            <Setter TargetName="InputFocusInner" Property="Opacity" Value="1" />
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
                             <Setter TargetName="InputRoot" Property="Opacity" Value="0.46" />
@@ -831,6 +521,11 @@
         <Setter Property="TextWrapping" Value="NoWrap" />
     </Style>
 
+    <Style TargetType="{x:Type CheckBox}">
+        <Setter Property="Foreground" Value="{DynamicResource InkBrush}" />
+        <Setter Property="FocusVisualStyle" Value="{StaticResource FocusVisual}" />
+    </Style>
+
     <!-- Scroll bars -->
     <Style x:Key="EndfieldScrollThumb" TargetType="{x:Type Thumb}">
         <Setter Property="MinWidth" Value="8" />
@@ -845,28 +540,7 @@
                             Opacity="0.56" />
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Trigger.EnterActions>
-                                <BeginStoryboard HandoffBehavior="SnapshotAndReplace">
-                                    <Storyboard>
-                                        <DoubleAnimation Storyboard.TargetName="ThumbChrome"
-                                                         Storyboard.TargetProperty="Opacity"
-                                                         To="0.86"
-                                                         Duration="0:0:0.18"
-                                                         EasingFunction="{StaticResource DirectEaseOut}" />
-                                    </Storyboard>
-                                </BeginStoryboard>
-                            </Trigger.EnterActions>
-                            <Trigger.ExitActions>
-                                <BeginStoryboard HandoffBehavior="SnapshotAndReplace">
-                                    <Storyboard>
-                                        <DoubleAnimation Storyboard.TargetName="ThumbChrome"
-                                                         Storyboard.TargetProperty="Opacity"
-                                                         To="0.56"
-                                                         Duration="0:0:0.22"
-                                                         EasingFunction="{StaticResource DirectEaseOut}" />
-                                    </Storyboard>
-                                </BeginStoryboard>
-                            </Trigger.ExitActions>
+                            <Setter TargetName="ThumbChrome" Property="Opacity" Value="0.86" />
                         </Trigger>
                         <Trigger Property="IsDragging" Value="True">
                             <Setter TargetName="ThumbChrome" Property="Opacity" Value="1" />
@@ -1140,7 +814,7 @@
     <Style TargetType="{x:Type ProgressBar}">
         <Setter Property="Height" Value="6" />
         <Setter Property="Foreground" Value="{DynamicResource SignalBrush}" />
-        <Setter Property="Background" Value="#38FFFFFF" />
+        <Setter Property="Background" Value="{DynamicResource Paper24Brush}" />
         <Setter Property="BorderThickness" Value="0" />
         <Setter Property="Template">
             <Setter.Value>

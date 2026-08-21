@@ -11,9 +11,10 @@
         WindowStartupLocation="CenterScreen"
         WindowStyle="None"
         ResizeMode="CanResize"
-        Background="#111111"
+        Background="{DynamicResource InkBrush}"
         SnapsToDevicePixels="True"
         UseLayoutRounding="True"
+        KeyboardNavigation.TabNavigation="Cycle"
         Loaded="Window_Loaded"
         SizeChanged="Window_SizeChanged">
     <WindowChrome.WindowChrome>
@@ -30,6 +31,7 @@
         <Style x:Key="ProblemFilterComboBoxItem" TargetType="{x:Type ComboBoxItem}">
             <Setter Property="Padding" Value="12,9" />
             <Setter Property="Foreground" Value="{DynamicResource InkBrush}" />
+            <Setter Property="FocusVisualStyle" Value="{StaticResource FocusVisual}" />
             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
             <Setter Property="Template">
                 <Setter.Value>
@@ -46,6 +48,7 @@
                             </Trigger>
                             <Trigger Property="IsSelected" Value="True">
                                 <Setter TargetName="ItemChrome" Property="Background" Value="{DynamicResource SignalBrush}" />
+                                <Setter Property="Foreground" Value="{DynamicResource SignalTextBrush}" />
                                 <Setter Property="FontWeight" Value="SemiBold" />
                             </Trigger>
                         </ControlTemplate.Triggers>
@@ -62,6 +65,7 @@
             <Setter Property="BorderBrush" Value="{DynamicResource BorderStrongBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="FontSize" Value="13" />
+            <Setter Property="FocusVisualStyle" Value="{StaticResource FocusVisual}" />
             <Setter Property="ItemContainerStyle" Value="{StaticResource ProblemFilterComboBoxItem}" />
             <Setter Property="Template">
                 <Setter.Value>
@@ -222,12 +226,12 @@
                                     VerticalAlignment="Top"
                                     HorizontalAlignment="Left"
                                     Panel.ZIndex="2"
-                                    Background="#D8191919"
+                                    Background="{DynamicResource OverlayBrush}"
                                     CornerRadius="0,0,12,0">
                                 <TextBlock VerticalAlignment="Center"
                                            FontFamily="Consolas"
                                            FontSize="11"
-                                           Foreground="White"
+                                           Foreground="{DynamicResource PaperBrush}"
                                            Text="{Binding WorkshopId, StringFormat=ID / {0}}" />
                             </Border>
 
@@ -254,13 +258,13 @@
                                                VerticalAlignment="Center"
                                                FontSize="12"
                                                FontWeight="Black"
-                                               Foreground="{DynamicResource InkBrush}"
+                                               Foreground="{DynamicResource SignalTextBrush}"
                                                Text="!" />
                                     <TextBlock VerticalAlignment="Center"
                                                FontFamily="Consolas"
                                                FontSize="10"
                                                FontWeight="Bold"
-                                               Foreground="{DynamicResource InkBrush}"
+                                               Foreground="{DynamicResource SignalTextBrush}"
                                                Text="{Binding WarningCount}" />
                                 </StackPanel>
                             </Border>
@@ -274,8 +278,8 @@
                                     ToolTip="{Binding PackageStatusDetail}">
                                 <Border.Style>
                                     <Style TargetType="Border">
-                                        <Setter Property="Background" Value="#DFF2F2F0" />
-                                        <Setter Property="BorderBrush" Value="#40191919" />
+                                        <Setter Property="Background" Value="{DynamicResource PaperBrush}" />
+                                        <Setter Property="BorderBrush" Value="{DynamicResource Ink42Brush}" />
                                         <Setter Property="BorderThickness" Value="1" />
                                         <Style.Triggers>
                                             <DataTrigger Binding="{Binding HasUnpackableContent}" Value="True">
@@ -286,17 +290,25 @@
                                     </Style>
                                 </Border.Style>
                                 <StackPanel Orientation="Horizontal">
+                                    <StackPanel.Style>
+                                        <Style TargetType="StackPanel">
+                                            <Setter Property="TextElement.Foreground" Value="{DynamicResource InkBrush}" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding HasUnpackableContent}" Value="True">
+                                                    <Setter Property="TextElement.Foreground" Value="{DynamicResource SignalTextBrush}" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </StackPanel.Style>
                                     <TextBlock Margin="0,0,6,0"
                                                VerticalAlignment="Center"
                                                FontFamily="Segoe Fluent Icons"
                                                FontSize="10"
-                                               Foreground="{DynamicResource InkBrush}"
                                                Text="&#xE7C5;" />
                                     <TextBlock VerticalAlignment="Center"
                                                FontFamily="Consolas"
                                                FontSize="10"
                                                FontWeight="Bold"
-                                               Foreground="{DynamicResource InkBrush}"
                                                Text="{Binding PackageStatus}" />
                                 </StackPanel>
                             </Border>
@@ -373,7 +385,7 @@
                                    VerticalAlignment="Center"
                                    FontFamily="Segoe Fluent Icons"
                                    FontSize="13"
-                                   Foreground="White"
+                                   Foreground="{DynamicResource PaperBrush}"
                                    Text="&#xE72A;" />
                     </Border>
                 </Grid>
@@ -382,7 +394,7 @@
     </Window.Resources>
 
     <Border x:Name="WindowFrame"
-            BorderBrush="#303030"
+            BorderBrush="{DynamicResource BorderStrongBrush}"
             BorderThickness="1"
             Background="{DynamicResource PaperBrush}"
             CornerRadius="16"
@@ -460,24 +472,24 @@
                             <TextBlock FontFamily="Arial Narrow"
                                        FontSize="17"
                                        FontWeight="Bold"
-                                       Foreground="White"
+                                       Foreground="{DynamicResource PaperBrush}"
                                        Text="WALLPAPER" />
                             <TextBlock Margin="0,1,0,0"
                                        Style="{StaticResource TechnicalLabel}"
-                                       Foreground="#A9FFFFFF"
+                                       Foreground="{DynamicResource TextOnDarkMutedBrush}"
                                        Text="FIELD / CATALOG" />
                         </StackPanel>
                     </Grid>
 
                     <Border Grid.Row="1"
                             Margin="0,4,0,18"
-                            BorderBrush="#36FFFFFF"
+                            BorderBrush="{DynamicResource Paper24Brush}"
                             BorderThickness="0,1,0,0" />
 
                     <StackPanel Grid.Row="2">
                         <TextBlock x:Name="NavSectionLabel"
                                    Margin="12,0,0,10"
-                                   Foreground="#7AFFFFFF"
+                                   Foreground="{DynamicResource TextOnDarkMutedBrush}"
                                    Text="OPERATIONS / 03">
                             <TextBlock.Style>
                                 <Style TargetType="TextBlock" BasedOn="{StaticResource TechnicalLabel}">
@@ -491,16 +503,18 @@
                             </TextBlock.Style>
                         </TextBlock>
 
-                        <Button Margin="0,0,0,8"
+                        <Button x:Name="ScanNavButton"
+                                Margin="0,0,0,8"
                                 Command="{Binding NavigateScanCommand}"
-                                ToolTip="扫描中心">
+                                ToolTip="扫描中心"
+                                AutomationProperties.Name="扫描中心">
                             <Button.Style>
                                 <Style TargetType="Button" BasedOn="{StaticResource NavButton}">
-                                    <Setter Property="Foreground" Value="#BFFFFFFF" />
+                                    <Setter Property="Foreground" Value="{DynamicResource TextOnDarkMutedBrush}" />
                                     <Style.Triggers>
                                         <DataTrigger Binding="{Binding IsScanPage}" Value="True">
                                             <Setter Property="Background" Value="{DynamicResource SignalBrush}" />
-                                            <Setter Property="Foreground" Value="{DynamicResource InkBrush}" />
+                                            <Setter Property="Foreground" Value="{DynamicResource SignalTextBrush}" />
                                         </DataTrigger>
                                     </Style.Triggers>
                                 </Style>
@@ -538,15 +552,17 @@
                             </Grid>
                         </Button>
 
-                        <Button Command="{Binding NavigateLibraryCommand}"
-                                ToolTip="输出库">
+                        <Button x:Name="LibraryNavButton"
+                                Command="{Binding NavigateLibraryCommand}"
+                                ToolTip="输出壁纸库"
+                                AutomationProperties.Name="输出壁纸库">
                             <Button.Style>
                                 <Style TargetType="Button" BasedOn="{StaticResource NavButton}">
-                                    <Setter Property="Foreground" Value="#BFFFFFFF" />
+                                    <Setter Property="Foreground" Value="{DynamicResource TextOnDarkMutedBrush}" />
                                     <Style.Triggers>
                                         <DataTrigger Binding="{Binding IsLibraryPage}" Value="True">
                                             <Setter Property="Background" Value="{DynamicResource SignalBrush}" />
-                                            <Setter Property="Foreground" Value="{DynamicResource InkBrush}" />
+                                            <Setter Property="Foreground" Value="{DynamicResource SignalTextBrush}" />
                                         </DataTrigger>
                                     </Style.Triggers>
                                 </Style>
@@ -591,11 +607,11 @@
                                 AutomationProperties.Name="问题中心">
                             <Button.Style>
                                 <Style TargetType="Button" BasedOn="{StaticResource NavButton}">
-                                    <Setter Property="Foreground" Value="#BFFFFFFF" />
+                                    <Setter Property="Foreground" Value="{DynamicResource TextOnDarkMutedBrush}" />
                                     <Style.Triggers>
                                         <DataTrigger Binding="{Binding IsProblemsPage}" Value="True">
                                             <Setter Property="Background" Value="{DynamicResource SignalBrush}" />
-                                            <Setter Property="Foreground" Value="{DynamicResource InkBrush}" />
+                                            <Setter Property="Foreground" Value="{DynamicResource SignalTextBrush}" />
                                         </DataTrigger>
                                     </Style.Triggers>
                                 </Style>
@@ -651,8 +667,8 @@
                             <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
                         <Border Padding="12"
-                                Background="#12FFFFFF"
-                                BorderBrush="#28FFFFFF"
+                                Background="{DynamicResource Paper08Brush}"
+                                BorderBrush="{DynamicResource Paper24Brush}"
                                 BorderThickness="1"
                                 CornerRadius="13">
                             <Grid>
@@ -679,12 +695,12 @@
                                         </Style>
                                     </StackPanel.Style>
                                     <TextBlock Style="{StaticResource TechnicalLabel}"
-                                               Foreground="#8DFFFFFF"
+                                               Foreground="{DynamicResource TextOnDarkMutedBrush}"
                                                Text="OUTPUT TARGET" />
                                     <TextBlock Margin="0,5,0,0"
                                                FontFamily="Consolas"
                                                FontSize="10"
-                                               Foreground="White"
+                                               Foreground="{DynamicResource PaperBrush}"
                                                Text="{Binding OutputPath, TargetNullValue=尚未选择}"
                                                TextTrimming="CharacterEllipsis"
                                                ToolTip="{Binding OutputPath}" />
@@ -696,7 +712,7 @@
                                    Margin="12,12,0,0"
                                    FontFamily="Consolas"
                                    FontSize="9"
-                                   Foreground="#63FFFFFF"
+                                   Foreground="{DynamicResource TextOnDarkMutedBrush}"
                                    Text="LOCAL-FIRST  ·  BACKEND READY">
                             <TextBlock.Style>
                                 <Style TargetType="TextBlock">
@@ -724,7 +740,7 @@
                 <Border Grid.Row="0"
                         BorderBrush="{DynamicResource BorderBrush}"
                         BorderThickness="0,0,0,1"
-                        Background="#ECF2F2F0"
+                        Background="{DynamicResource PaperBrush}"
                         MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
                     <Grid Margin="28,0,10,0">
                         <Grid.ColumnDefinitions>
@@ -781,7 +797,7 @@
                                     </Ellipse.Style>
                                 </Ellipse>
                                 <TextBlock Style="{StaticResource TechnicalLabel}"
-                                           Foreground="White"
+                                           Foreground="{DynamicResource PaperBrush}"
                                            Text="{Binding StateLabel}" />
                             </StackPanel>
                         </Border>
@@ -817,7 +833,7 @@
                                FontFamily="Arial Narrow"
                                FontSize="232"
                                FontWeight="Black"
-                               Foreground="#0C191919"
+                               Foreground="{DynamicResource Ink05Brush}"
                                Text="{Binding PageCode}" />
                     <Path Margin="0,0,-58,-72"
                           HorizontalAlignment="Right"
@@ -958,8 +974,10 @@
                                         <TextBlock Style="{StaticResource TechnicalLabel}"
                                                    Foreground="{DynamicResource TextMutedBrush}"
                                                    Text="FIELD INDEX / 01 · SOURCE INTAKE" />
-                                        <TextBlock Margin="0,8,0,0"
+                                        <TextBlock x:Name="ScanPageTitle"
+                                                   Margin="0,8,0,0"
                                                    Style="{StaticResource SectionTitle}"
+                                                   AutomationProperties.HeadingLevel="Level1"
                                                    Text="扫描壁纸项目" />
                                         <TextBlock x:Name="ScanDescription"
                                                    Margin="2,9,0,0"
@@ -1036,24 +1054,27 @@
                                                 <ColumnDefinition Width="112" />
                                             </Grid.ColumnDefinitions>
                                             <StackPanel VerticalAlignment="Center">
-                                                <TextBlock Style="{StaticResource TechnicalLabel}" Foreground="#8FFFFFFF" Text="SOURCE ROOT" />
-                                                <TextBlock Margin="0,4,0,0" FontSize="13" FontWeight="SemiBold" Foreground="White" Text="壁纸目录" />
+                                                <TextBlock Style="{StaticResource TechnicalLabel}" Foreground="{DynamicResource TextOnDarkMutedBrush}" Text="SOURCE ROOT" />
+                                                <TextBlock Margin="0,4,0,0" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource PaperBrush}" Text="壁纸目录" />
                                             </StackPanel>
-                                            <TextBox Grid.Column="1"
+                                            <TextBox x:Name="SourcePathTextBox"
+                                                     Grid.Column="1"
                                                      Margin="0,0,12,0"
                                                      Style="{StaticResource PathTextBox}"
                                                      AutomationProperties.Name="Wallpaper Engine 壁纸目录"
                                                      Text="{Binding SourcePath, UpdateSourceTrigger=PropertyChanged}"
                                                      ToolTip="例如 E:\SteamLibrary\steamapps\workshop\content\431960" />
-                                            <Button Grid.Column="2"
+                                            <Button x:Name="BrowseSourceButton"
+                                                    Grid.Column="2"
                                                     Style="{StaticResource GhostButton}"
-                                                    Foreground="White"
-                                                    BorderBrush="#66FFFFFF"
+                                                    Foreground="{DynamicResource PaperBrush}"
+                                                    BorderBrush="{DynamicResource Paper24Brush}"
                                                     Command="{Binding BrowseSourceCommand}"
+                                                    AutomationProperties.Name="选择 Wallpaper Engine 壁纸目录"
                                                     Content="选择目录" />
                                         </Grid>
 
-                                        <Border Grid.Row="1" Margin="0,17" Background="#27FFFFFF" />
+                                        <Border Grid.Row="1" Margin="0,17" Background="{DynamicResource Paper24Brush}" />
 
                                         <Grid Grid.Row="2" Margin="0,18,0,0">
                                             <Grid.ColumnDefinitions>
@@ -1062,20 +1083,23 @@
                                                 <ColumnDefinition Width="112" />
                                             </Grid.ColumnDefinitions>
                                             <StackPanel VerticalAlignment="Center">
-                                                <TextBlock Style="{StaticResource TechnicalLabel}" Foreground="#8FFFFFFF" Text="OUTPUT ROOT" />
-                                                <TextBlock Margin="0,4,0,0" FontSize="13" FontWeight="SemiBold" Foreground="White" Text="输出目录" />
+                                                <TextBlock Style="{StaticResource TechnicalLabel}" Foreground="{DynamicResource TextOnDarkMutedBrush}" Text="OUTPUT ROOT" />
+                                                <TextBlock Margin="0,4,0,0" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource PaperBrush}" Text="输出目录" />
                                             </StackPanel>
-                                            <TextBox Grid.Column="1"
+                                            <TextBox x:Name="OutputPathTextBox"
+                                                     Grid.Column="1"
                                                      Margin="0,0,12,0"
                                                      Style="{StaticResource PathTextBox}"
                                                      AutomationProperties.Name="扫描输出目录"
                                                      Text="{Binding OutputPath, UpdateSourceTrigger=PropertyChanged}"
                                                      ToolTip="扫描不会写入此目录；仅在解包选中项目时创建对应输出" />
-                                            <Button Grid.Column="2"
+                                            <Button x:Name="BrowseOutputButton"
+                                                    Grid.Column="2"
                                                     Style="{StaticResource GhostButton}"
-                                                    Foreground="White"
-                                                    BorderBrush="#66FFFFFF"
+                                                    Foreground="{DynamicResource PaperBrush}"
+                                                    BorderBrush="{DynamicResource Paper24Brush}"
                                                     Command="{Binding BrowseOutputCommand}"
+                                                    AutomationProperties.Name="选择扫描输出目录"
                                                     Content="选择目录" />
                                         </Grid>
 
@@ -1101,9 +1125,11 @@
                                                 <ColumnDefinition Width="Auto" />
                                                 <ColumnDefinition Width="*" />
                                             </Grid.ColumnDefinitions>
-                                            <Button MinWidth="168"
+                                            <Button x:Name="ScanButton"
+                                                    MinWidth="168"
                                                     Style="{StaticResource PrimaryButton}"
-                                                    Command="{Binding ScanCommand}">
+                                                    Command="{Binding ScanCommand}"
+                                                    AutomationProperties.Name="扫描壁纸项目">
                                                 <StackPanel Orientation="Horizontal">
                                                     <TextBlock Margin="0,0,9,0" FontFamily="Segoe Fluent Icons" Text="&#xE721;" />
                                                     <TextBlock Text="{Binding ScanButtonText}" />
@@ -1119,7 +1145,8 @@
                                                     Visibility="{Binding IsScanning, Converter={StaticResource BooleanToVisibilityConverter}}"
                                                     AutomationProperties.Name="取消扫描"
                                                     Content="取消扫描" />
-                                            <Button Grid.Column="1"
+                                            <Button x:Name="UnpackButton"
+                                                    Grid.Column="1"
                                                     MinWidth="152"
                                                     Margin="12,0,0,0"
                                                     Style="{StaticResource SecondaryButton}"
@@ -1168,7 +1195,7 @@
                                                                  Maximum="100"
                                                                  IsIndeterminate="{Binding IsProgressIndeterminate}"
                                                                  Value="{Binding ProgressValue, Mode=OneWay}" />
-                                                    <Border Height="1" VerticalAlignment="Bottom" Background="#35FFFFFF" />
+                                                    <Border Height="1" VerticalAlignment="Bottom" Background="{DynamicResource Paper24Brush}" />
                                                 </Grid>
                                                 <Grid Margin="0,8,0,0">
                                                     <Grid.ColumnDefinitions>
@@ -1179,21 +1206,21 @@
                                                     <TextBlock x:Name="UnpackStatusText"
                                                                Grid.Column="0"
                                                                Style="{StaticResource TechnicalLabel}"
-                                                               Foreground="#AFFFFFFF"
+                                                               Foreground="{DynamicResource TextOnDarkMutedBrush}"
                                                                Text="{Binding StatusText}"
                                                                TextTrimming="CharacterEllipsis" />
                                                     <TextBlock x:Name="UnpackStageText"
                                                                Grid.Column="1"
                                                                Margin="16,0,0,0"
                                                                Style="{StaticResource TechnicalLabel}"
-                                                               Foreground="#BFFFFFFF"
+                                                               Foreground="{DynamicResource TextOnDarkMutedBrush}"
                                                                Text="{Binding CurrentStage}" />
                                                     <TextBlock x:Name="UnpackWorkText"
                                                                Grid.Column="2"
                                                                Margin="16,0,0,0"
                                                                HorizontalAlignment="Right"
                                                                Style="{StaticResource TechnicalLabel}"
-                                                               Foreground="White"
+                                                               Foreground="{DynamicResource PaperBrush}"
                                                                Text="{Binding UnpackWorkText}" />
                                                 </Grid>
                                             </StackPanel>
@@ -1217,7 +1244,7 @@
                                             <ColumnDefinition Width="Auto" />
                                         </Grid.ColumnDefinitions>
                                         <Border Width="24" Height="24" Background="{DynamicResource SignalBrush}" CornerRadius="8">
-                                            <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" FontWeight="Black" Text="!" />
+                                            <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" FontWeight="Black" Foreground="{DynamicResource SignalTextBrush}" Text="!" />
                                         </Border>
                                         <StackPanel Grid.Column="1" Margin="0,0,14,0">
                                             <TextBlock Style="{StaticResource TechnicalLabel}" Text="PROBLEM SUMMARY / 扫描与解包" />
@@ -1411,8 +1438,8 @@
                                                                             <Border x:Name="SelectionBox"
                                                                                     Width="38"
                                                                                     Height="38"
-                                                                                    Background="#FFF2F2F0"
-                                                                                    BorderBrush="#99191919"
+                                                                                    Background="{DynamicResource PaperBrush}"
+                                                                                    BorderBrush="{DynamicResource Ink42Brush}"
                                                                                     BorderThickness="2"
                                                                                     CornerRadius="10">
                                                                                 <TextBlock x:Name="SelectionGlyph"
@@ -1421,13 +1448,13 @@
                                                                                            FontFamily="Segoe UI Symbol"
                                                                                            FontSize="17"
                                                                                            FontWeight="Bold"
-                                                                                           Foreground="#FF191919"
+                                                                                           Foreground="{DynamicResource SignalTextBrush}"
                                                                                            Text="✓"
                                                                                            Visibility="Collapsed" />
                                                                             </Border>
                                                                             <ControlTemplate.Triggers>
                                                                                 <Trigger Property="IsMouseOver" Value="True">
-                                                                                    <Setter TargetName="SelectionBox" Property="BorderBrush" Value="#FF191919" />
+                                                                                    <Setter TargetName="SelectionBox" Property="BorderBrush" Value="{DynamicResource InkBrush}" />
                                                                                 </Trigger>
                                                                                 <Trigger Property="IsChecked" Value="True">
                                                                                     <Setter TargetName="SelectionBox" Property="Background" Value="{DynamicResource SignalBrush}" />
@@ -1455,7 +1482,7 @@
                                     </ListBox>
 
                                     <Border Padding="28"
-                                            Background="#A8F2F2F0"
+                                            Background="{DynamicResource PaperBrush}"
                                             BorderBrush="{DynamicResource BorderBrush}"
                                             BorderThickness="1"
                                             CornerRadius="16">
@@ -1518,8 +1545,10 @@
                                         <TextBlock Style="{StaticResource TechnicalLabel}"
                                                    Foreground="{DynamicResource TextMutedBrush}"
                                                    Text="LOCAL ARCHIVE / 02 · OUTPUT CATALOG" />
-                                        <TextBlock Margin="0,8,0,0"
+                                        <TextBlock x:Name="LibraryPageTitle"
+                                                   Margin="0,8,0,0"
                                                    Style="{StaticResource SectionTitle}"
+                                                   AutomationProperties.HeadingLevel="Level1"
                                                    Text="输出壁纸库" />
                                         <TextBlock x:Name="LibraryDescription"
                                                    Margin="2,9,0,0"
@@ -1563,7 +1592,8 @@
                                         <Button x:Name="RefreshLibraryButton"
                                                 MinWidth="144"
                                                 Style="{StaticResource SecondaryButton}"
-                                                Command="{Binding RefreshLibraryCommand}">
+                                                Command="{Binding RefreshLibraryCommand}"
+                                                AutomationProperties.Name="刷新输出壁纸库">
                                             <StackPanel Orientation="Horizontal">
                                                 <TextBlock Margin="0,0,8,0" FontFamily="Segoe Fluent Icons" Text="&#xE72C;" />
                                                 <TextBlock Text="刷新输出库" />
@@ -1593,17 +1623,17 @@
                                             <ColumnDefinition Width="Auto" />
                                         </Grid.ColumnDefinitions>
                                         <Border Width="34" Height="34" Background="{DynamicResource SignalBrush}" CornerRadius="11">
-                                            <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" FontFamily="Segoe Fluent Icons" FontSize="14" Foreground="{DynamicResource InkBrush}" Text="&#xE8B7;" />
+                                            <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" FontFamily="Segoe Fluent Icons" FontSize="14" Foreground="{DynamicResource SignalTextBrush}" Text="&#xE8B7;" />
                                         </Border>
                                         <StackPanel Grid.Column="1" Margin="13,0,18,0" VerticalAlignment="Center">
-                                            <TextBlock Style="{StaticResource TechnicalLabel}" Foreground="#83FFFFFF" Text="ACTIVE OUTPUT ROOT" />
-                                            <TextBlock Margin="0,3,0,0" FontFamily="Consolas" FontSize="11" Foreground="White" Text="{Binding OutputPath}" TextTrimming="CharacterEllipsis" ToolTip="{Binding OutputPath}" />
+                                            <TextBlock Style="{StaticResource TechnicalLabel}" Foreground="{DynamicResource TextOnDarkMutedBrush}" Text="ACTIVE OUTPUT ROOT" />
+                                            <TextBlock Margin="0,3,0,0" FontFamily="Consolas" FontSize="11" Foreground="{DynamicResource PaperBrush}" Text="{Binding OutputPath}" TextTrimming="CharacterEllipsis" ToolTip="{Binding OutputPath}" />
                                         </StackPanel>
                                         <Button Grid.Column="2"
                                                 MinWidth="116"
                                                 Style="{StaticResource GhostButton}"
-                                                Foreground="White"
-                                                BorderBrush="#66FFFFFF"
+                                                Foreground="{DynamicResource PaperBrush}"
+                                                BorderBrush="{DynamicResource Paper24Brush}"
                                                 Command="{Binding BrowseOutputCommand}"
                                                 Content="更换目录" />
                                     </Grid>
@@ -1625,7 +1655,7 @@
                                             <ColumnDefinition Width="Auto" />
                                         </Grid.ColumnDefinitions>
                                         <Border Width="24" Height="24" Background="{DynamicResource SignalBrush}" CornerRadius="8">
-                                            <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" FontWeight="Black" Text="!" />
+                                            <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" FontWeight="Black" Foreground="{DynamicResource SignalTextBrush}" Text="!" />
                                         </Border>
                                         <StackPanel Grid.Column="1" Margin="0,0,14,0">
                                             <TextBlock Style="{StaticResource TechnicalLabel}" Text="PROBLEM SUMMARY / 输出图库" />
@@ -1816,7 +1846,7 @@
                                     </ListBox>
 
                                     <Border Padding="34"
-                                            Background="#B6F2F2F0"
+                                            Background="{DynamicResource PaperBrush}"
                                             BorderBrush="{DynamicResource BorderBrush}"
                                             BorderThickness="1"
                                             CornerRadius="16">
@@ -1879,8 +1909,10 @@
                                     <TextBlock Style="{StaticResource TechnicalLabel}"
                                                Foreground="{DynamicResource TextMutedBrush}"
                                                Text="DIAGNOSTICS / 03 · PROBLEM CENTER" />
-                                    <TextBlock Margin="0,8,0,0"
+                                    <TextBlock x:Name="ProblemsPageTitle"
+                                               Margin="0,8,0,0"
                                                Style="{StaticResource SectionTitle}"
+                                               AutomationProperties.HeadingLevel="Level1"
                                                Text="问题中心" />
                                     <TextBlock x:Name="ProblemsDescription"
                                                Margin="2,9,0,0"
@@ -2005,7 +2037,8 @@
                                                 <TextBlock FontFamily="Segoe Fluent Icons" Text="&#xE711;" />
                                             </Button>
                                         </Grid>
-                                        <ComboBox Grid.Column="1"
+                                        <ComboBox x:Name="ProblemSeverityComboBox"
+                                                  Grid.Column="1"
                                                   Width="154"
                                                   Height="46"
                                                   Margin="12,0,0,0"
@@ -2018,7 +2051,8 @@
                                             <ComboBoxItem Tag="Warning" Content="警告" />
                                             <ComboBoxItem Tag="Information" Content="信息" />
                                         </ComboBox>
-                                        <ComboBox Grid.Column="2"
+                                        <ComboBox x:Name="ProblemSourceComboBox"
+                                                  Grid.Column="2"
                                                   Width="166"
                                                   Height="46"
                                                   Margin="12,0,0,0"
@@ -2115,6 +2149,7 @@
                                             <Setter Property="Padding" Value="0" />
                                             <Setter Property="Margin" Value="0" />
                                             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                            <Setter Property="FocusVisualStyle" Value="{StaticResource FocusVisual}" />
                                         </Style>
                                     </ListBox.ItemContainerStyle>
                                     <ListBox.ItemsPanel>
@@ -2319,7 +2354,7 @@
                                 </ListBox>
 
                                 <Border Padding="32"
-                                        Background="#B6F2F2F0"
+                                        Background="{DynamicResource PaperBrush}"
                                         BorderBrush="{DynamicResource BorderBrush}"
                                         BorderThickness="1"
                                         CornerRadius="16">
@@ -2368,20 +2403,20 @@
                         </Grid.ColumnDefinitions>
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                             <Border Width="5" Height="5" Margin="0,0,8,0" Background="{DynamicResource SignalBrush}" CornerRadius="3" />
-                            <TextBlock Style="{StaticResource TechnicalLabel}" Foreground="#BFFFFFFF" Text="{Binding StatusText}" TextTrimming="CharacterEllipsis" />
+                            <TextBlock Style="{StaticResource TechnicalLabel}" Foreground="{DynamicResource TextOnDarkMutedBrush}" Text="{Binding StatusText}" TextTrimming="CharacterEllipsis" />
                         </StackPanel>
                         <TextBlock Grid.Column="1"
                                    Margin="18,0"
                                    VerticalAlignment="Center"
                                    FontFamily="Consolas"
                                    FontSize="9"
-                                   Foreground="#6FFFFFFF"
+                                   Foreground="{DynamicResource TextOnDarkMutedBrush}"
                                    Text="{Binding OutputPath}"
                                    TextTrimming="CharacterEllipsis" />
                         <TextBlock Grid.Column="2"
                                    VerticalAlignment="Center"
                                    Style="{StaticResource TechnicalLabel}"
-                                   Foreground="#8FFFFFFF"
+                                   Foreground="{DynamicResource TextOnDarkMutedBrush}"
                                    Text="WALLPAPER FIELD · LOCAL" />
                     </Grid>
                 </Border>
