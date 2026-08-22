@@ -335,7 +335,8 @@ internal static class SelectionEfficiencyRegressionTests
 
     private static void VerifyDensityXamlContract(Action<bool, string> assert)
     {
-        var window = XDocument.Load(FindRepositoryFile("MainWindow.xaml"));
+        var domainTheme = XDocument.Load(
+            FindRepositoryFile(Path.Combine("Themes", "DomainComponents.xaml")));
         var scanPage = XDocument.Load(
             FindRepositoryFile(Path.Combine("Views", "ScanPageView.xaml")));
         foreach (var name in new[]
@@ -352,7 +353,7 @@ internal static class SelectionEfficiencyRegressionTests
                 $"The scan efficiency surface is missing {name}.");
         }
 
-        var densityTrigger = window.Descendants().FirstOrDefault(element =>
+        var densityTrigger = domainTheme.Descendants().FirstOrDefault(element =>
             element.Name.LocalName == "DataTrigger"
             && (Attribute(element, "Binding")?.Contains("Density", StringComparison.Ordinal) ?? false)
             && Attribute(element, "Value") == "Compact");
@@ -360,7 +361,7 @@ internal static class SelectionEfficiencyRegressionTests
             "The shared wallpaper card template has no Compact density trigger.");
 
         var theme = XDocument.Load(
-            FindRepositoryFile(Path.Combine("Themes", "EndfieldTheme.xaml")));
+            FindRepositoryFile(Path.Combine("Themes", "Tokens.xaml")));
         foreach (var key in new[]
                  {
                      "ComfortableCardHeight",

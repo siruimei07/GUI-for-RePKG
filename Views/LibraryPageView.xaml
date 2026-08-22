@@ -4,9 +4,7 @@
              xmlns:local="clr-namespace:WallpaperField"
              SnapsToDevicePixels="True"
              UseLayoutRounding="True">
-    <UserControl.Resources>
-        <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
-    </UserControl.Resources>
+
     <Grid>
         <!-- Library mode replaces the route with an indexed media aperture. -->
         <Canvas x:Name="LibraryStageOverlay"

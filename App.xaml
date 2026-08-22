@@ -6,7 +6,10 @@
     <Application.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
-                <ResourceDictionary Source="Themes/EndfieldTheme.xaml" />
+                <ResourceDictionary Source="Themes/Tokens.xaml" />
+                <ResourceDictionary Source="Themes/AccessibilityMotion.xaml" />
+                <ResourceDictionary Source="Themes/BaseControls.xaml" />
+                <ResourceDictionary Source="Themes/DomainComponents.xaml" />
             </ResourceDictionary.MergedDictionaries>
         </ResourceDictionary>
     </Application.Resources>

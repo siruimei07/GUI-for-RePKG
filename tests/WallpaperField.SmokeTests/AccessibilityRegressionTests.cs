@@ -17,6 +17,7 @@ internal static class AccessibilityRegressionTests
     {
         VerifyMotionContract(assert);
         VerifySemanticXaml(assert);
+        VerifyLayeredThemeContract(assert);
         VerifyAccessibleTheme(assert);
     }
 
@@ -53,6 +54,7 @@ internal static class AccessibilityRegressionTests
         }
 
         VerifyKeyboardAccess(window, assert);
+        VerifyLayeredThemeResourcesAtRuntime(assert);
 
         window.SetReducedMotion(true);
         Invoke(window, "StartAmbientMotion");
@@ -259,10 +261,10 @@ internal static class AccessibilityRegressionTests
 
     private static void VerifyAccessibleTheme(Action<bool, string> assert)
     {
-        var theme = XDocument.Load(
-            FindRepositoryFile(Path.Combine("Themes", "EndfieldTheme.xaml")),
-            LoadOptions.PreserveWhitespace);
-        var focusStyle = theme.Descendants().FirstOrDefault(element =>
+        var themes = LoadThemeLayerDocuments();
+        var tokens = themes[0];
+        var accessibilityMotion = themes[1];
+        var focusStyle = accessibilityMotion.Descendants().FirstOrDefault(element =>
             element.Name.LocalName == "Style"
             && Attribute(element, "Key") == "FocusVisual");
         var focusBrushes = focusStyle?.Descendants()
@@ -274,7 +276,7 @@ internal static class AccessibilityRegressionTests
                && focusBrushes.Contains("{DynamicResource FocusInnerBrush}", StringComparer.Ordinal),
             "FocusVisual does not expose the approved dark outer + signal inner rings.");
 
-        var systemColorReferences = theme.Descendants()
+        var systemColorReferences = accessibilityMotion.Descendants()
             .SelectMany(element => element.Attributes())
             .Select(attribute => attribute.Value)
             .Where(value => value.Contains("SystemColors.", StringComparison.Ordinal))
@@ -293,11 +295,11 @@ internal static class AccessibilityRegressionTests
                 $"The theme has no DynamicResource reference to SystemColors.{key}.");
         }
 
-        assert(!theme.Descendants().Any(element =>
+        assert(!themes.SelectMany(theme => theme.Descendants()).Any(element =>
                 element.Name.LocalName == "BeginStoryboard"),
             "High-frequency control templates still contain independent storyboards.");
 
-        var colors = theme.Root?.Elements()
+        var colors = tokens.Root?.Elements()
             .Where(element => element.Name.LocalName == "Color")
             .ToDictionary(
                 element => Attribute(element, "Key") ?? string.Empty,
@@ -313,6 +315,245 @@ internal static class AccessibilityRegressionTests
                && ContrastRatio(ink, signal) >= 3
                && ContrastRatio(signal, ink) >= 3,
             "The dual focus colors do not keep at least one 3:1 ring on dark, paper, white, and signal surfaces.");
+    }
+
+    private static void VerifyLayeredThemeContract(Action<bool, string> assert)
+    {
+        var themePath = FindRepositoryFile(Path.Combine("Themes", "EndfieldTheme.xaml"));
+        var themeDirectory = Path.GetDirectoryName(themePath)
+            ?? throw new InvalidDataException("The theme path has no parent directory.");
+        var layerFiles = new[]
+        {
+            "Tokens.xaml",
+            "AccessibilityMotion.xaml",
+            "BaseControls.xaml",
+            "DomainComponents.xaml"
+        };
+        foreach (var layerFile in layerFiles)
+        {
+            assert(File.Exists(Path.Combine(themeDirectory, layerFile)),
+                $"Theme layer Themes/{layerFile} is missing.");
+        }
+
+        var app = XDocument.Load(
+            FindRepositoryFile("App.xaml"),
+            LoadOptions.PreserveWhitespace);
+        var compatibilityTheme = XDocument.Load(themePath, LoadOptions.PreserveWhitespace);
+        var expectedAppSources = layerFiles.Select(file => $"Themes/{file}").ToArray();
+        assert(ReadMergedDictionarySources(app).SequenceEqual(expectedAppSources),
+            "App.xaml does not merge the four theme layers in the approved order.");
+        assert(ReadMergedDictionarySources(compatibilityTheme).SequenceEqual(layerFiles),
+            "EndfieldTheme.xaml is not an ordered compatibility-only theme entry.");
+        assert(!compatibilityTheme.Root!.Elements().Any(element =>
+                element.Name.LocalName != "ResourceDictionary.MergedDictionaries"),
+            "EndfieldTheme.xaml still owns resources outside its compatibility merge list.");
+
+        var themes = LoadThemeLayerDocuments();
+        var expectedOwnership = new Dictionary<int, string[]>
+        {
+            [0] =
+            [
+                "InkColor",
+                "PaperColor",
+                "SignalColor",
+                "InkBrush",
+                "PaperBrush",
+                "SignalBrush",
+                "FocusOuterBrush",
+                "FocusInnerBrush",
+                "EngineeringGridBrush",
+                "ComfortableCardHeight"
+            ],
+            [1] =
+            [
+                "HighContrastWindowBrush",
+                "HighContrastWindowTextBrush",
+                "HighContrastHighlightBrush",
+                "HighContrastHighlightTextBrush",
+                "HighContrastDisabledBrush",
+                "FocusVisual"
+            ],
+            [2] =
+            [
+                "BooleanToVisibilityConverter",
+                "RoundedButtonTemplate",
+                "EndfieldButtonBase",
+                "PrimaryButton",
+                "FilterToggleButton",
+                "SearchTextBox",
+                "EndfieldScrollThumb",
+                "VerticalScrollBarTemplate"
+            ],
+            [3] =
+            [
+                "NavButton",
+                "CardButton",
+                "ProblemFilterComboBox",
+                "WallpaperCardTemplate",
+                "LightPanel",
+                "StatusPill",
+                "TechnicalLabel",
+                "SectionTitle"
+            ]
+        };
+        var owners = new Dictionary<string, string>(StringComparer.Ordinal);
+        for (var layerIndex = 0; layerIndex < themes.Length; layerIndex++)
+        {
+            var layer = themes[layerIndex];
+            var layerKeys = ReadTopLevelResourceIdentities(layer).ToArray();
+            foreach (var expectedKey in expectedOwnership[layerIndex])
+            {
+                assert(layerKeys.Contains(expectedKey, StringComparer.Ordinal),
+                    $"Theme layer {layerFiles[layerIndex]} does not own {expectedKey}.");
+            }
+
+            foreach (var key in layerKeys)
+            {
+                assert(owners.TryAdd(key, layerFiles[layerIndex]),
+                    $"Theme resource {key} is duplicated by {owners.GetValueOrDefault(key)} and {layerFiles[layerIndex]}.");
+            }
+        }
+
+        for (var layerIndex = 0; layerIndex < themes.Length; layerIndex++)
+        {
+            foreach (var reference in themes[layerIndex].Descendants()
+                         .SelectMany(element => element.Attributes())
+                         .Select(attribute => attribute.Value)
+                         .Where(value => value.StartsWith("{StaticResource ", StringComparison.Ordinal)))
+            {
+                var referencedKey = reference[16..^1];
+                var identity = referencedKey.StartsWith("{x:Type ", StringComparison.Ordinal)
+                    ? $"implicit-style:{referencedKey}"
+                    : referencedKey;
+                assert(owners.TryGetValue(identity, out var owner)
+                       && string.Equals(owner, layerFiles[layerIndex], StringComparison.Ordinal),
+                    $"Theme layer {layerFiles[layerIndex]} captures cross-layer StaticResource {referencedKey} from {owner ?? "an unknown owner"}.");
+            }
+        }
+
+        foreach (var theme in themes.Skip(1))
+        {
+            var staticBrushReference = theme.Descendants()
+                .SelectMany(element => element.Attributes())
+                .Select(attribute => attribute.Value)
+                .FirstOrDefault(value =>
+                    value.StartsWith("{StaticResource ", StringComparison.Ordinal)
+                    && value.Contains("Brush}", StringComparison.Ordinal));
+            assert(staticBrushReference is null,
+                $"An overridable palette brush is statically captured by {staticBrushReference}.");
+        }
+
+        var localResourceDocuments = new[]
+        {
+            "MainWindow.xaml",
+            Path.Combine("Views", "ScanPageView.xaml"),
+            Path.Combine("Views", "LibraryPageView.xaml"),
+            Path.Combine("Views", "ProblemCenterView.xaml")
+        }.Select(path => XDocument.Load(
+            FindRepositoryFile(path),
+            LoadOptions.PreserveWhitespace));
+        foreach (var localKey in new[]
+                 {
+                     "BooleanToVisibilityConverter",
+                     "ProblemFilterComboBoxItem",
+                     "ProblemFilterComboBox",
+                     "EngineeringGridBrush",
+                     "WallpaperCardTemplate"
+                 })
+        {
+            assert(!localResourceDocuments.Any(document => document.Descendants().Any(element =>
+                    Attribute(element, "Key") == localKey)),
+                $"Theme resource {localKey} still has a window/page-local owner.");
+        }
+    }
+
+    private static void VerifyLayeredThemeResourcesAtRuntime(Action<bool, string> assert)
+    {
+        var resources = Application.Current.Resources;
+        var mergedNames = ReadRuntimeMergedDictionaryNames(resources);
+        assert(mergedNames.SequenceEqual(new[]
+               {
+                   "Tokens.xaml",
+                   "AccessibilityMotion.xaml",
+                   "BaseControls.xaml",
+                   "DomainComponents.xaml"
+               }),
+            "The live application did not load the four theme layers in order.");
+        foreach (var key in new[]
+                 {
+                     "InkBrush",
+                     "FocusVisual",
+                     "PrimaryButton",
+                     "NavButton",
+                     "WallpaperCardTemplate",
+                     "ProblemFilterComboBox"
+                 })
+        {
+            assert(resources.Contains(key),
+                $"The live application could not resolve theme resource {key}.");
+        }
+
+        var compatibilityTheme = new ResourceDictionary
+        {
+            Source = new Uri(
+                "/WallpaperField;component/Themes/EndfieldTheme.xaml",
+                UriKind.Relative)
+        };
+        assert(ReadRuntimeMergedDictionaryNames(compatibilityTheme).SequenceEqual(new[]
+               {
+                   "Tokens.xaml",
+                   "AccessibilityMotion.xaml",
+                   "BaseControls.xaml",
+                   "DomainComponents.xaml"
+               }),
+            "The compatibility theme did not load its four runtime layers in order.");
+        foreach (var key in new[] { "InkBrush", "FocusVisual", "PrimaryButton", "WallpaperCardTemplate" })
+        {
+            assert(compatibilityTheme.Contains(key),
+                $"The compatibility theme could not resolve theme resource {key}.");
+        }
+    }
+
+    private static string[] ReadRuntimeMergedDictionaryNames(ResourceDictionary resources)
+        => resources.MergedDictionaries
+            .Select(dictionary => Path.GetFileName(dictionary.Source?.OriginalString) ?? string.Empty)
+            .ToArray();
+
+    private static XDocument[] LoadThemeLayerDocuments()
+        => new[]
+        {
+            "Tokens.xaml",
+            "AccessibilityMotion.xaml",
+            "BaseControls.xaml",
+            "DomainComponents.xaml"
+        }.Select(file => XDocument.Load(
+            FindRepositoryFile(Path.Combine("Themes", file)),
+            LoadOptions.PreserveWhitespace)).ToArray();
+
+    private static IEnumerable<string> ReadMergedDictionarySources(XDocument document)
+        => document.Descendants()
+            .Where(element => element.Name.LocalName == "ResourceDictionary")
+            .Select(element => Attribute(element, "Source"))
+            .Where(source => source is not null)
+            .Select(source => source!.Replace('\\', '/'));
+
+    private static IEnumerable<string> ReadTopLevelResourceIdentities(XDocument document)
+    {
+        foreach (var element in document.Root?.Elements() ?? [])
+        {
+            var key = Attribute(element, "Key");
+            if (!string.IsNullOrWhiteSpace(key))
+            {
+                yield return key;
+                continue;
+            }
+
+            if (element.Name.LocalName == "Style"
+                && Attribute(element, "TargetType") is { } targetType)
+            {
+                yield return $"implicit-style:{targetType}";
+            }
+        }
     }
 
     private static (byte Red, byte Green, byte Blue) ParseRgb(string text)

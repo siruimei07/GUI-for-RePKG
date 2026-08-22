@@ -335,12 +335,16 @@ internal static class UiStructureRegressionTests
         var problemDocument = XDocument.Load(
             FindRepositoryFile(Path.Combine("Views", "ProblemCenterView.xaml")),
             LoadOptions.PreserveWhitespace);
+        var domainThemeDocument = XDocument.Load(
+            FindRepositoryFile(Path.Combine("Themes", "DomainComponents.xaml")),
+            LoadOptions.PreserveWhitespace);
         var documents = new[]
         {
             mainDocument,
             scanDocument,
             libraryDocument,
-            problemDocument
+            problemDocument,
+            domainThemeDocument
         };
         XElement? FindAcrossPages(string name) => documents
             .Select(document => FindNamedElement(document, name))
