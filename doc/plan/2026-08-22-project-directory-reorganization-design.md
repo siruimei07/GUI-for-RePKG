@@ -1,6 +1,6 @@
 # Wallpaper Field v1.2.2 项目目录与文档整理设计
 
-- 状态：设计已在对话中分段批准，等待书面审阅
+- 状态：书面设计已获用户批准，等待实施
 - 日期：2026-08-22
 - 当前版本：v1.2.2
 - 基线提交：`5b2aefa9fa50b5b18708110f4f8402fc2ef125f8`
@@ -119,6 +119,8 @@ root/
 
 解决方案、SmokeTests、CI 和发布脚本统一引用新的项目路径。WPF `Source`、pack URI、测试 fixture 位置和发布许可来源都按调用关系更新，不用兼容软链接或保留旧目录副本。生成输出集中到忽略的 `output/`；项目文件仍保留对仓库 `temp/` 的防御性排除，避免未来显式 glob 将研究材料编译进产品。
 
+`dep/repkg/UPSTREAM-PATCHES.md` 随 vendored 树保持字节不变；其中记录的 v1.2.2 时代脚本路径属于历史实施证据，不作为当前命令。当前文档索引和扩展指南必须明确指向 `tool/verify-repkg-compile-surface.ps1`，避免把该历史路径误读为兼容入口。
+
 ## 5. 文档生命周期
 
 ### 5.1 当前入口
@@ -150,7 +152,7 @@ root/
 
 ## 6. 删除与失败处理
 
-删除只针对 `artifacts/`、根 `bin/`、根 `obj/` 和空 `Converters/`。执行前必须：
+删除只针对以下已经清点到的忽略项：根 `artifacts/`、根 `bin/`、根 `obj/`、空 `Converters/`，以及移动前位于 `tests/WallpaperField.SmokeTests/`、`ThirdParty/RePKG/Source/RePKG.Application/`、`ThirdParty/RePKG/Source/RePKG.Core/` 下的六个 `bin/`、`obj/` 构建目录。执行前必须：
 
 1. 分别解析每个目标的绝对路径；
 2. 确认目标严格位于仓库根之下且与批准名称完全一致；
@@ -158,7 +160,7 @@ root/
 4. 记录目录是否受 Git 跟踪以及删除前用途；
 5. 使用同一个 PowerShell 环境和 `-LiteralPath` 删除，不使用通配符或跨 shell 拼接。
 
-`bin/`、`obj/` 和旧 `artifacts/` 是可重新构建的生成内容，`Converters/` 为空；删除后不会提供逐文件恢复。若源提交仍可构建，可以重建相应输出。`GUI_for_RePKG.exe` 是用户已有修改，必须原样留在根目录；整个 `temp/` 不参与删除。
+上述 `bin/`、`obj/` 和旧 `artifacts/` 都是未受 Git 跟踪、可重新构建的生成内容，`Converters/` 为空；删除后不会提供逐文件恢复。若源提交仍可构建，可以在新 `output/` 结构中重建相应输出。`GUI_for_RePKG.exe` 是用户已有修改，必须原样留在根目录；整个 `temp/` 不参与删除。
 
 迁移按源码/项目、依赖、测试/工具、文档四个可核对批次执行。每批开始前读取任务计划，结束后检查 `git status`、目标存在性和旧路径残留。遇到目标冲突、来源缺失、用户并发改动重叠或行为测试回归时停止当前批次，记录证据并修正映射；不得通过删除冲突文件或回滚用户改动强行继续。
 
