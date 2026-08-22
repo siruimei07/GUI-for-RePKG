@@ -53,18 +53,26 @@ public sealed record WallpaperRecord
 
     public IReadOnlyList<string> Warnings { get; init; } = Array.Empty<string>();
 
+    /// <summary>
+    /// True when the scan or library load resolved an existing preview. This
+    /// transient snapshot keeps card and aggregate getters free of disk I/O.
+    /// </summary>
     [JsonIgnore]
-    public bool HasPreview => !string.IsNullOrWhiteSpace(PreviewPath) && File.Exists(PreviewPath);
+    public bool HasPreview { get; init; }
 
+    /// <summary>
+    /// Scan-time package fact. Current disk state is revalidated by unpacking.
+    /// </summary>
     [JsonIgnore]
     public bool IsScenePackageAvailable => HasScenePackage
-        && !string.IsNullOrWhiteSpace(ScenePackagePath)
-        && File.Exists(ScenePackagePath);
+        && !string.IsNullOrWhiteSpace(ScenePackagePath);
 
+    /// <summary>
+    /// Scan-time video fact. Current disk state is revalidated by unpacking.
+    /// </summary>
     [JsonIgnore]
     public bool IsVideoFileAvailable => HasVideoFile
-        && !string.IsNullOrWhiteSpace(VideoFilePath)
-        && File.Exists(VideoFilePath);
+        && !string.IsNullOrWhiteSpace(VideoFilePath);
 
     [JsonIgnore]
     public bool HasUnpackableContent => HasScenePackage || HasVideoFile;

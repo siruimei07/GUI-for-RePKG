@@ -1,8 +1,10 @@
+using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Threading;
 using System.Xml.Linq;
 using WallpaperField.Contracts;
 using WallpaperField.Models;
@@ -190,6 +192,7 @@ internal static class UiStructureRegressionTests
         Exception? failure = null;
         var thread = new Thread(() =>
         {
+            var launchStopwatch = Stopwatch.StartNew();
             WallpaperField.App? application = null;
             WallpaperField.MainWindow? window = null;
 
@@ -215,6 +218,10 @@ internal static class UiStructureRegressionTests
                 window.SetReducedMotion(true);
                 window.Show();
                 window.UpdateLayout();
+                window.Dispatcher.Invoke(
+                    () => { },
+                    DispatcherPriority.ApplicationIdle);
+                var hostFirstIdleMilliseconds = launchStopwatch.Elapsed.TotalMilliseconds;
                 TaskLifecycleRegressionTests.VerifyWindowCancelActions(window, assert);
                 UnpackLifecycleRegressionTests.VerifyWindowProgressBindings(window, assert);
                 window.DataContext = shell;
@@ -247,6 +254,11 @@ internal static class UiStructureRegressionTests
                 VerifyAlwaysAvailableActions(window, shell, assert);
 
                 VerifyLiveDiagnosticIdentity(window, assert);
+                PerformanceRegressionTests.VerifyWindow(
+                    window,
+                    shell,
+                    hostFirstIdleMilliseconds,
+                    assert);
                 assert(!bindingErrors.HasErrors,
                     $"The extracted pages emitted WPF binding errors: {bindingErrors.Summary}");
             }

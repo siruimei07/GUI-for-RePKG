@@ -156,13 +156,22 @@ public sealed class AnimatedPreviewImage : Image
         if (!IsLoaded
             || !IsVisible
             || !_isWithinViewport
-            || string.IsNullOrWhiteSpace(SourcePath)
-            || !File.Exists(SourcePath))
+            || string.IsNullOrWhiteSpace(SourcePath))
         {
             return;
         }
 
-        var path = Path.GetFullPath(SourcePath);
+        string path;
+        try
+        {
+            path = Path.GetFullPath(SourcePath);
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return;
+        }
+
         var animateGif = AnimationEnabled;
         var decodePixelWidth = DecodePixelWidth;
         var version = _loadVersion;
@@ -188,25 +197,12 @@ public sealed class AnimatedPreviewImage : Image
         MemoryStream? memory = null;
         try
         {
-            var fileLength = new FileInfo(path).Length;
-            if (fileLength <= 0 || fileLength > MaxGifFileBytes)
-            {
-                throw new InvalidDataException(
-                    $"GIF preview size must be between 1 byte and {MaxGifFileBytes / (1024 * 1024)} MiB.");
-            }
-
-            memory = new MemoryStream((int)fileLength);
-            await using (var source = new FileStream(
-                             path,
-                             FileMode.Open,
-                             FileAccess.Read,
-                             FileShare.ReadWrite | FileShare.Delete,
-                             GifCopyBufferSize,
-                             FileOptions.Asynchronous | FileOptions.SequentialScan))
-            {
-                await CopyGifToMemoryAsync(source, memory, cancellationToken)
-                    .ConfigureAwait(false);
-            }
+            // FileInfo and FileStream construction can block for remote or
+            // disappearing paths, so the whole GIF read starts off the UI thread.
+            memory = await Task.Run(
+                    () => ReadGifIntoMemoryAsync(path, cancellationToken),
+                    cancellationToken)
+                .ConfigureAwait(false);
 
             cancellationToken.ThrowIfCancellationRequested();
             ValidateGifEnvelope(memory);
@@ -235,6 +231,10 @@ public sealed class AnimatedPreviewImage : Image
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
         }
+        catch (Exception exception) when (
+            exception is FileNotFoundException or DirectoryNotFoundException)
+        {
+        }
         catch (Exception exception)
         {
             AppLog.Write($"GIF preview load failed for '{path}': {exception}");
@@ -260,6 +260,11 @@ public sealed class AnimatedPreviewImage : Image
                 .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return;
+        }
+        catch (Exception exception) when (
+            exception is FileNotFoundException or DirectoryNotFoundException)
         {
             return;
         }
@@ -334,6 +339,40 @@ public sealed class AnimatedPreviewImage : Image
             || (long)width * height > MaxGifCanvasPixels)
         {
             throw new InvalidDataException("GIF preview dimensions or signature are invalid.");
+        }
+    }
+
+    private static async Task<MemoryStream> ReadGifIntoMemoryAsync(
+        string path,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var fileLength = new FileInfo(path).Length;
+        if (fileLength <= 0 || fileLength > MaxGifFileBytes)
+        {
+            throw new InvalidDataException(
+                $"GIF preview size must be between 1 byte and {MaxGifFileBytes / (1024 * 1024)} MiB.");
+        }
+
+        var memory = new MemoryStream((int)fileLength);
+        try
+        {
+            await using var source = new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete,
+                GifCopyBufferSize,
+                FileOptions.Asynchronous | FileOptions.SequentialScan);
+            await CopyGifToMemoryAsync(source, memory, cancellationToken)
+                .ConfigureAwait(false);
+            memory.Position = 0;
+            return memory;
+        }
+        catch
+        {
+            memory.Dispose();
+            throw;
         }
     }
 

@@ -59,6 +59,7 @@ public sealed class WallpaperLibraryService : IWallpaperLibraryService
                     OutputDirectory = Path.GetFullPath(itemDirectory),
                     PreviewPath = previewPath,
                     PreviewFileName = previewPath is null ? null : Path.GetFileName(previewPath),
+                    HasPreview = previewPath is not null,
                     HasScenePackage = storedRecord.HasScenePackage || scenePackagePath is not null,
                     ScenePackagePath = scenePackagePath,
                     Warnings = storedRecord.Warnings ?? Array.Empty<string>()

@@ -1120,7 +1120,14 @@ public sealed class ShellViewModel : ObservableObject
            && OutputPathValidation.IsValid;
 
     private bool CanOpenFolder(object? parameter)
-        => ResolveFolder(parameter) is { Length: > 0 };
+        => parameter switch
+        {
+            string path => !string.IsNullOrWhiteSpace(path),
+            WallpaperCardViewModel card => !string.IsNullOrWhiteSpace(card.OutputFolder)
+                                       || !string.IsNullOrWhiteSpace(card.SourceFolder),
+            WallpaperRecord record => !string.IsNullOrWhiteSpace(record.OutputDirectory),
+            _ => !string.IsNullOrWhiteSpace(SelectedLibraryWallpaper?.OutputFolder)
+        };
 
     private void OpenFolder(object? parameter)
     {

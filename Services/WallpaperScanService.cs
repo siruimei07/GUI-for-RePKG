@@ -285,6 +285,7 @@ public sealed class WallpaperScanService : IWallpaperScanService
             PreviewFileName = candidate.PreviewSourcePath is null
                 ? null
                 : Path.GetFileName(candidate.PreviewSourcePath),
+            HasPreview = candidate.PreviewSourcePath is not null,
             HasScenePackage = candidate.ScenePackagePath is not null,
             ScenePackagePath = candidate.ScenePackagePath is null
                 ? null

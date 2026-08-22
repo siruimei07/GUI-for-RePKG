@@ -40,6 +40,7 @@ try
     await LibraryLifecycleRegressionTests.RunAsync(Assert);
     await InputValidationRegressionTests.RunAsync(Assert);
     await ProblemDiagnosticsRegressionTests.RunAsync(Assert);
+    PerformanceRegressionTests.RunModelBenchmarks(Assert);
     UiStructureRegressionTests.Run(Assert);
     AccessibilityRegressionTests.Run(Assert);
     await SelectionEfficiencyRegressionTests.RunAsync(Assert);
@@ -140,6 +141,8 @@ try
 
     Assert(!scanResult.Items.Single(item => item.WorkshopId == "404").HasPreview,
         "Missing preview was not reported.");
+    Assert(item101.HasPreview && item202.HasPreview,
+        "Scanning did not cache discovered preview availability in its snapshot.");
     Assert(scanResult.Items.Count(item => item.HasScenePackage) == 5,
         "scene.pkg eligibility was not captured during scanning.");
     Assert(!item202.HasUnpackableContent,
@@ -239,6 +242,8 @@ try
             libraryAfterPackages.Items.Single(item => item.WorkshopId == "101").PreviewPath,
             Path.Combine(sourceRoot, "101", "preview.PNG")),
         "The output library did not retain the source preview link.");
+    Assert(libraryAfterPackages.Items.Single(item => item.WorkshopId == "101").HasPreview,
+        "The output library did not cache resolved preview availability in its snapshot.");
 
     var legacyMetadataPath = Path.Combine(outputRoot, "101", "metadata.json");
     var legacyMetadata = JsonNode.Parse(await File.ReadAllTextAsync(legacyMetadataPath))?.AsObject()
@@ -528,6 +533,7 @@ try
 
     Assert(overlapRejected, "Overlapping source/output paths must be rejected.");
     UiStructureRegressionTests.VerifyWpfWindow(Assert);
+    PerformanceRegressionTests.VerifyFileSystemBoundaryContracts(Assert);
     Console.WriteLine("Wallpaper Field scan, library, safety, and RePKG unpack smoke tests passed.");
     Console.WriteLine(metrics.CreateSuccessSummary());
 }
