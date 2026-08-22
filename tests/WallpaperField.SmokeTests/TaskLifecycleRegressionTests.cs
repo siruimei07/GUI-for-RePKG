@@ -357,9 +357,9 @@ internal static class TaskLifecycleRegressionTests
             () => { },
             System.Windows.Threading.DispatcherPriority.DataBind);
 
-        var scanButton = window.FindName("CancelScanButton") as Button;
-        var unpackButton = window.FindName("CancelUnpackButton") as Button;
-        var libraryButton = window.FindName("CancelLibraryRefreshButton") as Button;
+        var scanButton = WpfElementFinder.FindByName<Button>(window, "CancelScanButton");
+        var unpackButton = WpfElementFinder.FindByName<Button>(window, "CancelUnpackButton");
+        var libraryButton = WpfElementFinder.FindByName<Button>(window, "CancelLibraryRefreshButton");
         var unpackCommand = typeof(ShellViewModel)
             .GetProperty("CancelUnpackCommand")
             ?.GetValue(shell);

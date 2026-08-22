@@ -515,25 +515,37 @@ internal static class UnpackLifecycleRegressionTests
         WallpaperField.MainWindow window,
         Action<bool, string> assert)
     {
-        var progressBar = window.FindName("UnpackProgressBar") as ProgressBar;
-        var stageText = window.FindName("UnpackStageText") as TextBlock;
-        var workText = window.FindName("UnpackWorkText") as TextBlock;
+        var progressBar = WpfElementFinder.FindByName<ProgressBar>(window, "UnpackProgressBar");
+        var stageText = WpfElementFinder.FindByName<TextBlock>(window, "UnpackStageText");
+        var workText = WpfElementFinder.FindByName<TextBlock>(window, "UnpackWorkText");
+        var unpackButton = WpfElementFinder.FindByName<Button>(window, "UnpackButton");
+        var buttonLabel = (unpackButton?.Content as Panel)?.Children
+            .OfType<TextBlock>()
+            .LastOrDefault();
         var indeterminateBinding = progressBar is null
             ? null
             : BindingOperations.GetBinding(progressBar, ProgressBar.IsIndeterminateProperty);
+        var valueBinding = progressBar is null
+            ? null
+            : BindingOperations.GetBinding(progressBar, ProgressBar.ValueProperty);
         var stageBinding = stageText is null
             ? null
             : BindingOperations.GetBinding(stageText, TextBlock.TextProperty);
         var workBinding = workText is null
             ? null
             : BindingOperations.GetBinding(workText, TextBlock.TextProperty);
+        var buttonLabelBinding = buttonLabel is null
+            ? null
+            : BindingOperations.GetBinding(buttonLabel, TextBlock.TextProperty);
 
         assert(progressBar is not null
                && stageText is not null
                && workText is not null
                && indeterminateBinding?.Path.Path == "IsProgressIndeterminate"
+               && valueBinding?.Path.Path == "ProgressValue"
                && stageBinding?.Path.Path == "CurrentStage"
                && workBinding?.Path.Path == "UnpackWorkText"
+               && buttonLabelBinding?.Path.Path == "UnpackButtonText"
                && Grid.GetColumn(stageText) != Grid.GetColumn(workText),
             "The visible unpack progress surface does not separate stage, workload, and indeterminate state.");
     }

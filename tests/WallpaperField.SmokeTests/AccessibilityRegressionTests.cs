@@ -31,7 +31,7 @@ internal static class AccessibilityRegressionTests
                      "ProblemsPageTitle"
                  })
         {
-            var title = window.FindName(titleName) as TextBlock;
+            var title = WpfElementFinder.FindByName<TextBlock>(window, titleName);
             assert(title is not null
                    && AutomationProperties.GetHeadingLevel(title) == AutomationHeadingLevel.Level1
                    && !title.Focusable,
@@ -46,7 +46,7 @@ internal static class AccessibilityRegressionTests
                      ("RefreshLibraryButton", "刷新输出壁纸库")
                  })
         {
-            var element = window.FindName(name) as FrameworkElement;
+            var element = WpfElementFinder.FindByName<FrameworkElement>(window, name);
             assert(element is not null
                    && AutomationProperties.GetName(element) == expected,
                 $"{name} lost its stable Chinese automation name.");
@@ -64,12 +64,12 @@ internal static class AccessibilityRegressionTests
                      "SignalBeacon",
                      "CalibrationInstrument",
                      "CalibrationRotation",
-                     "ScanView",
-                     "LibraryView",
-                     "ProblemsView"
+                     "ScanPage",
+                     "LibraryPage",
+                     "ProblemCenterPage"
                  })
         {
-            var target = window.FindName(name);
+            var target = WpfElementFinder.FindByName<DependencyObject>(window, name);
             var hasAnimatedProperties = target switch
             {
                 UIElement element => element.HasAnimatedProperties,
@@ -159,7 +159,7 @@ internal static class AccessibilityRegressionTests
             window.Dispatcher.Invoke(() => { }, DispatcherPriority.Input);
             foreach (var name in names)
             {
-                var control = window.FindName(name) as Control;
+                var control = WpfElementFinder.FindByName<Control>(window, name);
                 assert(control is { IsVisible: true, Focusable: true }
                        && KeyboardNavigation.GetIsTabStop(control),
                     $"{route} keyboard surface {name} is missing, hidden, or not in the Tab order.");
@@ -221,14 +221,14 @@ internal static class AccessibilityRegressionTests
 
     private static void VerifySemanticXaml(Action<bool, string> assert)
     {
-        var document = XDocument.Load(
+        var mainDocument = XDocument.Load(
             FindRepositoryFile("MainWindow.xaml"),
             LoadOptions.PreserveWhitespace);
-        foreach (var (header, title, expectedText) in new[]
+        foreach (var (document, header, title, expectedText) in new[]
                  {
-                     ("ScanPageHeader", "ScanPageTitle", "扫描壁纸项目"),
-                     ("LibraryPageHeader", "LibraryPageTitle", "输出壁纸库"),
-                     ("ProblemsPageHeader", "ProblemsPageTitle", "问题中心")
+                     (XDocument.Load(FindRepositoryFile(Path.Combine("Views", "ScanPageView.xaml"))), "ScanPageHeader", "ScanPageTitle", "扫描壁纸项目"),
+                     (XDocument.Load(FindRepositoryFile(Path.Combine("Views", "LibraryPageView.xaml"))), "LibraryPageHeader", "LibraryPageTitle", "输出壁纸库"),
+                     (XDocument.Load(FindRepositoryFile(Path.Combine("Views", "ProblemCenterView.xaml"))), "ProblemsPageHeader", "ProblemsPageTitle", "问题中心")
                  })
         {
             var headerElement = FindNamedElement(document, header);
@@ -248,7 +248,7 @@ internal static class AccessibilityRegressionTests
                      ("{Binding NavigateProblemsCommand}", "问题中心")
                  })
         {
-            var button = document.Descendants().FirstOrDefault(element =>
+            var button = mainDocument.Descendants().FirstOrDefault(element =>
                 element.Name.LocalName == "Button"
                 && Attribute(element, "Command") == command);
             assert(button is not null

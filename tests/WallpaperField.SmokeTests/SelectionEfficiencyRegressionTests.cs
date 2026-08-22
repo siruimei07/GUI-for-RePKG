@@ -50,7 +50,7 @@ internal static class SelectionEfficiencyRegressionTests
             () => { },
             System.Windows.Threading.DispatcherPriority.DataBind);
 
-        var list = window.FindName("ScanResultsList") as ListBox;
+        var list = WpfElementFinder.FindByName<ListBox>(window, "ScanResultsList");
         var container = list?.ItemContainerGenerator.ContainerFromIndex(0) as ListBoxItem;
         var card = FindVisualDescendant<Button>(container, candidate =>
             candidate.Name == "WallpaperCardButton");
@@ -58,7 +58,7 @@ internal static class SelectionEfficiencyRegressionTests
             candidate.Name == "CardTechnicalHeader");
         var emptyPreviewLabel = FindVisualDescendant<TextBlock>(container, candidate =>
             candidate.Name == "CardPreviewEmptyLabel");
-        var toolbar = window.FindName("ScanEfficiencyToolbar") as FrameworkElement;
+        var toolbar = WpfElementFinder.FindByName<FrameworkElement>(window, "ScanEfficiencyToolbar");
         var comfortableHeight = card?.ActualHeight ?? 0;
         assert(Math.Abs(comfortableHeight - 154d) < 0.5d
                && technicalHeader?.Visibility == Visibility.Visible
@@ -72,10 +72,13 @@ internal static class SelectionEfficiencyRegressionTests
             () => { },
             System.Windows.Threading.DispatcherPriority.DataBind);
         var compactHeight = card?.ActualHeight ?? 0;
-        var environmentFactory = typeof(WallpaperField.MainWindow).GetMethod(
+        var problemPage = WpfElementFinder.FindByName<WallpaperField.Views.ProblemCenterView>(
+            window,
+            "ProblemCenterPage");
+        var environmentFactory = typeof(WallpaperField.Views.ProblemCenterView).GetMethod(
             "CreateDiagnosticEnvironment",
             BindingFlags.Instance | BindingFlags.NonPublic);
-        var environment = environmentFactory?.Invoke(window, null) as DiagnosticEnvironment;
+        var environment = environmentFactory?.Invoke(problemPage, null) as DiagnosticEnvironment;
         assert(Math.Abs(compactHeight - 112d) < 0.5d
                && compactHeight <= comfortableHeight - 40d
                && technicalHeader?.Visibility == Visibility.Collapsed
@@ -98,7 +101,7 @@ internal static class SelectionEfficiencyRegressionTests
         window.Dispatcher.Invoke(
             () => { },
             System.Windows.Threading.DispatcherPriority.DataBind);
-        var toolbar = window.FindName("ScanEfficiencyToolbar") as FrameworkElement;
+        var toolbar = WpfElementFinder.FindByName<FrameworkElement>(window, "ScanEfficiencyToolbar");
         assert(toolbar is { IsVisible: true, ActualHeight: <= 40.5d },
             $"The efficiency toolbar wrapped or disappeared at {window.ActualWidth:N0} DIP "
             + $"(height {toolbar?.ActualHeight ?? 0:N1}).");
@@ -333,6 +336,8 @@ internal static class SelectionEfficiencyRegressionTests
     private static void VerifyDensityXamlContract(Action<bool, string> assert)
     {
         var window = XDocument.Load(FindRepositoryFile("MainWindow.xaml"));
+        var scanPage = XDocument.Load(
+            FindRepositoryFile(Path.Combine("Views", "ScanPageView.xaml")));
         foreach (var name in new[]
                  {
                      "OnlyProcessableFilter",
@@ -343,7 +348,7 @@ internal static class SelectionEfficiencyRegressionTests
                      "SelectionSummaryText"
                  })
         {
-            assert(FindNamedElement(window, name) is not null,
+            assert(FindNamedElement(scanPage, name) is not null,
                 $"The scan efficiency surface is missing {name}.");
         }
 

@@ -15,10 +15,111 @@ internal static class UiStructureRegressionTests
     internal static void Run(Action<bool, string> assert)
     {
         VerifyResponsiveContract(assert);
+        VerifyDeepPageBoundaries(assert);
         VerifyDiagnosticIdentityContract(assert);
         VerifyProblemProjection(assert);
         VerifyXamlStructure(assert);
         VerifyListPositioningStaysInternal(assert);
+    }
+
+    private static void VerifyDeepPageBoundaries(Action<bool, string> assert)
+    {
+        var assembly = typeof(WallpaperField.MainWindow).Assembly;
+        var contracts = new[]
+        {
+            new
+            {
+                TypeName = "WallpaperField.Views.ScanPageView",
+                FileName = "ScanPageView.xaml",
+                HostName = "ScanPage",
+                RootName = "ScanView",
+                HeaderName = "ScanPageHeader",
+                ActionName = "ScanActionPanel",
+                ListName = "ScanResultsList",
+                ItemsBinding = "{Binding ScanSession.FilteredScannedWallpapers}"
+            },
+            new
+            {
+                TypeName = "WallpaperField.Views.LibraryPageView",
+                FileName = "LibraryPageView.xaml",
+                HostName = "LibraryPage",
+                RootName = "LibraryView",
+                HeaderName = "LibraryPageHeader",
+                ActionName = "LibraryActionPanel",
+                ListName = "LibraryResultsList",
+                ItemsBinding = "{Binding LibrarySession.FilteredWallpapers}"
+            },
+            new
+            {
+                TypeName = "WallpaperField.Views.ProblemCenterView",
+                FileName = "ProblemCenterView.xaml",
+                HostName = "ProblemCenterPage",
+                RootName = "ProblemsView",
+                HeaderName = "ProblemsPageHeader",
+                ActionName = "ProblemsActionPanel",
+                ListName = "ProblemResultsList",
+                ItemsBinding = "{Binding ProblemCenterSession.FilteredIssues}"
+            }
+        };
+
+        var pageTypes = contracts
+            .Select(contract => assembly.GetType(contract.TypeName))
+            .ToArray();
+        for (var index = 0; index < contracts.Length; index++)
+        {
+            var pageType = pageTypes[index];
+            assert(pageType is { IsPublic: true, IsSealed: true }
+                   && typeof(UserControl).IsAssignableFrom(pageType),
+                $"{contracts[index].TypeName} is not a public sealed UserControl page boundary.");
+        }
+
+        if (pageTypes.Any(type => type is null))
+        {
+            return;
+        }
+
+        var mainDocument = XDocument.Load(
+            FindRepositoryFile("MainWindow.xaml"),
+            LoadOptions.PreserveWhitespace);
+        foreach (var contract in contracts)
+        {
+            var host = FindNamedElement(mainDocument, contract.HostName);
+            assert(host is not null
+                   && string.Equals(
+                       host.Name.LocalName,
+                       contract.TypeName[(contract.TypeName.LastIndexOf('.') + 1)..],
+                       StringComparison.Ordinal),
+                $"MainWindow does not host {contract.TypeName} as {contract.HostName}.");
+            assert(FindNamedElement(mainDocument, contract.ListName) is null
+                   && FindNamedElement(mainDocument, contract.HeaderName) is null
+                   && FindNamedElement(mainDocument, contract.ActionName) is null,
+                $"MainWindow still owns mutable page internals for {contract.TypeName}.");
+
+            var pagePath = FindRepositoryFile(Path.Combine("Views", contract.FileName));
+            var pageDocument = XDocument.Load(pagePath, LoadOptions.PreserveWhitespace);
+            var root = FindNamedElement(pageDocument, contract.RootName);
+            var header = FindNamedElement(pageDocument, contract.HeaderName);
+            var actions = FindNamedElement(pageDocument, contract.ActionName);
+            var list = FindNamedElement(pageDocument, contract.ListName);
+            assert(root is not null
+                   && header?.Ancestors().Contains(root) == true
+                   && actions?.Ancestors().Contains(root) == true
+                   && list?.Ancestors().Contains(root) == true,
+                $"{contract.TypeName} does not own its complete header/action/list layout.");
+            assert(list is not null
+                   && string.Equals(
+                       Attribute(list, "ItemsSource"),
+                       contract.ItemsBinding,
+                       StringComparison.Ordinal),
+                $"{contract.TypeName} does not bind its list directly to the corresponding session.");
+            assert(list is not null
+                   && !list.Ancestors().Any(element => element.Name.LocalName == "ScrollViewer")
+                   && Attribute(list, "VirtualizingPanel.IsVirtualizing") == "True"
+                   && Attribute(list, "VirtualizingPanel.VirtualizationMode") == "Recycling"
+                   && Attribute(list, "VirtualizingPanel.ScrollUnit") == "Pixel"
+                   && Attribute(list, "VirtualizingPanel.CacheLengthUnit") == "Page",
+                $"{contract.TypeName} lost its independent recycling list viewport.");
+        }
     }
 
     private static void VerifyProblemProjection(Action<bool, string> assert)
@@ -94,6 +195,7 @@ internal static class UiStructureRegressionTests
 
             try
             {
+                using var bindingErrors = new WpfBindingErrorCollector();
                 application = new WallpaperField.App
                 {
                     ShutdownMode = ShutdownMode.OnExplicitShutdown
@@ -145,6 +247,8 @@ internal static class UiStructureRegressionTests
                 VerifyAlwaysAvailableActions(window, shell, assert);
 
                 VerifyLiveDiagnosticIdentity(window, assert);
+                assert(!bindingErrors.HasErrors,
+                    $"The extracted pages emitted WPF binding errors: {bindingErrors.Summary}");
             }
             catch (Exception exception)
             {
@@ -211,18 +315,38 @@ internal static class UiStructureRegressionTests
     {
         assert(typeof(DiagnosticEnvironment).GetProperty("FileVersion") is not null,
             "DiagnosticEnvironment does not expose the file version required for support identity.");
-        assert(typeof(WallpaperField.MainWindow).GetMethod(
+        assert(typeof(WallpaperField.Views.ProblemCenterView).GetMethod(
                    "CreateDiagnosticEnvironment",
                    BindingFlags.Instance | BindingFlags.NonPublic) is not null,
-            "MainWindow has no single diagnostic-environment factory shared by the export action.");
+            "ProblemCenterView has no single diagnostic-environment factory shared by the export action.");
     }
 
     private static void VerifyXamlStructure(Action<bool, string> assert)
     {
-        var xamlPath = FindRepositoryFile("MainWindow.xaml");
-        var document = XDocument.Load(xamlPath, LoadOptions.PreserveWhitespace);
+        var mainDocument = XDocument.Load(
+            FindRepositoryFile("MainWindow.xaml"),
+            LoadOptions.PreserveWhitespace);
+        var scanDocument = XDocument.Load(
+            FindRepositoryFile(Path.Combine("Views", "ScanPageView.xaml")),
+            LoadOptions.PreserveWhitespace);
+        var libraryDocument = XDocument.Load(
+            FindRepositoryFile(Path.Combine("Views", "LibraryPageView.xaml")),
+            LoadOptions.PreserveWhitespace);
+        var problemDocument = XDocument.Load(
+            FindRepositoryFile(Path.Combine("Views", "ProblemCenterView.xaml")),
+            LoadOptions.PreserveWhitespace);
+        var documents = new[]
+        {
+            mainDocument,
+            scanDocument,
+            libraryDocument,
+            problemDocument
+        };
+        XElement? FindAcrossPages(string name) => documents
+            .Select(document => FindNamedElement(document, name))
+            .FirstOrDefault(element => element is not null);
 
-        var problemNavigation = FindNamedElement(document, "ProblemNavButton");
+        var problemNavigation = FindNamedElement(mainDocument, "ProblemNavButton");
         assert(problemNavigation?.Name.LocalName == "Button"
                && string.Equals(
                    Attribute(problemNavigation, "Command"),
@@ -230,9 +354,9 @@ internal static class UiStructureRegressionTests
                    StringComparison.Ordinal),
             "The problem center is not a persistent command-bound navigation item.");
 
-        var refresh = FindNamedElement(document, "RefreshLibraryButton");
-        var libraryStats = FindNamedElement(document, "LibraryStats");
-        var libraryActions = FindNamedElement(document, "LibraryActionPanel");
+        var refresh = FindNamedElement(libraryDocument, "RefreshLibraryButton");
+        var libraryStats = FindNamedElement(libraryDocument, "LibraryStats");
+        var libraryActions = FindNamedElement(libraryDocument, "LibraryActionPanel");
         assert(refresh is not null
                && libraryStats is not null
                && libraryActions is not null
@@ -250,16 +374,16 @@ internal static class UiStructureRegressionTests
                      "CancelUnpackButton"
                  })
         {
-            var action = FindNamedElement(document, actionName);
+            var action = FindAcrossPages(actionName);
             assert(action is not null && !HasResponsiveCollapse(action),
                 $"Responsive layout can still collapse required action {actionName}.");
         }
 
-        foreach (var (page, header, actions, list) in new[]
+        foreach (var (document, page, header, actions, list) in new[]
                  {
-                     ("ScanView", "ScanPageHeader", "ScanActionPanel", "ScanResultsList"),
-                     ("LibraryView", "LibraryPageHeader", "LibraryActionPanel", "LibraryResultsList"),
-                     ("ProblemsView", "ProblemsPageHeader", "ProblemsActionPanel", "ProblemResultsList")
+                     (scanDocument, "ScanView", "ScanPageHeader", "ScanActionPanel", "ScanResultsList"),
+                     (libraryDocument, "LibraryView", "LibraryPageHeader", "LibraryActionPanel", "LibraryResultsList"),
+                     (problemDocument, "ProblemsView", "ProblemsPageHeader", "ProblemsActionPanel", "ProblemResultsList")
                  })
         {
             var pageElement = FindNamedElement(document, page);
@@ -283,8 +407,8 @@ internal static class UiStructureRegressionTests
                 $"{list} lost the approved recycling/pixel/page-cache contract.");
         }
 
-        var progressText = FindNamedElement(document, "UnpackStatusText");
-        var progressNumber = FindNamedElement(document, "UnpackWorkText");
+        var progressText = FindNamedElement(scanDocument, "UnpackStatusText");
+        var progressNumber = FindNamedElement(scanDocument, "UnpackWorkText");
         assert(progressText is not null
                && progressNumber is not null
                && Attribute(progressText, "Grid.Column") is { } textColumn
@@ -292,13 +416,14 @@ internal static class UiStructureRegressionTests
                && !string.Equals(textColumn, numberColumn, StringComparison.Ordinal),
             "The 920 DIP progress text and numeric work value do not occupy distinct Grid columns.");
 
-        var popup = document.Descendants().FirstOrDefault(element =>
-            element.Name.LocalName == "Popup"
-            && HasName(element, "PART_Popup"));
+        var popup = documents
+            .SelectMany(document => document.Descendants())
+            .FirstOrDefault(element => element.Name.LocalName == "Popup"
+                && HasName(element, "PART_Popup"));
         assert(popup is not null && Attribute(popup, "PopupAnimation") == "None",
             "The new problem filter still animates even when reduced motion is requested.");
 
-        var rawEnumBindings = document.Descendants()
+        var rawEnumBindings = problemDocument.Descendants()
             .SelectMany(element => element.Attributes())
             .Where(attribute => attribute.Name.LocalName == "Text")
             .Select(attribute => attribute.Value)
@@ -311,9 +436,27 @@ internal static class UiStructureRegressionTests
 
     private static void VerifyListPositioningStaysInternal(Action<bool, string> assert)
     {
-        var code = File.ReadAllText(FindRepositoryFile("MainWindow.xaml.cs"));
-        assert(!code.Contains(".BringIntoView(", StringComparison.Ordinal),
+        var windowCode = File.ReadAllText(FindRepositoryFile("MainWindow.xaml.cs"));
+        var pageCode = string.Join(
+            Environment.NewLine,
+            new[]
+            {
+                "ScanPageView.xaml.cs",
+                "LibraryPageView.xaml.cs",
+                "ProblemCenterView.xaml.cs"
+            }.Select(fileName => File.ReadAllText(
+                FindRepositoryFile(Path.Combine("Views", fileName)))));
+        var positionerCode = File.ReadAllText(
+            FindRepositoryFile(Path.Combine("Views", "SnapshotListPositioner.cs")));
+        assert(!windowCode.Contains(".BringIntoView(", StringComparison.Ordinal)
+               && !pageCode.Contains(".BringIntoView(", StringComparison.Ordinal)
+               && !positionerCode.Contains(".BringIntoView(", StringComparison.Ordinal),
             "Programmatic list positioning still calls ancestor BringIntoView.");
+        assert(!windowCode.Contains("ResultsList", StringComparison.Ordinal)
+               && !windowCode.Contains("ProblemDetails_", StringComparison.Ordinal)
+               && pageCode.Split("PositionSnapshotAsync", StringSplitOptions.None).Length - 1 == 3
+               && positionerCode.Contains("list.ScrollIntoView", StringComparison.Ordinal),
+            "MainWindow still owns page list/detail state or a page lost internal list positioning.");
         foreach (var mutation in new[]
                  {
                      "ScanStats.Visibility =",
@@ -322,11 +465,11 @@ internal static class UiStructureRegressionTests
                      "LibraryResultsList.Height ="
                  })
         {
-            assert(!code.Contains(mutation, StringComparison.Ordinal),
+            assert(!windowCode.Contains(mutation, StringComparison.Ordinal),
                 $"Responsive code-behind still mutates an individual page control: {mutation}");
         }
 
-        assert(!code.Contains("诊断导出失败：{exception.Message}", StringComparison.Ordinal),
+        assert(!pageCode.Contains("诊断导出失败：{exception.Message}", StringComparison.Ordinal),
             "The diagnostic export modal still exposes raw exception text instead of the retained issue.");
     }
 
@@ -340,8 +483,8 @@ internal static class UiStructureRegressionTests
     {
         shell.NavigateTo(route);
         window.UpdateLayout();
-        var view = window.FindName(viewName) as FrameworkElement;
-        var list = window.FindName(listName) as ListBox;
+        var view = WpfElementFinder.FindByName<FrameworkElement>(window, viewName);
+        var list = WpfElementFinder.FindByName<ListBox>(window, listName);
         assert(view?.Visibility == Visibility.Visible,
             $"Route {route} did not reveal {viewName}.");
         assert(list is not null
@@ -369,7 +512,7 @@ internal static class UiStructureRegressionTests
                      "CancelUnpackButton"
                  })
         {
-            var element = window.FindName(name) as FrameworkElement;
+            var element = WpfElementFinder.FindByName<FrameworkElement>(window, name);
             assert(element is not null,
                 $"Required persistent action {name} is missing from MainWindow.");
         }
@@ -378,15 +521,15 @@ internal static class UiStructureRegressionTests
         window.UpdateLayout();
         foreach (var name in new[] { "ProblemNavButton", "RefreshLibraryButton" })
         {
-            var element = window.FindName(name) as FrameworkElement;
+            var element = WpfElementFinder.FindByName<FrameworkElement>(window, name);
             assert(element is { Visibility: Visibility.Visible, IsVisible: true }
                    && element.ActualWidth > 0
                    && element.ActualHeight > 0,
                 $"Unique action {name} is not actually reachable in {window.LayoutMode} mode.");
         }
 
-        var stats = window.FindName("LibraryStats") as FrameworkElement;
-        var refresh = window.FindName("RefreshLibraryButton") as FrameworkElement;
+        var stats = WpfElementFinder.FindByName<FrameworkElement>(window, "LibraryStats");
+        var refresh = WpfElementFinder.FindByName<FrameworkElement>(window, "RefreshLibraryButton");
         if (stats is { IsVisible: true, ActualWidth: > 0 }
             && refresh is { IsVisible: true, ActualWidth: > 0 })
         {
@@ -412,7 +555,7 @@ internal static class UiStructureRegressionTests
         shell.NavigateTo("PROBLEMS");
         window.UpdateLayout();
 
-        var list = window.FindName("ProblemResultsList") as ListBox;
+        var list = WpfElementFinder.FindByName<ListBox>(window, "ProblemResultsList");
         assert(list is not null, "The problem list was unavailable for recycling state verification.");
         if (list is null)
         {
@@ -501,10 +644,13 @@ internal static class UiStructureRegressionTests
         WallpaperField.MainWindow window,
         Action<bool, string> assert)
     {
-        var factory = typeof(WallpaperField.MainWindow).GetMethod(
+        var problemPage = WpfElementFinder.FindByName<WallpaperField.Views.ProblemCenterView>(
+            window,
+            "ProblemCenterPage");
+        var factory = typeof(WallpaperField.Views.ProblemCenterView).GetMethod(
             "CreateDiagnosticEnvironment",
             BindingFlags.Instance | BindingFlags.NonPublic);
-        var environment = factory?.Invoke(window, null) as DiagnosticEnvironment;
+        var environment = factory?.Invoke(problemPage, null) as DiagnosticEnvironment;
         var assembly = typeof(WallpaperField.MainWindow).Assembly;
         var informationalVersion = assembly
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?

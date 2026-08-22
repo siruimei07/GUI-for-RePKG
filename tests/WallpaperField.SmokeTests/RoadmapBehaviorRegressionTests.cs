@@ -166,9 +166,9 @@ internal static class RoadmapBehaviorRegressionTests
                 TaskLifecycleRegressionTests.VerifyWindowCancelActions(window, assert);
                 UnpackLifecycleRegressionTests.VerifyWindowProgressBindings(window, assert);
 
-                var scanList = window.FindName("ScanResultsList") as ListBox
+                var scanList = WpfElementFinder.FindByName<ListBox>(window, "ScanResultsList")
                     ?? throw new InvalidOperationException("ScanResultsList was not created.");
-                var libraryList = window.FindName("LibraryResultsList") as ListBox
+                var libraryList = WpfElementFinder.FindByName<ListBox>(window, "LibraryResultsList")
                     ?? throw new InvalidOperationException("LibraryResultsList was not created.");
 
                 scanIsVirtualized = VirtualizingPanel.GetIsVirtualizing(scanList)

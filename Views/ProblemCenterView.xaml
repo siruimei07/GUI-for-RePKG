@@ -1,0 +1,524 @@
+<UserControl x:Class="WallpaperField.Views.ProblemCenterView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:WallpaperField"
+             SnapsToDevicePixels="True"
+             UseLayoutRounding="True">
+    <!-- Page 03: bounded problem center -->
+    <Grid x:Name="ProblemsView" RenderTransformOrigin="0.5,0.5">
+        <Grid.Style>
+            <Style TargetType="Grid">
+                <Setter Property="Margin" Value="34,24,28,20" />
+                <Setter Property="Visibility" Value="Collapsed" />
+                <Style.Triggers>
+                    <DataTrigger Binding="{Binding IsProblemsPage}" Value="True">
+                        <Setter Property="Visibility" Value="Visible" />
+                    </DataTrigger>
+                    <DataTrigger Binding="{Binding LayoutMode, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                 Value="{x:Static local:ShellLayoutMode.Compact}">
+                        <Setter Property="Margin" Value="22,16,18,14" />
+                    </DataTrigger>
+                    <DataTrigger Binding="{Binding LayoutMode, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                 Value="{x:Static local:ShellLayoutMode.Regular}">
+                        <Setter Property="Margin" Value="28,20,22,16" />
+                    </DataTrigger>
+                </Style.Triggers>
+            </Style>
+        </Grid.Style>
+        <Grid Margin="0,0,10,0">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+
+            <Grid x:Name="ProblemsPageHeader" Grid.Row="0" Margin="0,0,0,16">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel>
+                    <TextBlock Style="{StaticResource TechnicalLabel}"
+                               Foreground="{DynamicResource TextMutedBrush}"
+                               Text="DIAGNOSTICS / 03 · PROBLEM CENTER" />
+                    <TextBlock x:Name="ProblemsPageTitle"
+                               Margin="0,8,0,0"
+                               Style="{StaticResource SectionTitle}"
+                               AutomationProperties.HeadingLevel="Level1"
+                               Text="问题中心" />
+                    <TextBlock x:Name="ProblemsDescription"
+                               Margin="2,9,0,0"
+                               MaxWidth="670"
+                               FontSize="13"
+                               Foreground="{DynamicResource TextMutedBrush}"
+                               Text="浏览启动、扫描、解包、图库与诊断问题；筛选不会改变“复制全部”的完整集合。"
+                               TextWrapping="Wrap">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding LayoutMode, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                                 Value="{x:Static local:ShellLayoutMode.Compact}">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </StackPanel>
+                <Grid x:Name="ProblemsStats" Grid.Column="1" Margin="24,0,10,0" VerticalAlignment="Bottom">
+                    <Grid.Style>
+                        <Style TargetType="Grid">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding LayoutMode, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                             Value="{x:Static local:ShellLayoutMode.Compact}">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Grid.Style>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Width="92">
+                        <TextBlock Style="{StaticResource TechnicalLabel}" Text="OPEN" />
+                        <TextBlock Margin="0,4,0,0"
+                                   FontFamily="Arial Narrow"
+                                   FontSize="29"
+                                   FontWeight="Bold"
+                                   Text="{Binding ProblemCenterSession.OpenIssueCount, StringFormat={}{0:00}}" />
+                    </StackPanel>
+                    <Border Grid.Column="1" Width="1" Height="42" Margin="18,0" Background="{DynamicResource BorderBrush}" />
+                    <StackPanel Grid.Column="2" Width="92">
+                        <TextBlock Style="{StaticResource TechnicalLabel}" Text="RESOLVED" />
+                        <TextBlock Margin="0,4,0,0"
+                                   FontFamily="Arial Narrow"
+                                   FontSize="29"
+                                   FontWeight="Bold"
+                                   Text="{Binding ProblemCenterSession.ResolvedIssueCount, StringFormat={}{0:00}}" />
+                    </StackPanel>
+                </Grid>
+            </Grid>
+
+            <Border x:Name="ProblemsActionPanel"
+                    Grid.Row="1"
+                    Margin="0,0,0,14"
+                    Padding="18,15"
+                    Background="{DynamicResource PaperElevatedBrush}"
+                    BorderBrush="{DynamicResource BorderStrongBrush}"
+                    BorderThickness="1"
+                    CornerRadius="15">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Grid Height="46">
+                            <TextBox x:Name="ProblemSearchBox"
+                                     Style="{StaticResource SearchTextBox}"
+                                     AutomationProperties.Name="搜索问题代码、摘要或详情"
+                                     Text="{Binding ProblemCenterSession.SearchText, UpdateSourceTrigger=PropertyChanged, Delay=120}" />
+                            <TextBlock Margin="16,0,0,0"
+                                       HorizontalAlignment="Left"
+                                       VerticalAlignment="Center"
+                                       IsHitTestVisible="False"
+                                       FontFamily="Segoe Fluent Icons"
+                                       FontSize="15"
+                                       Foreground="{DynamicResource InkBrush}"
+                                       Text="&#xE721;" />
+                            <TextBlock Margin="47,0,54,0"
+                                       VerticalAlignment="Center"
+                                       IsHitTestVisible="False"
+                                       FontSize="13"
+                                       Foreground="{DynamicResource TextMutedBrush}"
+                                       Text="搜索代码、摘要或详情">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding Text, ElementName=ProblemSearchBox}" Value="">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                            <Button HorizontalAlignment="Right"
+                                    VerticalAlignment="Center"
+                                    Margin="0,0,3,0"
+                                    Command="{Binding ProblemCenterSession.ClearSearchCommand}"
+                                    AutomationProperties.Name="清除问题搜索"
+                                    ToolTip="清除搜索">
+                                <Button.Style>
+                                    <Style TargetType="Button" BasedOn="{StaticResource IconButton}">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding ProblemCenterSession.HasSearchText}" Value="True">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Button.Style>
+                                <TextBlock FontFamily="Segoe Fluent Icons" Text="&#xE711;" />
+                            </Button>
+                        </Grid>
+                        <ComboBox x:Name="ProblemSeverityComboBox"
+                                  Grid.Column="1"
+                                  Width="154"
+                                  Height="46"
+                                  Margin="12,0,0,0"
+                                  Style="{DynamicResource ProblemFilterComboBox}"
+                                  SelectedValue="{Binding ProblemCenterSession.SeverityFilter, Mode=TwoWay}"
+                                  SelectedValuePath="Tag"
+                                  AutomationProperties.Name="按严重度筛选问题">
+                            <ComboBoxItem Tag="ALL" Content="全部严重度" />
+                            <ComboBoxItem Tag="Error" Content="错误" />
+                            <ComboBoxItem Tag="Warning" Content="警告" />
+                            <ComboBoxItem Tag="Information" Content="信息" />
+                        </ComboBox>
+                        <ComboBox x:Name="ProblemSourceComboBox"
+                                  Grid.Column="2"
+                                  Width="166"
+                                  Height="46"
+                                  Margin="12,0,0,0"
+                                  Style="{DynamicResource ProblemFilterComboBox}"
+                                  SelectedValue="{Binding ProblemCenterSession.SourceFilter, Mode=TwoWay}"
+                                  SelectedValuePath="Tag"
+                                  AutomationProperties.Name="按来源筛选问题">
+                            <ComboBoxItem Tag="ALL" Content="全部来源" />
+                            <ComboBoxItem Tag="Startup" Content="启动" />
+                            <ComboBoxItem Tag="Scan" Content="扫描" />
+                            <ComboBoxItem Tag="Unpack" Content="解包" />
+                            <ComboBoxItem Tag="Library" Content="图库" />
+                            <ComboBoxItem Tag="Settings" Content="设置" />
+                            <ComboBoxItem Tag="Diagnostics" Content="诊断" />
+                        </ComboBox>
+                    </Grid>
+
+                    <Grid Grid.Row="1" Margin="0,12,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center">
+                            <StackPanel Orientation="Horizontal">
+                                <Button MinWidth="112"
+                                        Margin="0,0,8,0"
+                                        Style="{StaticResource SecondaryButton}"
+                                        IsEnabled="{Binding ProblemCenterSession.HasSelectedIssue}"
+                                        Click="CopySelectedIssue_Click"
+                                        Content="复制所选" />
+                                <Button MinWidth="112"
+                                        Margin="0,0,8,0"
+                                        Style="{StaticResource SecondaryButton}"
+                                        Click="CopyAllIssues_Click"
+                                        Content="复制全部" />
+                                <Button MinWidth="132"
+                                        Style="{StaticResource GhostButton}"
+                                        Command="{Binding ProblemCenterSession.ClearResolvedCommand}"
+                                        Content="清除已解决" />
+                            </StackPanel>
+                            <StackPanel Margin="0,8,0,0" Orientation="Horizontal">
+                                <Button MinWidth="112"
+                                        Margin="0,0,8,0"
+                                        Style="{StaticResource GhostButton}"
+                                        Click="OpenLogs_Click"
+                                        Content="打开日志" />
+                                <Button MinWidth="112"
+                                        Style="{StaticResource GhostButton}"
+                                        Command="{Binding OpenFolderCommand}"
+                                        CommandParameter="{Binding LibrarySession.OutputPath}"
+                                        Content="打开输出" />
+                            </StackPanel>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Margin="16,0,0,0" HorizontalAlignment="Right">
+                            <CheckBox x:Name="IncludePathContextsCheckBox"
+                                      Margin="0,0,0,7"
+                                      HorizontalAlignment="Right"
+                                      Content="导出时包含完整本地路径"
+                                      AutomationProperties.Name="导出诊断时包含完整本地路径" />
+                            <StackPanel HorizontalAlignment="Right" Orientation="Horizontal">
+                                <Button MinWidth="92"
+                                        Margin="0,0,8,0"
+                                        Style="{StaticResource GhostButton}"
+                                        Click="About_Click"
+                                        Content="关于" />
+                                <Button MinWidth="142"
+                                        Style="{StaticResource PrimaryButton}"
+                                        Click="ExportDiagnostics_Click"
+                                        Content="导出诊断" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Grid>
+                </Grid>
+            </Border>
+
+            <Grid Grid.Row="2" MinHeight="48">
+                <ListBox x:Name="ProblemResultsList"
+                         ItemsSource="{Binding ProblemCenterSession.FilteredIssues}"
+                         SelectedItem="{Binding ProblemCenterSession.SelectedIssue, Mode=TwoWay}"
+                         Background="Transparent"
+                         BorderThickness="0"
+                         ScrollViewer.CanContentScroll="True"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         ScrollViewer.VerticalScrollBarVisibility="Auto"
+                         ScrollViewer.IsDeferredScrollingEnabled="False"
+                         VirtualizingPanel.IsVirtualizing="True"
+                         VirtualizingPanel.VirtualizationMode="Recycling"
+                         VirtualizingPanel.ScrollUnit="Pixel"
+                         VirtualizingPanel.CacheLength="1,2"
+                         VirtualizingPanel.CacheLengthUnit="Page"
+                         AutomationProperties.Name="问题记录">
+                    <ListBox.ItemContainerStyle>
+                        <Style TargetType="ListBoxItem">
+                            <Setter Property="Padding" Value="0" />
+                            <Setter Property="Margin" Value="0" />
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                            <Setter Property="FocusVisualStyle" Value="{StaticResource FocusVisual}" />
+                        </Style>
+                    </ListBox.ItemContainerStyle>
+                    <ListBox.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <VirtualizingStackPanel />
+                        </ItemsPanelTemplate>
+                    </ListBox.ItemsPanel>
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <Border Margin="0,0,8,10"
+                                    Padding="15,13"
+                                    Background="{DynamicResource PaperElevatedBrush}"
+                                    BorderBrush="{DynamicResource BorderBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="13">
+                                <Border.Style>
+                                    <Style TargetType="Border">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding ResolutionState}" Value="Resolved">
+                                                <Setter Property="Opacity" Value="0.64" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Border.Style>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="7" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <Border CornerRadius="4">
+                                        <Border.Style>
+                                            <Style TargetType="Border">
+                                                <Setter Property="Background" Value="{DynamicResource TextMutedBrush}" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding Severity}" Value="Warning">
+                                                        <Setter Property="Background" Value="{DynamicResource SignalBrush}" />
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding Severity}" Value="Error">
+                                                        <Setter Property="Background" Value="{DynamicResource SignalPressedBrush}" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Border.Style>
+                                    </Border>
+                                    <StackPanel Grid.Column="1" Margin="14,0,18,0">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock FontWeight="Bold">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock" BasedOn="{StaticResource TechnicalLabel}">
+                                                        <Setter Property="Text" Value="启动" />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding Source}" Value="Scan">
+                                                                <Setter Property="Text" Value="扫描" />
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding Source}" Value="Unpack">
+                                                                <Setter Property="Text" Value="解包" />
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding Source}" Value="Library">
+                                                                <Setter Property="Text" Value="图库" />
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding Source}" Value="Settings">
+                                                                <Setter Property="Text" Value="设置" />
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding Source}" Value="Diagnostics">
+                                                                <Setter Property="Text" Value="诊断" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                            <TextBlock Margin="8,0,0,0"
+                                                       Style="{StaticResource TechnicalLabel}"
+                                                       Foreground="{DynamicResource TextMutedBrush}"
+                                                       Text="{Binding Code}" />
+                                            <Border Margin="10,0,0,0"
+                                                    Padding="7,2"
+                                                    Background="{DynamicResource PaperMutedBrush}"
+                                                    CornerRadius="6">
+                                                <TextBlock>
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock" BasedOn="{StaticResource TechnicalLabel}">
+                                                            <Setter Property="Text" Value="开放" />
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding ResolutionState}" Value="Resolved">
+                                                                    <Setter Property="Text" Value="已解决" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                            </Border>
+                                        </StackPanel>
+                                        <TextBlock Margin="0,7,0,0"
+                                                   FontSize="14"
+                                                   FontWeight="SemiBold"
+                                                   Foreground="{DynamicResource InkBrush}"
+                                                   Text="{Binding Summary}"
+                                                   TextWrapping="Wrap" />
+                                        <Expander Margin="0,6,0,0"
+                                                  Header="技术详情 / DETAILS"
+                                                  Loaded="ProblemDetails_Loaded"
+                                                  DataContextChanged="ProblemDetails_DataContextChanged"
+                                                  Expanded="ProblemDetails_Expanded"
+                                                  Collapsed="ProblemDetails_Collapsed">
+                                            <StackPanel Margin="0,6,0,2">
+                                                <TextBlock FontFamily="Consolas"
+                                                           FontSize="11"
+                                                           Foreground="{DynamicResource InkBrush}"
+                                                           Text="{Binding Details}"
+                                                           TextWrapping="Wrap" />
+                                                <TextBlock Margin="0,6,0,0"
+                                                           FontFamily="Consolas"
+                                                           FontSize="10"
+                                                           Foreground="{DynamicResource TextMutedBrush}"
+                                                           Text="{Binding PathContext}"
+                                                           TextWrapping="Wrap" />
+                                            </StackPanel>
+                                        </Expander>
+                                        <StackPanel Margin="0,6,0,0" Orientation="Horizontal">
+                                            <TextBlock Style="{StaticResource TechnicalLabel}" Text="磁盘：" />
+                                            <TextBlock>
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock" BasedOn="{StaticResource TechnicalLabel}">
+                                                        <Setter Property="Text" Value="状态未知" />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding DiskFact}" Value="NotModified">
+                                                                <Setter Property="Text" Value="未修改" />
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding DiskFact}" Value="Committed">
+                                                                <Setter Property="Text" Value="已提交" />
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding DiskFact}" Value="RolledBack">
+                                                                <Setter Property="Text" Value="已回滚" />
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding DiskFact}" Value="AdditionalEffectsPossible">
+                                                                <Setter Property="Text" Value="可能有额外影响" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                            <TextBlock Style="{StaticResource TechnicalLabel}" Text="  ·  建议：" />
+                                            <TextBlock>
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock" BasedOn="{StaticResource TechnicalLabel}">
+                                                        <Setter Property="Text" Value="无需操作" />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding SuggestedAction}" Value="Retry">
+                                                                <Setter Property="Text" Value="重试" />
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding SuggestedAction}" Value="ReviewInput">
+                                                                <Setter Property="Text" Value="检查输入" />
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding SuggestedAction}" Value="OpenOutput">
+                                                                <Setter Property="Text" Value="打开输出" />
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding SuggestedAction}" Value="OpenLogs">
+                                                                <Setter Property="Text" Value="打开日志" />
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding SuggestedAction}" Value="ExportDiagnostics">
+                                                                <Setter Property="Text" Value="导出诊断" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                        </StackPanel>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2" HorizontalAlignment="Right">
+                                        <TextBlock HorizontalAlignment="Right"
+                                                   FontFamily="Consolas"
+                                                   FontSize="10"
+                                                   Foreground="{DynamicResource TextMutedBrush}"
+                                                   Text="{Binding TimestampUtc, StringFormat={}{0:yyyy-MM-dd HH:mm:ss} UTC}" />
+                                        <TextBlock Margin="0,6,0,0"
+                                                   HorizontalAlignment="Right">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock" BasedOn="{StaticResource TechnicalLabel}">
+                                                    <Setter Property="Text" Value="信息" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding Severity}" Value="Warning">
+                                                            <Setter Property="Text" Value="警告" />
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding Severity}" Value="Error">
+                                                            <Setter Property="Text" Value="错误" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                        <TextBlock Margin="0,6,0,0"
+                                                   HorizontalAlignment="Right"
+                                                   FontFamily="Consolas"
+                                                   FontSize="10"
+                                                   Text="{Binding OccurrenceCount, StringFormat=×{0:N0}}" />
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+
+                <Border Padding="32"
+                        Background="{DynamicResource PaperBrush}"
+                        BorderBrush="{DynamicResource BorderBrush}"
+                        BorderThickness="1"
+                        CornerRadius="16">
+                    <Border.Style>
+                        <Style TargetType="Border">
+                            <Setter Property="Visibility" Value="Collapsed" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding ProblemCenterSession.FilteredIssueCount}" Value="0">
+                                    <Setter Property="Visibility" Value="Visible" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Border.Style>
+                    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <TextBlock HorizontalAlignment="Center"
+                                   FontFamily="Segoe Fluent Icons"
+                                   FontSize="28"
+                                   Foreground="{DynamicResource TextMutedBrush}"
+                                   Text="&#xE73E;" />
+                        <TextBlock Margin="0,12,0,0"
+                                   HorizontalAlignment="Center"
+                                   FontSize="15"
+                                   FontWeight="SemiBold"
+                                   Text="当前筛选没有问题" />
+                        <TextBlock Margin="0,5,0,0"
+                                   HorizontalAlignment="Center"
+                                   FontSize="12"
+                                   Foreground="{DynamicResource TextMutedBrush}"
+                                   Text="调整严重度、来源或搜索条件后重试" />
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </Grid>
+    </Grid>
+</UserControl>
