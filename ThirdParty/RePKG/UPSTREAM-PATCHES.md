@@ -58,8 +58,34 @@ stream position, and an oversized version 4 condition.
 Regression coverage: `TexStringAndPixelRegressionTests` checks equality/hash
 and converts a minimal real RG88 TEX through the product adapter to PNG.
 
+## v1.2.2 compiled source boundary
+
+- The complete RePKG 0.4.0 source snapshot remains vendored for review and
+  license compliance. Product code calls it only through
+  `WallpaperField.ThirdParty.RePKG.SafePackageReader` and
+  `RePkgTextureConverter`; no service or UI module imports a RePKG namespace.
+- `RePKG.Application.csproj` disables default compile discovery and uses a
+  role-based set: the shared constants/extensions, all exceptions, and the TEX
+  read/convert tree except `Texture/Writer`. This excludes the unused eager
+  `PackageReader`/`PackageWriter` and six TEX writer/compressor sources while
+  retaining every reader, safety budget, fixed fixture, and conversion path
+  used by Wallpaper Field.
+- `RePKG.Core` deliberately keeps its complete 42-file compile surface. Its
+  shared texture object/interface model is still consumed by the retained TEX
+  reader/converter, and narrowing that separate assembly was not part of the
+  reviewed v1.2.2 candidate.
+- `scripts/verify-repkg-compile-surface.ps1 -Mode Verify` evaluates real MSBuild
+  `Compile` items, requires the Application set to equal the role-based policy,
+  and reports the unchanged Core count. It avoids a manually duplicated list
+  of individual TEX reader files.
+
+Regression coverage: `UpstreamBoundaryRegressionTests` enforces the adapter
+boundary and project policy. The isolated baseline/candidate experiment also
+runs the complete PKG/TEX Smoke fixture, self-contained publish comparison,
+assembly identity check, and license/notice hash comparison.
+
 ## Deliberate non-changes
 
 - ImageSharp remains on the repository's 2.1.x line; a major-version migration
-  is outside the v1.2.1 patch scope.
+  is outside the v1.2.2 patch scope.
 - Unrelated RePKG naming, style, analyzer, and legacy API issues are unchanged.

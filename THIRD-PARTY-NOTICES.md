@@ -18,6 +18,13 @@ converter, and TEX metadata generator as the upstream command-line program.
 The runtime is linked into the desktop application; users do not need to
 install or launch a separate RePKG executable.
 
+In v1.2.2, the build compiles only the RePKG.Application reader/converter
+roles used by that runtime. The unused eager package reader/writer and TEX
+writer/compressor roles are excluded from the assembly. The full RePKG 0.4.0
+source snapshot and RePKG.Core source surface remain in the source repository;
+the license, incorporated-code notices, and Wallpaper Field patch record remain
+in the release bundle without reduction.
+
 For security maintenance, the bundled ImageSharp dependency is updated from
 RePKG's original 2.1.9 reference to the API-compatible patched 2.1.13 release.
 

@@ -3,7 +3,15 @@
         <TargetFramework>netstandard2.0</TargetFramework>
         <Version>0.4.0</Version>
         <Copyright>Copyright © NotScuffed 2025</Copyright>
+        <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
     </PropertyGroup>
+
+    <ItemGroup>
+        <Compile Include="Constants.cs" />
+        <Compile Include="Extensions.cs" />
+        <Compile Include="Exceptions\**\*.cs" />
+        <Compile Include="Texture\**\*.cs" Exclude="Texture\Writer\**\*.cs" />
+    </ItemGroup>
 
     <ItemGroup>
         <ProjectReference Include="..\RePKG.Core\RePKG.Core.csproj" />

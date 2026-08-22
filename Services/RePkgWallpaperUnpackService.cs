@@ -3,7 +3,6 @@ using System.Runtime.ExceptionServices;
 using WallpaperField.Contracts;
 using WallpaperField.Models;
 using WallpaperField.ThirdParty.RePKG;
-using RePKG.Application.Texture;
 
 namespace WallpaperField.Services;
 
@@ -94,7 +93,7 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
         var additionalEffectsPossibleCount = 0;
         var warnings = new List<WallpaperUnpackWarning>();
         var itemResults = new List<WallpaperUnpackItemResult>(items.Length);
-        var textureBudget = new TexDecodeBudget();
+        var textureBudget = new RePkgTextureConversionBudget();
 
         WallpaperUnpackCanceledException CreateCancellationException(
             int cancelledItemIndex,
@@ -378,7 +377,7 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
         WallpaperRecord item,
         string outputRoot,
         Action<ItemWorkProgress> entryProgress,
-        TexDecodeBudget textureBudget,
+        RePkgTextureConversionBudget textureBudget,
         CancellationToken cancellationToken)
     {
         var scenePackagePath = ValidateScenePackage(item);

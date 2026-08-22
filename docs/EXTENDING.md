@@ -14,6 +14,19 @@ Wallpaper Field 把界面状态、文件系统逻辑和系统交互分开，后�
 - `IFolderPickerService`：替换目录选择体验，例如加入最近目录或企业存储位置。
 - `ISystemFolderService`：替换卡片点击行为，例如打开应用内详情、调用自定义文件浏览器或记录审计事件。
 
+## RePKG 信任边界
+
+产品代码只能通过 `WallpaperField.ThirdParty.RePKG` 下的第一方适配器进入内置 RePKG：PKG 读取必须走 `SafePackageReader`，TEX 转换和派生输出规划走 `RePkgTextureConverter`。不要从服务、ViewModel 或 UI 直接引用 `RePKG.Application` / `RePKG.Core`，也不要回退到 eager `PackageReader` / `PackageWriter`。
+
+`RePKG.Application.csproj` 使用按职责描述的编译白名单，保留 TEX 读取/转换链并排除未使用的 Package 与 Texture Writer 角色；完整上游源码和许可证仍保留在仓库中。新增或调整上游文件后先运行：
+
+```powershell
+pwsh -NoProfile -File .\scripts\verify-repkg-compile-surface.ps1 -Mode Verify
+dotnet run --project .\tests\WallpaperField.SmokeTests\WallpaperField.SmokeTests.csproj -c Release --no-build --no-restore
+```
+
+验证脚本直接比较 MSBuild 实际 `Compile` 集与角色规则；不要另建需要人工同步的逐文件清单。`RePKG.Core` 在 v1.2.2 仍完整编译，后续若要收窄必须作为新的隔离实验重新验证程序集身份、固定 PKG/TEX fixture、发布文件和许可集合。
+
 ## 数据契约
 
 核心记录为 `Models/WallpaperRecord.cs`：
@@ -27,6 +40,12 @@ Wallpaper Field 把界面状态、文件系统逻辑和系统交互分开，后�
 - `Warnings`：非致命降级原因；卡片会自动显示黄色提示徽标。
 
 扩展字段时建议保持现有字段兼容；需要改变持久化结构时提高对应 metadata 或处理清单的 `SchemaVersion`。不要把密码、访问令牌或用户隐私信息写入公开的 `metadata.json`。
+
+### 输出图库发现契约
+
+图库会在输出根下递归发现名为 `metadata.json` 的文件，以兼容用户已有的嵌套目录；它不是只接受 `<WorkshopId>/metadata.json`。遍历不会进入 reparse-point 目录，也会跳过条目目录内的 `unpacked`、staging 和 backup 工作树。候选先按规范化相对路径稳定排序；同一 `WorkshopId`（忽略大小写）出现多次时，整组不会任选一个展示，而是作为包含全部候选路径的 `LibraryConflict` 交给问题中心。
+
+自定义后端若替换 `IWallpaperLibraryService`，应保留上述递归兼容、稳定排序、显式冲突、逐项解析错误与取消语义；若要限制发现范围，必须作为可见的 schema 迁移处理，不能静默隐藏现有嵌套图库。
 
 ## UI 自定义区域
 

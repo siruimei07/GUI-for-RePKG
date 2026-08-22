@@ -33,7 +33,7 @@ public sealed class WallpaperScanService : IWallpaperScanService
         {
             throw new ArgumentException(
                 exception.Message,
-                nameof(request.OutputDirectory),
+                nameof(request),
                 exception);
         }
         var startedAtUtc = DateTimeOffset.UtcNow;

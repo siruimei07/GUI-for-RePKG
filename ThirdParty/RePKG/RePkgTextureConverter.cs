@@ -12,16 +12,16 @@ namespace WallpaperField.ThirdParty.RePKG;
 internal static class RePkgTextureConverter
 {
     public static TextureConversionOutput Convert(string rawTexPath)
-        => Convert(rawTexPath, new TexDecodeBudget());
+        => Convert(rawTexPath, new RePkgTextureConversionBudget());
 
     public static TextureConversionOutput Convert(
         string rawTexPath,
-        TexDecodeBudget budget)
+        RePkgTextureConversionBudget budget)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(rawTexPath);
         ArgumentNullException.ThrowIfNull(budget);
 
-        var fileScope = budget.BeginFile(new FileInfo(rawTexPath).Length);
+        var fileScope = budget.Value.BeginFile(new FileInfo(rawTexPath).Length);
         ITex texture;
         using (var stream = new FileStream(
                    rawTexPath,
@@ -53,6 +53,39 @@ internal static class RePkgTextureConverter
         PublishPairAtomically(imagePath, image.Bytes, infoPath, jsonInfo);
 
         return new TextureConversionOutput(imagePath, infoPath);
+    }
+
+    internal static string[] GetPossibleOutputPaths(string texturePath)
+    {
+        var directory = Path.GetDirectoryName(texturePath);
+        var baseName = Path.GetFileNameWithoutExtension(texturePath);
+        var outputBase = string.IsNullOrEmpty(directory)
+            ? baseName
+            : Path.Combine(directory, baseName);
+        var extensions = Enum
+            .GetValues<MipmapFormat>()
+            .Select(format =>
+            {
+                if (format.IsRawFormat() || format.IsCompressed())
+                {
+                    return "png";
+                }
+
+                if (format == MipmapFormat.VideoMp4 || format.IsImage())
+                {
+                    return format.GetFileExtension();
+                }
+
+                return null;
+            })
+            .Where(extension => extension is not null)
+            .Cast<string>()
+            .Append("tex-json")
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+
+        return extensions
+            .Select(extension => $"{outputBase}.{extension}")
+            .ToArray();
     }
 
     private static void PublishPairAtomically(
@@ -131,6 +164,14 @@ internal static class RePkgTextureConverter
 }
 
 internal sealed record TextureConversionOutput(string ImagePath, string InfoPath);
+
+/// <summary>
+/// Opaque product-side handle for RePKG's batch TEX resource budget.
+/// </summary>
+internal sealed class RePkgTextureConversionBudget
+{
+    internal TexDecodeBudget Value { get; } = new();
+}
 
 internal sealed class TextureConversionAtomicityException(string message, Exception innerException)
     : IOException(message, innerException);

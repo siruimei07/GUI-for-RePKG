@@ -652,6 +652,7 @@ public partial class MainWindow : Window
             () => ViewModel?.IsBusy == true);
     }
 
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     [DllImport("dwmapi.dll")]
     private static extern int DwmSetWindowAttribute(
         IntPtr windowHandle,

@@ -1,4 +1,3 @@
-using RePKG.Core.Texture;
 using WallpaperField.ThirdParty.RePKG;
 
 namespace WallpaperField.Services;
@@ -36,7 +35,7 @@ internal static class PackageExtractionPlanner
                     ".tex",
                     StringComparison.OrdinalIgnoreCase))
             {
-                foreach (var derivedPath in GetPossibleTextureOutputPaths(relativePath))
+                foreach (var derivedPath in RePkgTextureConverter.GetPossibleOutputPaths(relativePath))
                 {
                     OutputPathPolicy.ResolveUnderRoot(
                         stagingUnpackedRoot,
@@ -80,39 +79,6 @@ internal static class PackageExtractionPlanner
             RePkgWallpaperUnpackService.ManifestFileName));
         finalPaths.Add(WallpaperStorage.MetadataFileName);
         return finalPaths;
-    }
-
-    private static IReadOnlyList<string> GetPossibleTextureOutputPaths(string texturePath)
-    {
-        var directory = Path.GetDirectoryName(texturePath);
-        var baseName = Path.GetFileNameWithoutExtension(texturePath);
-        var outputBase = string.IsNullOrEmpty(directory)
-            ? baseName
-            : Path.Combine(directory, baseName);
-        var extensions = Enum
-            .GetValues<MipmapFormat>()
-            .Select(format =>
-            {
-                if (format.IsRawFormat() || format.IsCompressed())
-                {
-                    return "png";
-                }
-
-                if (format == MipmapFormat.VideoMp4 || format.IsImage())
-                {
-                    return format.GetFileExtension();
-                }
-
-                return null;
-            })
-            .Where(extension => extension is not null)
-            .Cast<string>()
-            .Append("tex-json")
-            .Distinct(StringComparer.OrdinalIgnoreCase);
-
-        return extensions
-            .Select(extension => $"{outputBase}.{extension}")
-            .ToArray();
     }
 
     private sealed class PlannedFileSet(string description)

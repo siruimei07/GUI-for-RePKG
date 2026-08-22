@@ -523,16 +523,20 @@ try
     }
 
     var overlapRejected = false;
+    string? overlapParameterName = null;
     try
     {
         _ = await scanService.ScanAsync(new WallpaperScanRequest(sourceRoot, sourceRoot));
     }
-    catch (ArgumentException)
+    catch (ArgumentException exception)
     {
         overlapRejected = true;
+        overlapParameterName = exception.ParamName;
     }
 
     Assert(overlapRejected, "Overlapping source/output paths must be rejected.");
+    Assert(overlapParameterName == "request",
+        "The scan overlap exception identifies a nested property instead of the ScanAsync request parameter.");
     UiStructureRegressionTests.VerifyWpfWindow(Assert);
     PerformanceRegressionTests.VerifyFileSystemBoundaryContracts(Assert);
     Console.WriteLine("Wallpaper Field scan, library, safety, and RePKG unpack smoke tests passed.");
