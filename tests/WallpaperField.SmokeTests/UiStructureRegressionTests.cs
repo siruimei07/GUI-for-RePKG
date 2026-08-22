@@ -238,6 +238,7 @@ internal static class UiStructureRegressionTests
                 VerifyPage(window, shell, "LIBRARY", "LibraryView", "LibraryResultsList", assert);
                 VerifyPage(window, shell, "PROBLEMS", "ProblemsView", "ProblemResultsList", assert);
                 VerifyProblemExpansionFollowsIssueIdentity(window, shell, assert);
+                VerifyBackgroundDiagnosticIssueDispatch(window, shell, assert);
 
                 window.Width = 1060;
                 SelectionEfficiencyRegressionTests.VerifyToolbarAtCurrentWidth(window, shell, assert);
@@ -286,6 +287,91 @@ internal static class UiStructureRegressionTests
             throw new InvalidOperationException(
                 "The WPF UI structure host failed.",
                 failure);
+        }
+    }
+
+    private static void VerifyBackgroundDiagnosticIssueDispatch(
+        Window window,
+        ShellViewModel shell,
+        Action<bool, string> assert)
+    {
+        const string failureCode = "DIAGNOSTIC_EXPORT_FAILED";
+        var testRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"wallpaper-field-diagnostic-dispatch-{Guid.NewGuid():N}");
+        var destinationDirectory = Path.Combine(testRoot, "existing-directory");
+        Directory.CreateDirectory(destinationDirectory);
+
+        try
+        {
+            shell.NavigateTo("PROBLEMS");
+            window.UpdateLayout();
+            var problemList = WpfElementFinder.FindByName<ListBox>(
+                window,
+                "ProblemResultsList");
+            assert(problemList is not null,
+                "The problem list was unavailable for the diagnostic dispatch regression.");
+            if (problemList is null)
+            {
+                return;
+            }
+
+            var service = WallpaperField.Composition.AppComposition
+                .CreateDiagnosticExportService(shell);
+            var exportTask = Task.Run(() => service.ExportAsync(
+                new DiagnosticExportRequest(
+                    destinationDirectory,
+                    new DiagnosticEnvironment(
+                        "1.2.2+dispatch-test",
+                        "dispatch-test",
+                        Environment.OSVersion.VersionString,
+                        Environment.Is64BitProcess ? "x64" : "x86",
+                        96,
+                        false,
+                        true,
+                        "Comfortable"),
+                    shell.ProblemCenterSession.Issues.ToArray())));
+
+            var frame = new DispatcherFrame();
+            _ = exportTask.ContinueWith(
+                _ => window.Dispatcher.BeginInvoke(
+                    DispatcherPriority.Send,
+                    new Action(() => frame.Continue = false)),
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            Dispatcher.PushFrame(frame);
+            _ = exportTask.Exception;
+            window.Dispatcher.Invoke(
+                () => { },
+                DispatcherPriority.ApplicationIdle);
+
+            var issue = shell.ProblemCenterSession.Issues.LastOrDefault(candidate =>
+                string.Equals(candidate.Code, failureCode, StringComparison.Ordinal));
+            var visibleInBoundList = problemList.Items
+                .OfType<AppIssue>()
+                .Any(candidate => candidate.Id == issue?.Id);
+
+            if (issue is not null)
+            {
+                shell.ResolveIssues(issue.Source, issue.Code, issue.ContextKey);
+                shell.ClearResolvedIssuesCommand.Execute(null);
+                window.Dispatcher.Invoke(
+                    () => { },
+                    DispatcherPriority.DataBind);
+            }
+
+            assert(exportTask.IsFaulted,
+                "The diagnostic dispatch fixture did not produce the expected export failure.");
+            assert(issue is not null && visibleInBoundList,
+                "A background diagnostic failure did not reach the WPF-bound problem list.");
+        }
+        finally
+        {
+            if (Directory.Exists(testRoot))
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
         }
     }
 
