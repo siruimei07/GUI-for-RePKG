@@ -6,8 +6,6 @@ namespace WallpaperField.Services;
 internal static class WallpaperStorage
 {
     internal const string MetadataFileName = "metadata.json";
-    internal const string IndexFileName = "wallpaper-index.json";
-    internal const string IdListFileName = "workshop-ids.txt";
 
     internal static readonly string[] PreviewExtensions = [".png", ".jpg", ".jpeg", ".gif"];
 
@@ -75,34 +73,6 @@ internal static class WallpaperStorage
                 await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
             }
 
-            File.Move(temporaryPath, path, overwrite: true);
-        }
-        finally
-        {
-            if (File.Exists(temporaryPath))
-            {
-                File.Delete(temporaryPath);
-            }
-        }
-    }
-
-    internal static async Task WriteTextAtomicallyAsync(
-        string path,
-        string content,
-        CancellationToken cancellationToken)
-    {
-        var directory = Path.GetDirectoryName(path)
-            ?? throw new InvalidOperationException($"无法确定文件的父目录：{path}");
-        Directory.CreateDirectory(directory);
-
-        var temporaryPath = Path.Combine(
-            directory,
-            $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
-
-        try
-        {
-            await File.WriteAllTextAsync(temporaryPath, content, cancellationToken)
-                .ConfigureAwait(false);
             File.Move(temporaryPath, path, overwrite: true);
         }
         finally

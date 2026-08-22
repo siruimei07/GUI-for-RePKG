@@ -41,6 +41,7 @@ try
     await InputValidationRegressionTests.RunAsync(Assert);
     await ProblemDiagnosticsRegressionTests.RunAsync(Assert);
     PerformanceRegressionTests.RunModelBenchmarks(Assert);
+    UpstreamBoundaryRegressionTests.Run(Assert);
     UiStructureRegressionTests.Run(Assert);
     AccessibilityRegressionTests.Run(Assert);
     await SelectionEfficiencyRegressionTests.RunAsync(Assert);

@@ -11,9 +11,6 @@ public enum ScanStage
 {
     Discovering,
     ReadingMetadata,
-    CopyingPreview,
-    SavingMetadata,
-    WritingIndex,
     Finalizing,
     Completed,
     Failed
@@ -60,13 +57,4 @@ public sealed record ScanResult
     public int SuccessCount => Items.Count;
 
     public int FailedCount => Errors.Count;
-}
-
-public sealed record WallpaperIndex
-{
-    public int SchemaVersion { get; init; } = 2;
-
-    public DateTimeOffset GeneratedAtUtc { get; init; }
-
-    public IReadOnlyList<WallpaperRecord> Items { get; init; } = Array.Empty<WallpaperRecord>();
 }
