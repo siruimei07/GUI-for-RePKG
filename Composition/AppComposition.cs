@@ -2,6 +2,7 @@ using WallpaperField.Application;
 using WallpaperField.Infrastructure;
 using WallpaperField.Services;
 using WallpaperField.ViewModels;
+using WallpaperField.ViewModels.Sessions;
 
 namespace WallpaperField.Composition;
 
@@ -14,18 +15,44 @@ public static class AppComposition
     public static ShellViewModel CreateShellViewModel()
     {
         var taskLifecycleCoordinator = new TaskLifecycleCoordinator();
+        var scanService = new WallpaperScanService();
+        var libraryService = new WallpaperLibraryService();
+        var unpackService = new RePkgWallpaperUnpackService();
+        var pathInputValidator = new PathInputValidator();
+        var problemCenterSession = new ProblemCenterSession();
+        var scanSession = new ScanSession(
+            scanService,
+            pathInputValidator,
+            taskLifecycleCoordinator,
+            problemCenterSession);
+        var unpackSession = new UnpackSession(
+            unpackService,
+            taskLifecycleCoordinator,
+            problemCenterSession);
+        var librarySession = new LibrarySession(
+            libraryService,
+            taskLifecycleCoordinator,
+            problemCenterSession);
         var shell = new ShellViewModel(
-            new WallpaperScanService(),
-            new WallpaperLibraryService(),
+            scanService,
+            libraryService,
             new FolderPickerService(),
             new SystemFolderService(),
-            new RePkgWallpaperUnpackService(),
-            new PathInputValidator(),
-            taskLifecycleCoordinator);
+            unpackService,
+            pathInputValidator,
+            taskLifecycleCoordinator,
+            problemCenterSession,
+            scanSession,
+            unpackSession,
+            librarySession);
         AppLog.SetIssueSink(
-            shell.PublishIssue,
+            issue => problemCenterSession.Publish([issue]),
             (source, code, contextKey) =>
-                shell.ResolveIssues(source, code, contextKey));
+                problemCenterSession.Resolve(
+                    source,
+                    code,
+                    contextKey,
+                    DateTimeOffset.UtcNow));
         return shell;
     }
 
@@ -34,20 +61,30 @@ public static class AppComposition
         string? filePath = null)
     {
         ArgumentNullException.ThrowIfNull(shell);
+        var problemCenter = shell.ProblemCenterSession;
         return new UserSettingsStore(
             filePath,
-            shell.PublishIssue,
+            issue => problemCenter.Publish([issue]),
             (source, code, contextKey) =>
-                shell.ResolveIssues(source, code, contextKey));
+                problemCenter.Resolve(
+                    source,
+                    code,
+                    contextKey,
+                    DateTimeOffset.UtcNow));
     }
 
     public static DiagnosticExportService CreateDiagnosticExportService(
         ShellViewModel shell)
     {
         ArgumentNullException.ThrowIfNull(shell);
+        var problemCenter = shell.ProblemCenterSession;
         return new DiagnosticExportService(
-            shell.PublishIssue,
+            issue => problemCenter.Publish([issue]),
             (source, code, contextKey) =>
-                shell.ResolveIssues(source, code, contextKey));
+                problemCenter.Resolve(
+                    source,
+                    code,
+                    contextKey,
+                    DateTimeOffset.UtcNow));
     }
 }
