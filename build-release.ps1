@@ -10,8 +10,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$ProductVersion = '1.2.1'
-$FileVersion = '1.2.1.0'
+$ProductVersion = '1.2.2'
+$FileVersion = '1.2.2.0'
 $AssemblyVersion = '1.0.0.0'
 $RuntimeIdentifier = 'win-x64'
 $Configuration = 'Release'
@@ -247,7 +247,7 @@ $projectPath = Join-Path $projectRoot 'WallpaperField.csproj'
 $solutionPath = Join-Path $projectRoot 'WallpaperField.slnx'
 $nugetConfigPath = Join-Path $projectRoot 'NuGet.Config'
 $rootExecutable = Join-Path $projectRoot 'GUI_for_RePKG.exe'
-$releaseNotesPath = Join-Path $projectRoot 'docs\releases\v1.2.1.md'
+$releaseNotesPath = Join-Path $projectRoot 'docs\releases\v1.2.2.md'
 $unresolvedOutputPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputDirectory)
 $outputPath = Get-NormalizedPath $unresolvedOutputPath
 $outputParent = Get-NormalizedPath (Split-Path -Parent $outputPath)
@@ -408,7 +408,7 @@ try
     [System.IO.Directory]::CreateDirectory((Join-Path $qaDirectory 'source\9001')) | Out-Null
     [System.IO.Directory]::CreateDirectory((Join-Path $qaDirectory 'output')) | Out-Null
     $qaProjectJson = @{
-        title = 'v1.2.1 release candidate QA'
+        title = 'v1.2.2 release candidate QA'
         workshopid = '9001'
         type = 'scene'
         file = 'scene.json'

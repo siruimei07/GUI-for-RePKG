@@ -12,8 +12,8 @@
     <ApplicationTitle>Wallpaper Field</ApplicationTitle>
     <Product>Wallpaper Field</Product>
     <Description>Wallpaper Engine workshop catalog and safe scene.pkg extractor</Description>
-    <Version>1.2.1</Version>
-    <FileVersion>1.2.1.0</FileVersion>
+    <Version>1.2.2</Version>
+    <FileVersion>1.2.2.0</FileVersion>
     <AssemblyVersion>1.0.0.0</AssemblyVersion>
   </PropertyGroup>
   <ItemGroup>

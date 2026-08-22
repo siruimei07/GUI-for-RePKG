@@ -2,18 +2,22 @@
 
 一款面向 Windows 的 Wallpaper Engine 本地壁纸整理与 `scene.pkg` 解包工具。程序使用 C# / WPF 编写，可以只读扫描 Workshop 壁纸目录、直接显示源 preview，并按用户勾选解包场景壁纸或复制视频壁纸。
 
-当前维护版本为 **v1.2.1**；修复范围与已知限制见 [v1.2.1 release notes](docs/releases/v1.2.1.md)。
+当前维护版本为 **v1.2.2**；完整改进与已知限制见 [v1.2.2 release notes](docs/releases/v1.2.2.md)。
 
 > [!NOTE]
 > 这是一个非官方社区项目，与 Wallpaper Engine、Arknights: Endfield、Hypergryph 或其关联公司无隶属或背书关系。界面采用原创的 Endfield-inspired 技术终端风格，不包含官方徽标、角色图、宣传素材或字体。
 
-![扫描中心：选择目录、扫描项目并勾选要处理的壁纸](docs/images/scan-center.png)
+![紧凑扫描中心：组合筛选并选择当前匹配的可处理壁纸](docs/images/scan-center.png)
 
-_扫描中心：显示 preview、标题、Workshop ID 和可处理状态；所有项目均有复选框且默认不选。_
+_Compact 扫描中心：显示当前成功快照、组合筛选、批量选择、真实进度与可见取消入口。_
 
 ![输出壁纸库：浏览已保存的壁纸记录](docs/images/output-library.png)
 
-_输出壁纸库：重新读取输出目录；点击卡片即可在 Windows 文件资源管理器中打开对应文件夹。_
+_输出壁纸库：递归读取稳定的 metadata 记录；点击卡片即可在 Windows 文件资源管理器中打开对应文件夹。_
+
+![问题中心：筛选、复制并导出结构化诊断](docs/images/problem-center.png)
+
+_问题中心：集中浏览完整问题、磁盘事实与下一步操作；扫描和图库页只保留紧凑摘要。_
 
 ## 功能概览
 
@@ -29,10 +33,13 @@ _输出壁纸库：重新读取输出目录；点击卡片即可在 Windows 文�
 - TEX 只作为当前解包任务的临时转换输入；转换完成或失败后都会删除，不写入最终壁纸库。
 - 处理视频项目时，将视频复制到对应项目的 `unpacked` 目录并保留 `file` 的相对路径。
 - 仅在单个项目处理成功后写入该项目的 `metadata.json`，供输出壁纸库重新加载。
-- 从输出目录重建已成功处理的壁纸库；点击任意卡片可定位到对应目录。
-- 扫描结果和输出壁纸库均可按标题实时搜索；过滤不会清除已勾选项目。
+- 从输出目录递归重建已成功处理的壁纸库；重复 Workshop ID 整组排除并进入问题中心，点击任意合法卡片可定位到对应目录。
+- 扫描页可组合标题、仅可处理、仅有问题筛选，并支持选择当前匹配、清除选择；过滤不会清除隐藏的已勾选项目。
+- Comfortable/Compact 两档密度在扫描与图库间共享并保存；Compact 只隐藏重复的次级说明，不隐藏操作或核心状态。
+- 独立问题中心支持严重度/来源/文本筛选、复制、清理已解决问题、打开日志/输出目录、查看版本与导出默认脱敏诊断。
 - 大型壁纸库使用回收式列表虚拟化和异步图片解码，深度滚动时不会反复创建全部卡片。
-- 扫描与解包均有进度、取消、逐项错误隔离和安全路径检查。
+- 扫描、解包与图库刷新均有进度/状态和可见取消；关闭窗口会先等待安全提交或回滚完成。
+- High Contrast 使用 Windows 系统颜色；键盘焦点在深/浅/黄色表面保持可见；减少动态效果同时覆盖页面、控件和 GIF。
 - 发布版是 Windows x64 自包含单文件 EXE，不需要另外安装 .NET 或 RePKG。
 
 ## 运行要求
@@ -43,7 +50,7 @@ _输出壁纸库：重新读取输出目录；点击卡片即可在 Windows 文�
 - Wallpaper Engine 的本地 Workshop 内容，或拥有相同目录结构的离线副本。
 - 足够的输出磁盘空间。解包后的体积通常会明显大于原始 `scene.pkg`。
 
-根目录中的 `GUI_for_RePKG.exe` 已包含 .NET 运行时和所需的 RePKG 代码。正常使用不需要管理员权限，也不需要单独下载或启动 `RePKG.exe`。
+正式发布 ZIP 中的 `WallpaperField.exe` 已包含 .NET 运行时和所需的 RePKG 代码。正常使用不需要管理员权限，也不需要单独下载或启动 `RePKG.exe`。仓库根的 `GUI_for_RePKG.exe` 是历史便利副本，可能落后于当前源码；请用 release manifest、About/诊断身份或源码构建结果确认实际版本。
 
 ### 从源码构建
 
@@ -52,15 +59,16 @@ _输出壁纸库：重新读取输出目录；点击卡片即可在 Windows 文�
 
 ## 快速开始
 
-1. 下载 Windows x64 发布包并完整解压；如果直接获取了仓库，运行根目录中的 `GUI_for_RePKG.exe`。
+1. 下载 Windows x64 完整发布 ZIP 并解压后运行 `WallpaperField.exe`；如果直接获取源码，请先按“从源码构建”生成当前版本。
 2. 在左侧打开“扫描中心”。
 3. 选择 Wallpaper Engine 壁纸根目录。
 4. 选择一个专门的输出目录。
 5. 点击“开始扫描”，等待卡片和统计信息出现。扫描不会修改输出目录。
-6. 可在结果上方输入标题关键词，快速缩小卡片范围。
-7. 勾选要处理的壁纸；所有复选框默认不选。
+6. 使用标题、仅可处理、仅有问题筛选缩小范围；需要时切换 Compact 密度。
+7. 勾选要处理的壁纸，或选择当前匹配；所有复选框默认不选，过滤不会清除隐藏选择。
 8. 点击“解包选中项”。程序只处理已勾选的 `PKG READY` 或 `VIDEO READY` 项目。
 9. 打开左侧“输出壁纸库”，刷新、搜索并浏览已成功处理的内容。
+10. 如果页面摘要提示问题，打开“问题中心”查看完整证据、复制详情或导出诊断。
 
 下面是每一步的详细说明。
 
@@ -131,7 +139,7 @@ D:\WallpaperFieldOutput
 - 一个默认未选中的复选框；无可处理内容时复选框不可用。
 - 元数据缺失、preview 缺失等非致命警告。
 
-单个项目损坏不会终止整个扫描。完成后请查看页面顶部的提示区域，确认是否有项目需要手动检查。
+单个项目损坏不会终止整个扫描。完成后请查看扫描页的问题摘要；如有异常，打开“问题中心”查看完整证据、磁盘事实和建议动作。
 
 如果多个源文件夹最终得到相同的 Workshop ID，程序会保留先处理的项目，并把后续重复项记录为失败，避免不同壁纸覆盖到同一个输出目录。
 
@@ -191,7 +199,8 @@ preview 的选择优先级为 PNG → JPG → JPEG → GIF。程序直接读取�
 - 不同 Workshop ID 的内容互不混合。
 - 某一个项目失败时会记录错误并继续处理后续已勾选项目；失败项不会写入新的 metadata。
 - 新建和更新都先写入隔离 staging；内容、应用清单与 `metadata.json` 一起提交。正常失败或取消会回滚本次动作，既有输出保持不变。
-- 可以在操作过程中取消；临时 staging 目录会被清理。
+- 可以在操作过程中取消；临时 staging 目录会被清理。进入短暂 commit 临界区后，界面会如实显示正在完成安全提交/回滚，不会把已完成写盘伪装成取消。
+- 关闭窗口会先禁止新任务、请求当前任务取消并等待安全清理；超时或设置保存失败会留在问题中心供用户决定，不会强杀仍在写盘的进程。
 
 如果扫描完成后移动、删除或替换了源目录中的 `scene.pkg`、视频或 preview，请重新扫描再处理。如果更改了输出目录，也应重新扫描，以确保卡片记录和目标目录一致。
 
@@ -205,14 +214,27 @@ Wallpaper Engine 的 `.tex` 是纹理资源，不是 LaTeX 文档。程序先把
 
 ### 6. 浏览输出壁纸库
 
-打开左侧“输出壁纸库”页面。页面会读取所选输出目录中已成功处理项目的 `metadata.json`，恢复标题、Workshop ID、源 preview 路径和输出文件夹位置。仅完成扫描不会向输出库添加记录。
+打开左侧“输出壁纸库”页面。页面会在所选输出根下递归发现已成功处理项目的 `metadata.json`，恢复标题、Workshop ID、源 preview 路径和输出文件夹位置。仅完成扫描不会向输出库添加记录。
 
 - 点击“刷新输出库”可重新读取磁盘内容。
 - 点击“更换目录”可浏览另一套输出库。
 - 在列表上方输入标题关键词可实时过滤卡片；右侧会显示“匹配数 / 总数”，清空搜索即可恢复全部记录。
 - 点击卡片或卡片右侧箭头，会在 Windows 文件资源管理器中打开该项目的输出文件夹。
-- 输出库不会进入 `unpacked` 等解包产物目录查找元数据，因此包内同名 JSON 不会被误当成壁纸记录。
+- 输出库不会进入 reparse-point、`unpacked`、staging 或 backup 目录，因此包内和事务工作树中的同名 JSON 不会被误当成壁纸记录。
+- 候选按规范化相对路径稳定排序；同一 Workshop ID（忽略大小写）出现多次时，整组不任选一个展示，而是在问题中心列出全部冲突候选。
 - preview 仍从原壁纸目录读取；如果源文件被移动或删除，输出库中的该卡片将无法继续显示预览图。
+
+### 7. 使用问题中心与诊断
+
+问题中心保存当前会话中扫描、解包、图库、输入、设置、日志和诊断操作产生的结构化记录。你可以组合文本、严重度和来源筛选，展开完整详情，复制选中或全部问题，并清理已经解决的记录。重复扫描/刷新成功时，只会精确解决同一来源和上下文的旧问题。
+
+“导出诊断”会生成包含版本、完整源 commit、操作系统、架构、DPI、High Contrast、motion、密度和问题计数的 JSON。默认不包含文件内容，并会移除路径 context、脱敏摘要和详情；只有用户显式选择包含路径时才保留本地路径。日志同样对路径做指纹化，并按大小、数量和保留期轮换。
+
+### 8. 键盘、High Contrast 与动态效果
+
+三个页面的导航、路径、筛选、批量选择、密度、扫描/解包/刷新/取消及问题动作都可通过键盘到达。页面标题提供 Level 1 heading 语义但不会额外占用 Tab；无文字按钮和紧凑导航具有稳定中文名称。
+
+程序在 High Contrast 下使用 Windows 系统窗口、文本、高亮和禁用颜色。Windows 关闭客户端动画或使用 `--reduced-motion` 时，页面、控件和环境动效会停止，GIF 只解码静态首帧；核心状态始终同时由文字/结构表达，不只依赖颜色、hover、Tooltip 或动画。
 
 ## 输出目录结构
 
@@ -265,7 +287,7 @@ Wallpaper Engine 的 `.tex` 是纹理资源，不是 LaTeX 文档。程序先把
 
 ### 扫描到了文件夹，但没有标题或 Workshop ID
 
-通常是 `project.json` 缺失、JSON 损坏，或对应字段为空。程序会使用文件夹名作为回退值，并在顶部提示区域列出原因。修复源文件后重新扫描即可。
+通常是 `project.json` 缺失、JSON 损坏，或对应字段为空。程序会使用文件夹名作为回退值，并在扫描页摘要与问题中心列出原因。修复源文件后重新扫描即可。
 
 ### 卡片显示“无信息”
 
@@ -287,6 +309,10 @@ Wallpaper Engine 的 `.tex` 是纹理资源，不是 LaTeX 文档。程序先把
 
 GIF preview 不会复制到输出目录。可见卡片会逐帧播放，滚出可视区域或页面隐藏后会自动暂停并在再次可见时继续。如果 Windows 启用了“减少动态效果”，程序会尊重系统设置并保持静态帧；损坏或不受支持的 GIF 会显示占位状态。
 
+### 在哪里查看完整错误或导出诊断？
+
+扫描与图库页只显示紧凑问题摘要。打开左侧“问题中心”，可筛选、展开和复制完整记录，并使用“导出诊断”生成默认脱敏 JSON。日志、输出根和 About/版本身份也从该页进入；不要只依赖被截断的卡片提示判断磁盘状态。
+
 ### Windows SmartScreen 提示未知发布者
 
 当前社区构建可能未使用商业代码签名证书。请只从可信发布页下载，核对仓库来源和发布附件；不确定时可以从源码自行构建。不要运行来源不明的同名 EXE。
@@ -304,7 +330,7 @@ dotnet build .\WallpaperField.slnx --configuration Release
 生成 Windows x64 自包含单文件版本：
 
 ```powershell
-$candidate = Join-Path $PWD 'artifacts\WallpaperField-v1.2.1-local'
+$candidate = Join-Path $PWD 'artifacts\WallpaperField-v1.2.2-local'
 .\build-release.ps1 -OutputDirectory $candidate
 Get-ChildItem -LiteralPath $candidate
 ```
@@ -312,7 +338,7 @@ Get-ChildItem -LiteralPath $candidate
 也可以从 `cmd.exe` 调用同一流程：
 
 ```bat
-build-release.cmd artifacts\WallpaperField-v1.2.1-local
+build-release.cmd artifacts\WallpaperField-v1.2.2-local
 ```
 
 输出目录必须是尚不存在的专用目录。脚本先在同卷 GUID 工作区 restore/publish，验证 PE 版本、真实启动截图、ZIP 精确内容、许可 hash、依赖 JSON、Authenticode 状态与 SHA-256 后，才一次性发布候选目录。默认流程不会覆盖仓库根 `GUI_for_RePKG.exe`。
@@ -321,7 +347,7 @@ build-release.cmd artifacts\WallpaperField-v1.2.1-local
 
 ```text
 WallpaperField.exe
-WallpaperField-v1.2.1-win-x64.zip
+WallpaperField-v1.2.2-win-x64.zip
 release-manifest.json
 dependencies.json
 SHA256SUMS
@@ -345,7 +371,7 @@ dotnet run --project .\tests\WallpaperField.SmokeTests\WallpaperField.SmokeTests
 成功运行的最后一行是可由 CI 严格解析的摘要，例如：
 
 ```text
-SMOKE_RESULT tests=1 assertions=136 passed=1 failed=0
+SMOKE_RESULT tests=1 assertions=947 passed=1 failed=0
 ```
 
 断言数量会随回归用例增加；`tests` 和 `assertions` 必须都大于零。可用下面的专用自检证明断言失败会返回非零退出码：
@@ -354,7 +380,7 @@ SMOKE_RESULT tests=1 assertions=136 passed=1 failed=0
 dotnet run --project .\tests\WallpaperField.SmokeTests\WallpaperField.SmokeTests.csproj --configuration Release -- --verify-failure-exit
 ```
 
-仓库的 Windows CI 会显式执行并解析这个 harness。当前项目不是标准 Test SDK 项目，因此 `dotnet test` 可能执行零项；它不能代替上述 SmokeTests 门禁。
+仓库的 Windows CI 会显式执行并解析这个 harness。当前项目不是标准 Test SDK 项目；本版本实测 `dotnet test WallpaperField.slnx` 退出 0 但执行 0 项，因此它不能代替上述 SmokeTests 门禁。
 
 使用真实 `scene.pkg` 做抽样解包：
 
@@ -379,6 +405,8 @@ dotnet run --project .\tests\WallpaperField.SmokeTests\WallpaperField.SmokeTests
 ```
 
 这些参数只用于截图和回归测试，不会改变普通用户的使用流程。
+
+所有带值参数都不会把下一个 `--flag` 当作缺失值；首个合法重复值生效，未知、重复和非法参数会成为 Startup 问题。`--page` 只接受 `scan`、`library`、`problems`；宽高必须是有限正数且不大于 16384。启动参数包含路径时，普通日志只记录参数数量与问题数量，不记录完整命令行。
 
 ## 二次开发
 

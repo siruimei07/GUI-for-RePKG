@@ -9,7 +9,7 @@ Wallpaper Field 把界面状态、文件系统逻辑和系统交互分开，后�
 ## 可替换接口
 
 - `IWallpaperScanService`：接管源目录发现、元数据读取与预览源路径解析。默认实现只读扫描并返回内存中的 `ScanResult`，通过 `IProgress<ScanProgress>` 把真实进度送回 UI。
-- `IWallpaperLibraryService`：接管第二页的数据来源。可以从 SQLite、远端 API 或混合缓存返回 `WallpaperLibraryResult`。
+- `IWallpaperLibraryService`：接管输出图库页的数据来源。可以从 SQLite、远端 API 或混合缓存返回 `WallpaperLibraryResult`。
 - `IWallpaperUnpackService`：当前注入 `RePkgWallpaperUnpackService`，负责安全流式解包 `scene.pkg`、复制视频壁纸，并在成功后写入单项 metadata；场景包同时调用内置 RePKG TEX 转图链路。如需接入远端队列或其他转换器，保留取消令牌、逐项错误隔离和进度回调即可替换。
 - `IFolderPickerService`：替换目录选择体验，例如加入最近目录或企业存储位置。
 - `ISystemFolderService`：替换卡片点击行为，例如打开应用内详情、调用自定义文件浏览器或记录审计事件。
@@ -49,10 +49,20 @@ dotnet run --project .\tests\WallpaperField.SmokeTests\WallpaperField.SmokeTests
 
 ## UI 自定义区域
 
-- 全局颜色、圆角、动画、输入框、滚动条、卡片与按钮模板：`Themes/EndfieldTheme.xaml`。
-- 两个页面的编排与卡片模板：`MainWindow.xaml`。
-- 页面切换、环境动效、紧凑布局和截图 QA：`MainWindow.xaml.cs`。
-- 页面状态、命令、进度、错误与集合：`ViewModels/ShellViewModel.cs`。
-- 大图库布局：`MainWindow.xaml` 中使用 WPF 内置 `VirtualizingStackPanel`；不要在回收容器的 `Loaded` 中把整卡透明度重置为 0。
+- 稳定颜色、字体、间距、圆角、密度与工程纹理：`Themes/Tokens.xaml`。
+- High Contrast 系统颜色 seam、双层焦点和 motion 语义：`Themes/AccessibilityMotion.xaml`。
+- 通用输入、按钮、滚动条、进度条与 converter：`Themes/BaseControls.xaml`。
+- 导航、卡片、问题筛选、状态与领域模板：`Themes/DomainComponents.xaml`。
+- `Themes/EndfieldTheme.xaml` 只按上述顺序合并四层，供旧 pack URI 调用者兼容；新代码优先由 `App.xaml` 直接按序加载，不要在 wrapper 中重新定义 key。
+- 扫描、图库和问题中心的完整页面编排分别位于 `Views/ScanPageView.xaml`、`Views/LibraryPageView.xaml`、`Views/ProblemCenterView.xaml`。每页拥有自己的固定控制区、虚拟化列表和仅属于该页的 UI 生命周期。
+- `MainWindow.xaml` / `.xaml.cs` 是跨页壳层，负责导航、布局档位、窗口关闭、High Contrast/motion 应用和截图协调；不要把领域集合或列表定位状态搬回窗口。
+- `ViewModels/Sessions/ScanSession.cs`、`UnpackSession.cs`、`LibrarySession.cs`、`ProblemCenterSession.cs` 与 `Application/TaskLifecycleCoordinator.cs` 是状态/用例所有者。`ViewModels/ShellViewModel.cs` 只保留兼容转发、导航、全局摘要和跨 session 协调。
+- 三个页面都使用 WPF `VirtualizingStackPanel` 的 Recycling/Pixel/Page-cache 组合；不要增加祖先 `ScrollViewer`，不要调用容器 `BringIntoView` 带动页面，也不要在回收容器的 `Loaded` 中把整卡透明度重置为 0。
 
-新增功能时优先扩充 ViewModel 与服务契约，再绑定到 XAML；避免在代码隐藏中直接执行文件或网络业务。
+新增功能时先确定语义所有者：磁盘/网络 I/O 留在服务，任务状态和筛选留在对应 session，跨页事实才进入 Shell，页面只绑定公开投影。不要为单一实现机械增加接口/工厂，也避免在代码隐藏中直接执行文件或网络业务。
+
+## 问题、诊断与取消契约
+
+可恢复失败应发布结构化 `AppIssue`，包含稳定 source/code/context、用户可行动摘要、受限详情和真实 `DiskFact`；不要只追加展示字符串，也不要把攻击者控制内容或完整本地路径写入日志。问题由 `ProblemCenterSession` 单一所有，成功重试只解析同一 source/code/context 的记录。
+
+替换扫描、解包或图库后端时必须继续传播 `CancellationToken`，并通过 `TaskLifecycleCoordinator` 的 operation ID 发布生命周期。进入 commit-critical 后可以记录取消 pending，但只有完成安全提交或回滚才能发布终态；窗口关闭等待 coordinator 真正静止。进度无法计算时使用 indeterminate，不能用项目数伪装单个大包的字节进度。
