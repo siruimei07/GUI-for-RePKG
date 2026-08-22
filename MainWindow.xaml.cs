@@ -740,7 +740,7 @@ public partial class MainWindow : Window
 
     private void ApplyHighContrastPalette(bool enabled)
     {
-        var resources = Application.Current?.Resources;
+        var resources = System.Windows.Application.Current?.Resources;
         if (resources is null)
         {
             return;
@@ -838,7 +838,7 @@ public partial class MainWindow : Window
         if (!await PositionSnapshotListAsync())
         {
             AppLog.Write("Snapshot validation failed; no image was written.");
-            Application.Current.Shutdown(-2);
+            System.Windows.Application.Current.Shutdown(-2);
             return;
         }
         await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
@@ -867,7 +867,7 @@ public partial class MainWindow : Window
             encoder.Save(stream);
         }
 
-        Application.Current.Shutdown();
+        System.Windows.Application.Current.Shutdown();
     }
 
     private async Task<bool> PositionSnapshotListAsync()

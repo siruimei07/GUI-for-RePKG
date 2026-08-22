@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.IO;
+using WallpaperField.Application;
 using WallpaperField.Contracts;
 using WallpaperField.Models;
 using WallpaperField.Services;
@@ -22,6 +23,7 @@ public sealed class ShellViewModel : ObservableObject
     private readonly ISystemFolderService _systemFolderService;
     private readonly IWallpaperUnpackService _unpackService;
     private readonly PathInputValidator _pathInputValidator;
+    private readonly TaskLifecycleCoordinator _taskLifecycleCoordinator;
     private readonly AppIssueStore _issueStore = new();
     private CancellationTokenSource? _pathValidationCancellation;
     private long _pathValidationVersion;
@@ -79,12 +81,7 @@ public sealed class ShellViewModel : ObservableObject
     private WallpaperCardViewModel? _selectedScanWallpaper;
     private WallpaperCardViewModel? _selectedLibraryWallpaper;
     private AppIssue? _selectedIssue;
-    private TaskLifecycleSnapshot _taskLifecycle = new(
-        null,
-        null,
-        TaskLifecycleState.Idle,
-        false,
-        DateTimeOffset.UtcNow);
+    private TaskLifecycleSnapshot _taskLifecycle;
 
     public ShellViewModel(
         IWallpaperScanService scanService,
@@ -92,7 +89,8 @@ public sealed class ShellViewModel : ObservableObject
         IFolderPickerService folderPickerService,
         ISystemFolderService systemFolderService,
         IWallpaperUnpackService unpackService,
-        PathInputValidator? pathInputValidator = null)
+        PathInputValidator? pathInputValidator = null,
+        TaskLifecycleCoordinator? taskLifecycleCoordinator = null)
     {
         _scanService = scanService ?? throw new ArgumentNullException(nameof(scanService));
         _libraryService = libraryService ?? throw new ArgumentNullException(nameof(libraryService));
@@ -100,6 +98,9 @@ public sealed class ShellViewModel : ObservableObject
         _systemFolderService = systemFolderService ?? throw new ArgumentNullException(nameof(systemFolderService));
         _unpackService = unpackService ?? throw new ArgumentNullException(nameof(unpackService));
         _pathInputValidator = pathInputValidator ?? new PathInputValidator();
+        _taskLifecycleCoordinator = taskLifecycleCoordinator
+            ?? new TaskLifecycleCoordinator();
+        _taskLifecycle = _taskLifecycleCoordinator.Current;
 
         ScannedWallpapers.CollectionChanged += OnScanCollectionChanged;
         LibraryWallpapers.CollectionChanged += OnLibraryCollectionChanged;
@@ -111,11 +112,19 @@ public sealed class ShellViewModel : ObservableObject
 
         BrowseSourceCommand = new RelayCommand(BrowseSource, () => !IsBusy);
         BrowseOutputCommand = new RelayCommand(BrowseOutput, () => !IsBusy);
-        ScanCommand = new AsyncRelayCommand(ScanAsync, CanStartScan);
+        ScanCommand = new AsyncRelayCommand(
+            () => RunForegroundOperationAsync(ForegroundOperationKind.Scan, ScanAsync),
+            CanStartScan);
         CancelScanCommand = new RelayCommand(CancelScan, () => CanCancelScan);
-        UnpackCommand = new AsyncRelayCommand(UnpackAsync, CanStartUnpack);
+        UnpackCommand = new AsyncRelayCommand(
+            () => RunForegroundOperationAsync(ForegroundOperationKind.Unpack, UnpackAsync),
+            CanStartUnpack);
         CancelUnpackCommand = new RelayCommand(CancelUnpack, () => CanCancelUnpack);
-        RefreshLibraryCommand = new AsyncRelayCommand(RefreshLibraryAsync, CanRefreshLibrary);
+        RefreshLibraryCommand = new AsyncRelayCommand(
+            () => RunForegroundOperationAsync(
+                ForegroundOperationKind.LibraryRefresh,
+                RefreshLibraryAsync),
+            CanRefreshLibrary);
         CancelLibraryRefreshCommand = new RelayCommand(
             CancelLibraryRefresh,
             () => CanCancelLibraryRefresh);
@@ -138,6 +147,8 @@ public sealed class ShellViewModel : ObservableObject
         ClearUnpackSelectionCommand = new RelayCommand(
             ClearUnpackSelection,
             CanClearUnpackSelection);
+        _taskLifecycleCoordinator.Changed += OnTaskLifecycleChanged;
+        TaskLifecycle = _taskLifecycleCoordinator.Current;
     }
 
     public RangeObservableCollection<WallpaperCardViewModel> ScannedWallpapers { get; } = [];
@@ -428,7 +439,10 @@ public sealed class ShellViewModel : ObservableObject
                     nameof(ActiveOperationId),
                     nameof(ActiveOperationKind),
                     nameof(IsCancellationPending),
-                    nameof(UnpackWorkText));
+                    nameof(UnpackWorkText),
+                    nameof(CanScan),
+                    nameof(CanRefreshOutput),
+                    nameof(IsUnpackAvailable));
             }
         }
     }
@@ -512,13 +526,17 @@ public sealed class ShellViewModel : ObservableObject
 
     public bool CanScan => CanStartScan();
 
-    public bool CanCancelScan => IsScanning && ScanCommand.CanBeCanceled;
+    public bool CanCancelScan
+        => IsScanning && CanRequestCancellation(ForegroundOperationKind.Scan);
 
     public bool CanCancelUnpack
-        => IsUnpacking && _unpackProgressCanCancel && UnpackCommand.CanBeCanceled;
+        => IsUnpacking
+           && _unpackProgressCanCancel
+           && CanRequestCancellation(ForegroundOperationKind.Unpack);
 
     public bool CanCancelLibraryRefresh
-        => IsRefreshingLibrary && RefreshLibraryCommand.CanBeCanceled;
+        => IsRefreshingLibrary
+           && CanRequestCancellation(ForegroundOperationKind.LibraryRefresh);
 
     public bool CanRefreshOutput => CanRefreshLibrary();
 
@@ -756,21 +774,7 @@ public sealed class ShellViewModel : ObservableObject
     public void CancelPendingWork()
     {
         _pathValidationCancellation?.Cancel();
-        var canCancel = ScanCommand.CanBeCanceled
-            || UnpackCommand.CanBeCanceled
-            || RefreshLibraryCommand.CanBeCanceled;
-        if (canCancel)
-        {
-            SetTaskState(
-                TaskState == TaskLifecycleState.CommitCritical
-                    ? TaskLifecycleState.CommitCritical
-                    : TaskLifecycleState.CancellationRequested,
-                cancellationPending: true);
-        }
-
-        ScanCommand.TryCancel();
-        UnpackCommand.TryCancel();
-        RefreshLibraryCommand.TryCancel();
+        _taskLifecycleCoordinator.RequestCancellation();
     }
 
     internal void BeginClosePreparation()
@@ -935,32 +939,49 @@ public sealed class ShellViewModel : ObservableObject
         }
     }
 
-    public async Task<bool> WaitForPendingWorkAsync(TimeSpan timeout)
-    {
-        if (timeout <= TimeSpan.Zero)
-        {
-            throw new ArgumentOutOfRangeException(nameof(timeout));
-        }
+    public Task<bool> WaitForPendingWorkAsync(TimeSpan timeout)
+        => _taskLifecycleCoordinator.WaitForQuiescenceAsync(timeout);
 
-        var completion = Task.WhenAll(
-            ScanCommand.WaitForCompletionAsync(),
-            UnpackCommand.WaitForCompletionAsync(),
-            RefreshLibraryCommand.WaitForCompletionAsync());
+    private async Task RunForegroundOperationAsync(
+        ForegroundOperationKind operationKind,
+        Func<Guid, CancellationToken, Task> operation)
+    {
         try
         {
-            await completion.WaitAsync(timeout).ConfigureAwait(true);
+            await _taskLifecycleCoordinator
+                .RunAsync(operationKind, operation)
+                .ConfigureAwait(true);
         }
-        catch (TimeoutException)
+        catch (OperationCanceledException)
         {
-            return false;
+            // Domain handlers already projected the cooperative cancellation.
         }
-        catch when (completion.IsCompleted)
+        catch (HandledForegroundOperationException)
         {
-            // Quiescence is independent of the outcome. Domain commands publish
-            // their own failure state before their task completes.
+            // Domain handlers already published the actionable failure.
         }
+    }
 
-        return true;
+    private bool CanRequestCancellation(ForegroundOperationKind operationKind)
+        => ActiveOperationKind == operationKind
+           && TaskState == TaskLifecycleState.Running
+           && !IsCancellationPending;
+
+    private bool HasActiveForegroundOperation
+        => TaskState is TaskLifecycleState.Running
+            or TaskLifecycleState.CancellationRequested
+            or TaskLifecycleState.CommitCritical;
+
+    private void OnTaskLifecycleChanged(
+        object? sender,
+        TaskLifecycleSnapshot snapshot)
+    {
+        TaskLifecycle = snapshot;
+        OnPropertiesChanged(
+            nameof(CanCancelScan),
+            nameof(CanCancelUnpack),
+            nameof(CanCancelLibraryRefresh));
+        UpdateCommandStates();
     }
 
     private void SetSourcePath(string? value)
@@ -1152,6 +1173,7 @@ public sealed class ShellViewModel : ObservableObject
 
     private bool CanStartScan()
         => !IsClosing
+           && !HasActiveForegroundOperation
            && !IsBusy
            && !string.IsNullOrWhiteSpace(SourcePath)
            && !string.IsNullOrWhiteSpace(OutputPath)
@@ -1160,6 +1182,7 @@ public sealed class ShellViewModel : ObservableObject
 
     private bool CanStartUnpack()
         => !IsClosing
+           && !HasActiveForegroundOperation
            && !IsBusy
            && SelectedUnpackCount > 0
            && IsCurrentScanIdentity();
@@ -1184,12 +1207,13 @@ public sealed class ShellViewModel : ObservableObject
         }
     }
 
-    private async Task ScanAsync(CancellationToken cancellationToken)
+    private async Task ScanAsync(
+        Guid operationId,
+        CancellationToken cancellationToken)
     {
         if (!Directory.Exists(SourcePath))
         {
             ClearError();
-            BeginForegroundOperation(ForegroundOperationKind.Scan);
             CurrentStage = "FAILED";
             PublishIssue(AppIssue.Create(
                 "SCAN_OPERATION_FAILED",
@@ -1200,16 +1224,16 @@ public sealed class ShellViewModel : ObservableObject
                 AppDiskFact.NotModified,
                 AppIssueAction.ReviewInput,
                 NormalizeIssueContext(SourcePath),
-                ActiveOperationId,
+                operationId,
                 SourcePath));
             PresentError("壁纸目录不存在或当前不可访问");
-            SetTaskState(TaskLifecycleState.Failed);
-            return;
+            throw new HandledForegroundOperationException(
+                new DirectoryNotFoundException(
+                    "The validated scan directory is no longer available."));
         }
 
         ClearError();
         ResetScanProgress();
-        BeginForegroundOperation(ForegroundOperationKind.Scan);
         IsBusy = true;
         IsScanning = true;
         CurrentStage = "DISCOVERY";
@@ -1271,7 +1295,7 @@ public sealed class ShellViewModel : ObservableObject
                         AppDiskFact.NotModified,
                         AppIssueAction.ReviewInput,
                         NormalizeIssueContext(record.SourceDirectory),
-                        ActiveOperationId,
+                        operationId,
                         record.SourceDirectory));
                 }
             }
@@ -1286,7 +1310,7 @@ public sealed class ShellViewModel : ObservableObject
                 AppDiskFact.NotModified,
                 AppIssueAction.Retry,
                 NormalizeIssueContext(error.FolderPath),
-                ActiveOperationId,
+                operationId,
                 error.FolderPath)));
 
             var issues = JoinIssues(result.Errors);
@@ -1302,14 +1326,12 @@ public sealed class ShellViewModel : ObservableObject
             {
                 SetStatus($"扫描完成 · 已发现 {SuccessCount} 条壁纸记录", "Success");
             }
-
-            SetTaskState(TaskLifecycleState.Succeeded);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             CurrentStage = "CANCELED";
             SetStatus($"扫描已取消 · 已处理 {ScannedCount} 个目录", "Neutral");
-            SetTaskState(TaskLifecycleState.Cancelled);
+            throw;
         }
         catch (Exception exception)
         {
@@ -1323,10 +1345,10 @@ public sealed class ShellViewModel : ObservableObject
                 AppDiskFact.NotModified,
                 AppIssueAction.Retry,
                 NormalizeIssueContext(SourcePath),
-                ActiveOperationId,
+                operationId,
                 SourcePath));
             PresentError("扫描未能完成", exception);
-            SetTaskState(TaskLifecycleState.Failed);
+            throw new HandledForegroundOperationException(exception);
         }
         finally
         {
@@ -1343,7 +1365,7 @@ public sealed class ShellViewModel : ObservableObject
         }
 
         SetStatus("正在安全取消扫描…", "Neutral");
-        RequestCancellation(ScanCommand);
+        RequestCancellation();
     }
 
     private void CancelUnpack()
@@ -1354,7 +1376,7 @@ public sealed class ShellViewModel : ObservableObject
         }
 
         SetStatus("正在安全取消解包…", "Neutral");
-        RequestCancellation(UnpackCommand);
+        RequestCancellation();
     }
 
     private void CancelLibraryRefresh()
@@ -1365,30 +1387,12 @@ public sealed class ShellViewModel : ObservableObject
         }
 
         SetStatus("正在安全取消图库刷新…", "Neutral");
-        RequestCancellation(RefreshLibraryCommand);
+        RequestCancellation();
     }
 
-    private void RequestCancellation(AsyncRelayCommand command)
+    private void RequestCancellation()
     {
-        if (command.CanBeCanceled)
-        {
-            SetTaskState(
-                TaskState == TaskLifecycleState.CommitCritical
-                    ? TaskLifecycleState.CommitCritical
-                    : TaskLifecycleState.CancellationRequested,
-                cancellationPending: true);
-        }
-
-        if (command.TryCancel())
-        {
-            OnPropertiesChanged(
-                nameof(CanCancelScan),
-                nameof(CanCancelUnpack),
-                nameof(CanCancelLibraryRefresh));
-            CancelScanCommand.NotifyCanExecuteChanged();
-            CancelUnpackCommand.NotifyCanExecuteChanged();
-            CancelLibraryRefreshCommand.NotifyCanExecuteChanged();
-        }
+        _taskLifecycleCoordinator.RequestCancellation();
     }
 
     private void UpdateScanProgress(ScanProgress progress)
@@ -1412,16 +1416,18 @@ public sealed class ShellViewModel : ObservableObject
 
     private bool CanRefreshLibrary()
         => !IsClosing
+           && !HasActiveForegroundOperation
            && !IsBusy
            && !string.IsNullOrWhiteSpace(OutputPath)
            && OutputPathValidation.IsValid;
 
-    private async Task RefreshLibraryAsync(CancellationToken cancellationToken)
+    private async Task RefreshLibraryAsync(
+        Guid operationId,
+        CancellationToken cancellationToken)
     {
         if (!Directory.Exists(OutputPath))
         {
             ClearError();
-            BeginForegroundOperation(ForegroundOperationKind.LibraryRefresh);
             CurrentStage = "FAILED";
             PublishIssue(AppIssue.Create(
                 "LIBRARY_OPERATION_FAILED",
@@ -1432,15 +1438,15 @@ public sealed class ShellViewModel : ObservableObject
                 AppDiskFact.NotModified,
                 AppIssueAction.ReviewInput,
                 NormalizeIssueContext(OutputPath),
-                ActiveOperationId,
+                operationId,
                 OutputPath));
             PresentError("输出目录不存在或当前不可访问");
-            SetTaskState(TaskLifecycleState.Failed);
-            return;
+            throw new HandledForegroundOperationException(
+                new DirectoryNotFoundException(
+                    "The validated library directory is no longer available."));
         }
 
         ClearError();
-        BeginForegroundOperation(ForegroundOperationKind.LibraryRefresh);
         IsBusy = true;
         IsRefreshingLibrary = true;
         CurrentStage = "LIBRARY";
@@ -1492,7 +1498,7 @@ public sealed class ShellViewModel : ObservableObject
                         AppDiskFact.NotModified,
                         AppIssueAction.ReviewInput,
                         NormalizeIssueContext(metadataPath),
-                        ActiveOperationId,
+                        operationId,
                         metadataPath));
                 }
             }
@@ -1507,7 +1513,7 @@ public sealed class ShellViewModel : ObservableObject
                 AppDiskFact.NotModified,
                 AppIssueAction.Retry,
                 NormalizeIssueContext(error.Path),
-                ActiveOperationId,
+                operationId,
                 error.Path)));
             PublishIssues(result.Conflicts.Select(conflict => AppIssue.Create(
                 "LIBRARY_DUPLICATE_ID",
@@ -1518,7 +1524,7 @@ public sealed class ShellViewModel : ObservableObject
                 AppDiskFact.NotModified,
                 AppIssueAction.ReviewInput,
                 NormalizeItemContext(conflict.WorkshopId),
-                ActiveOperationId)));
+                operationId)));
 
             var issues = JoinVisibleNotes(
                 JoinIssues(result.Errors),
@@ -1535,13 +1541,11 @@ public sealed class ShellViewModel : ObservableObject
             {
                 SetStatus($"输出库已同步 · {LibraryCount} 条记录", "Success");
             }
-
-            SetTaskState(TaskLifecycleState.Succeeded);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             SetStatus("输出库刷新已取消", "Neutral");
-            SetTaskState(TaskLifecycleState.Cancelled);
+            throw;
         }
         catch (Exception exception)
         {
@@ -1554,10 +1558,10 @@ public sealed class ShellViewModel : ObservableObject
                 AppDiskFact.NotModified,
                 AppIssueAction.Retry,
                 NormalizeIssueContext(OutputPath),
-                ActiveOperationId,
+                operationId,
                 OutputPath));
             PresentError("输出壁纸库读取失败", exception);
-            SetTaskState(TaskLifecycleState.Failed);
+            throw new HandledForegroundOperationException(exception);
         }
         finally
         {
@@ -1566,7 +1570,9 @@ public sealed class ShellViewModel : ObservableObject
         }
     }
 
-    private async Task UnpackAsync(CancellationToken cancellationToken)
+    private async Task UnpackAsync(
+        Guid operationId,
+        CancellationToken cancellationToken)
     {
         var selectedItems = ScannedWallpapers
             .Where(card => card.IsSelectedForUnpack && card.CanSelectForUnpack)
@@ -1579,8 +1585,6 @@ public sealed class ShellViewModel : ObservableObject
         }
 
         ClearError();
-        BeginForegroundOperation(ForegroundOperationKind.Unpack);
-        var operationId = ActiveOperationId;
         IsBusy = true;
         IsUnpacking = true;
         CurrentStage = "UNPACK";
@@ -1594,7 +1598,8 @@ public sealed class ShellViewModel : ObservableObject
         ProgressValue = 0;
         SetStatus($"准备处理 · 已选择 {selectedItems.Length} 个项目", "Working");
 
-        var progress = new Progress<WallpaperUnpackProgress>(UpdateUnpackProgress);
+        var progress = new Progress<WallpaperUnpackProgress>(value =>
+            UpdateUnpackProgress(operationId, value));
 
         try
         {
@@ -1636,8 +1641,6 @@ public sealed class ShellViewModel : ObservableObject
             {
                 SetStatus(result.Message, "Success");
             }
-
-            SetTaskState(TaskLifecycleState.Succeeded);
         }
         catch (WallpaperUnpackCanceledException exception)
             when (cancellationToken.IsCancellationRequested)
@@ -1656,7 +1659,7 @@ public sealed class ShellViewModel : ObservableObject
             IsProgressIndeterminate = false;
             SetUnpackProgressCanCancel(false);
             SetStatus(exception.Result.Message, "Neutral");
-            SetTaskState(TaskLifecycleState.Cancelled);
+            throw;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -1664,7 +1667,7 @@ public sealed class ShellViewModel : ObservableObject
             IsProgressIndeterminate = false;
             SetUnpackProgressCanCancel(false);
             SetStatus($"解包已取消 · 已处理 {ScannedCount}/{TotalCount}", "Neutral");
-            SetTaskState(TaskLifecycleState.Cancelled);
+            throw;
         }
         catch (Exception exception)
         {
@@ -1683,7 +1686,7 @@ public sealed class ShellViewModel : ObservableObject
                 operationId,
                 OutputPath));
             PresentError("解包未能完成", exception);
-            SetTaskState(TaskLifecycleState.Failed);
+            throw new HandledForegroundOperationException(exception);
         }
         finally
         {
@@ -1692,7 +1695,9 @@ public sealed class ShellViewModel : ObservableObject
         }
     }
 
-    private void UpdateUnpackProgress(WallpaperUnpackProgress progress)
+    private void UpdateUnpackProgress(
+        Guid operationId,
+        WallpaperUnpackProgress progress)
     {
         ScannedCount = progress.ProcessedCount;
         TotalCount = progress.TotalCount;
@@ -1714,17 +1719,15 @@ public sealed class ShellViewModel : ObservableObject
         if (progress.Stage is WallpaperUnpackStage.Committing
             or WallpaperUnpackStage.RollingBack)
         {
-            SetTaskState(
-                TaskLifecycleState.CommitCritical,
-                TaskLifecycle.CancellationPending);
+            _taskLifecycleCoordinator.SetCommitCritical(
+                operationId,
+                isCritical: true);
         }
         else if (TaskState == TaskLifecycleState.CommitCritical)
         {
-            SetTaskState(
-                TaskLifecycle.CancellationPending
-                    ? TaskLifecycleState.CancellationRequested
-                    : TaskLifecycleState.Running,
-                TaskLifecycle.CancellationPending);
+            _taskLifecycleCoordinator.SetCommitCritical(
+                operationId,
+                isCritical: false);
         }
         if (!string.IsNullOrWhiteSpace(progress.Message))
         {
@@ -2290,24 +2293,6 @@ public sealed class ShellViewModel : ObservableObject
             _ => AppDiskFact.Unknown
         };
 
-    private void BeginForegroundOperation(ForegroundOperationKind operationKind)
-        => TaskLifecycle = new TaskLifecycleSnapshot(
-            Guid.NewGuid(),
-            operationKind,
-            TaskLifecycleState.Running,
-            false,
-            DateTimeOffset.UtcNow);
-
-    private void SetTaskState(
-        TaskLifecycleState state,
-        bool cancellationPending = false)
-        => TaskLifecycle = TaskLifecycle with
-        {
-            State = state,
-            CancellationPending = cancellationPending,
-            ChangedAtUtc = DateTimeOffset.UtcNow
-        };
-
     private void PresentError(string message, Exception? exception = null)
     {
         var detail = exception is null ? string.Empty : GetFriendlyExceptionMessage(exception);
@@ -2344,4 +2329,10 @@ public sealed class ShellViewModel : ObservableObject
         SelectCurrentMatchesCommand.NotifyCanExecuteChanged();
         ClearUnpackSelectionCommand.NotifyCanExecuteChanged();
     }
+
+    private sealed class HandledForegroundOperationException(
+        Exception innerException)
+        : Exception(
+            "The foreground operation failure was already presented to the user.",
+            innerException);
 }

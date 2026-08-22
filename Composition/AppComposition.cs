@@ -1,3 +1,4 @@
+using WallpaperField.Application;
 using WallpaperField.Infrastructure;
 using WallpaperField.Services;
 using WallpaperField.ViewModels;
@@ -12,13 +13,15 @@ public static class AppComposition
 {
     public static ShellViewModel CreateShellViewModel()
     {
+        var taskLifecycleCoordinator = new TaskLifecycleCoordinator();
         var shell = new ShellViewModel(
             new WallpaperScanService(),
             new WallpaperLibraryService(),
             new FolderPickerService(),
             new SystemFolderService(),
             new RePkgWallpaperUnpackService(),
-            new PathInputValidator());
+            new PathInputValidator(),
+            taskLifecycleCoordinator);
         AppLog.SetIssueSink(
             shell.PublishIssue,
             (source, code, contextKey) =>

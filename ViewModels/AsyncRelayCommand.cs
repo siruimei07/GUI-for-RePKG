@@ -3,21 +3,24 @@ using System.Windows.Input;
 namespace WallpaperField.ViewModels;
 
 /// <summary>
-/// An async command that prevents accidental double execution and supports cancellation.
+/// An async command that prevents accidental double execution and supports
+/// command-owned cancellation for token-aware operations.
 /// </summary>
 public sealed class AsyncRelayCommand : ObservableObject, ICommand
 {
     private readonly Func<CancellationToken, Task> _execute;
     private readonly Func<bool>? _canExecute;
+    private readonly bool _ownsCancellation;
     private CancellationTokenSource? _executionCancellation;
     private Task _executionTask = Task.CompletedTask;
     private bool _isRunning;
     private bool _isCancellationRequested;
 
     public AsyncRelayCommand(Func<Task> execute, Func<bool>? canExecute = null)
-        : this(_ => execute(), canExecute)
     {
         ArgumentNullException.ThrowIfNull(execute);
+        _execute = _ => execute();
+        _canExecute = canExecute;
     }
 
     public AsyncRelayCommand(
@@ -27,6 +30,7 @@ public sealed class AsyncRelayCommand : ObservableObject, ICommand
         ArgumentNullException.ThrowIfNull(execute);
         _execute = execute;
         _canExecute = canExecute;
+        _ownsCancellation = true;
     }
 
     public event EventHandler? CanExecuteChanged;
@@ -50,7 +54,8 @@ public sealed class AsyncRelayCommand : ObservableObject, ICommand
         }
     }
 
-    public bool CanBeCanceled => IsRunning && !IsCancellationRequested;
+    public bool CanBeCanceled
+        => _ownsCancellation && IsRunning && !IsCancellationRequested;
 
     public bool IsCancellationRequested
     {
@@ -114,14 +119,17 @@ public sealed class AsyncRelayCommand : ObservableObject, ICommand
 
     private async Task ExecuteCoreAsync()
     {
-        using var cancellation = new CancellationTokenSource();
+        using var cancellation = _ownsCancellation
+            ? new CancellationTokenSource()
+            : null;
         _executionCancellation = cancellation;
         IsCancellationRequested = false;
         IsRunning = true;
 
         try
         {
-            await _execute(cancellation.Token).ConfigureAwait(true);
+            await _execute(cancellation?.Token ?? CancellationToken.None)
+                .ConfigureAwait(true);
         }
         finally
         {

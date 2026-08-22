@@ -33,6 +33,7 @@ try
 
     ReleaseContractTests.Run(Assert);
     await RoadmapBehaviorRegressionTests.RunAsync(Assert);
+    await CoordinatorRegressionTests.RunAsync(Assert);
     await TaskLifecycleRegressionTests.RunAsync(Assert);
     await ScanLifecycleRegressionTests.RunAsync(Assert);
     await LibraryLifecycleRegressionTests.RunAsync(Assert);
