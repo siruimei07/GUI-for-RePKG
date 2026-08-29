@@ -1,6 +1,7 @@
-using System.IO;
 using System.Diagnostics;
+using System.IO;
 using System.Reflection;
+using WallpaperField.Application;
 using WallpaperField.Contracts;
 using WallpaperField.Models;
 using WallpaperField.Services;
@@ -73,6 +74,9 @@ internal static class ProjectBrowserFoundationRegressionTests
         {
             await VerifyPreviewAndProjectKeyFactsAsync(assert);
             await VerifyAtomicSnapshotAndAuthorizationAsync(assert);
+            VerifyFatalScanExceptionClassification(missingContracts);
+            await VerifyBusyForegroundRequestRejectedAsync(missingContracts);
+            await VerifyLargeSnapshotFreezeCostAsync(missingContracts);
         }
 
         assert(missingContracts.Count == 0,
@@ -261,6 +265,151 @@ internal static class ProjectBrowserFoundationRegressionTests
                    && shell.ScanSession.TrySetUnpackSelection(duplicateTargetCards, true)
                    && !shell.ScanSession.TryFreezeSelectedRequest(out _),
                 "A current selection with duplicate output targets froze an insecure request.");
+        }
+        finally
+        {
+            Directory.Delete(testRoot, recursive: true);
+        }
+    }
+
+    private static void VerifyFatalScanExceptionClassification(
+        ICollection<string> failures)
+    {
+        if (!WallpaperScanService.IsFatalScanException(new OutOfMemoryException())
+            || !WallpaperScanService.IsFatalScanException(new InsufficientMemoryException())
+            || !WallpaperScanService.IsFatalScanException(new StackOverflowException())
+            || !WallpaperScanService.IsFatalScanException(new AccessViolationException())
+            || WallpaperScanService.IsFatalScanException(
+                new IOException("recoverable preview fixture"))
+            || WallpaperScanService.IsFatalScanException(
+                new UnauthorizedAccessException("recoverable preview fixture")))
+        {
+            failures.Add("fatal/resource scan exceptions are not separated from recoverable I/O failures");
+        }
+    }
+
+    private static async Task VerifyBusyForegroundRequestRejectedAsync(
+        ICollection<string> failures)
+    {
+        var testRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"WallpaperField-BusyFrozenRequest-{Guid.NewGuid():N}");
+        var sourceRoot = Path.Combine(testRoot, "source");
+        var outputRoot = Path.Combine(testRoot, "output");
+        Directory.CreateDirectory(sourceRoot);
+        Directory.CreateDirectory(outputRoot);
+
+        try
+        {
+            var coordinator = new TaskLifecycleCoordinator();
+            var libraryService = new BlockingLibraryService();
+            var unpackService = new CapturingUnpackService();
+            var shell = new ShellViewModel(
+                new SnapshotScanService(sourceRoot, outputRoot),
+                libraryService,
+                new NullFolderPickerService(),
+                new NullSystemFolderService(),
+                unpackService,
+                new PathInputValidator(),
+                coordinator)
+            {
+                SourcePath = sourceRoot,
+                OutputPath = outputRoot
+            };
+
+            await shell.ScanSession.ScanAsync();
+            var card = shell.ScannedWallpapers.Single();
+            shell.ScanSession.TrySetUnpackSelection(card, true);
+            shell.ScanSession.TryFreezeSelectedRequest(out var request);
+            var libraryExecution = shell.LibrarySession.RefreshAsync();
+            await libraryService.Started.WaitAsync(TimeSpan.FromSeconds(2));
+            Exception? rejectionFailure = null;
+            try
+            {
+                await shell.UnpackSession.UnpackAsync(request!);
+            }
+            catch (Exception exception)
+            {
+                rejectionFailure = exception;
+            }
+            finally
+            {
+                libraryService.Complete();
+                await libraryExecution.WaitAsync(TimeSpan.FromSeconds(2));
+            }
+
+            if (rejectionFailure is not null
+                || unpackService.CallCount != 0
+                || shell.UnpackSession.StatusKind != "Neutral"
+                || !shell.UnpackSession.StatusText.Contains(
+                    "已有前台任务正在运行",
+                    StringComparison.Ordinal))
+            {
+                failures.Add(
+                    "current request escaped or reached unpack while another foreground operation owned the slot"
+                    + (rejectionFailure is null
+                        ? string.Empty
+                        : $" ({rejectionFailure.GetType().Name}: {rejectionFailure.Message})"));
+            }
+        }
+        finally
+        {
+            Directory.Delete(testRoot, recursive: true);
+        }
+    }
+
+    private static async Task VerifyLargeSnapshotFreezeCostAsync(
+        ICollection<string> failures)
+    {
+        const int projectCount = 1_000;
+        const int repetitions = 64;
+        var testRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"WallpaperField-LargeFreeze-{Guid.NewGuid():N}");
+        var sourceRoot = Path.Combine(testRoot, "source");
+        var outputRoot = Path.Combine(testRoot, "output");
+        Directory.CreateDirectory(sourceRoot);
+
+        try
+        {
+            var shell = new ShellViewModel(
+                new LargeSnapshotScanService(sourceRoot, outputRoot, projectCount),
+                new EmptyLibraryService(),
+                new NullFolderPickerService(),
+                new NullSystemFolderService(),
+                new CapturingUnpackService())
+            {
+                SourcePath = sourceRoot,
+                OutputPath = outputRoot
+            };
+            await shell.ScanSession.ScanAsync();
+            var cards = shell.ScannedWallpapers.ToArray();
+            var started = Stopwatch.GetTimestamp();
+            if (!shell.ScanSession.TrySetUnpackSelection(cards, true))
+            {
+                failures.Add("1000-item snapshot selection failed before freeze benchmark");
+                return;
+            }
+
+            FrozenWallpaperProcessRequest? request = null;
+            for (var iteration = 0; iteration < repetitions; iteration++)
+            {
+                if (!shell.ScanSession.TryFreezeSelectedRequest(out request))
+                {
+                    failures.Add("1000-item current snapshot could not freeze");
+                    return;
+                }
+            }
+
+            var elapsed = Stopwatch.GetElapsedTime(started);
+            Console.WriteLine(
+                $"PERF_METRIC name=snapshot.select_and_freeze.1000x{repetitions} value_ms={elapsed.TotalMilliseconds:F3} budget_ms=150.0 result={(elapsed <= TimeSpan.FromMilliseconds(150) ? "PASS" : "FAIL")}");
+            if (request?.Items.Count != projectCount
+                || elapsed > TimeSpan.FromMilliseconds(150))
+            {
+                failures.Add(
+                    $"1000-item freeze remained superlinear: selection + {repetitions} freezes took {elapsed.TotalMilliseconds:F1} ms");
+            }
         }
         finally
         {
@@ -540,6 +689,59 @@ internal static class ProjectBrowserFoundationRegressionTests
                     Outcome = WallpaperUnpackOutcome.Succeeded,
                     CommitState = WallpaperItemCommitState.Committed
                 }).ToArray()
+            });
+        }
+    }
+
+    private sealed class BlockingLibraryService : IWallpaperLibraryService
+    {
+        private readonly TaskCompletionSource _started = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _release = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal Task Started => _started.Task;
+
+        internal void Complete() => _release.TrySetResult();
+
+        public async Task<WallpaperLibraryResult> LoadAsync(
+            string outputDirectory,
+            CancellationToken cancellationToken = default)
+        {
+            _started.TrySetResult();
+            await _release.Task.WaitAsync(cancellationToken);
+            return new WallpaperLibraryResult();
+        }
+    }
+
+    private sealed class LargeSnapshotScanService(
+        string sourceRoot,
+        string outputRoot,
+        int projectCount) : IWallpaperScanService
+    {
+        public Task<ScanResult> ScanAsync(
+            WallpaperScanRequest request,
+            IProgress<ScanProgress>? progress = null,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var now = DateTimeOffset.UtcNow;
+            return Task.FromResult(new ScanResult
+            {
+                Items = Enumerable.Range(0, projectCount)
+                    .Select(index => new WallpaperRecord
+                    {
+                        WorkshopId = $"large-{index:D4}",
+                        Title = $"Large {index:D4}",
+                        SourceDirectory = Path.Combine(sourceRoot, index.ToString("D4")),
+                        OutputDirectory = Path.Combine(outputRoot, index.ToString("D4")),
+                        HasScenePackage = true,
+                        ScenePackagePath = Path.Combine(sourceRoot, index.ToString("D4"), "scene.pkg"),
+                        ScannedAtUtc = now
+                    })
+                    .ToArray(),
+                StartedAtUtc = now,
+                CompletedAtUtc = now
             });
         }
     }

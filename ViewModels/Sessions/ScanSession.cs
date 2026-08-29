@@ -392,9 +392,16 @@ public sealed class ScanSession : ObservableObject
         bool selected)
     {
         ArgumentNullException.ThrowIfNull(cards);
-        if (HasActiveForegroundOperation()
-            || cards.Any(card => card is null
-                || !ScannedWallpapers.Any(candidate => ReferenceEquals(candidate, card))))
+        if (HasActiveForegroundOperation())
+        {
+            return false;
+        }
+
+        var currentCards = new HashSet<WallpaperCardViewModel>(
+            ScannedWallpapers,
+            ReferenceEqualityComparer.Instance);
+        if (cards.Any(card => card is null
+                || !currentCards.Contains(card)))
         {
             return false;
         }
@@ -460,14 +467,16 @@ public sealed class ScanSession : ObservableObject
             return false;
         }
 
-        var records = snapshot.Projects.Select(card => card.Record).ToArray();
+        var records = new HashSet<WallpaperRecord>(
+            snapshot.Projects.Select(card => card.Record),
+            ReferenceEqualityComparer.Instance);
         var seenItems = new HashSet<WallpaperRecord>(ReferenceEqualityComparer.Instance);
         var seenTargets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var item in request.Items)
         {
             if (item is null
                 || !item.IsProcessable
-                || !records.Any(record => ReferenceEquals(record, item))
+                || !records.Contains(item)
                 || !seenItems.Add(item)
                 || !TryNormalizeOutputTarget(item.OutputDirectory, out var outputTarget)
                 || !seenTargets.Add(outputTarget))
@@ -882,9 +891,7 @@ public sealed class ScanSession : ObservableObject
         var snapshot = ProjectSnapshot;
         if (snapshot is null
             || !IsCurrentScanIdentity()
-            || items.Count == 0
-            || items.Any(item => !item.IsProcessable
-                || !snapshot.Projects.Any(card => ReferenceEquals(card.Record, item))))
+            || items.Count == 0)
         {
             request = null;
             return false;

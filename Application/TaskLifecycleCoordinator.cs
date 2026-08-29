@@ -37,6 +37,20 @@ public sealed class TaskLifecycleCoordinator
         ForegroundOperationKind kind,
         Func<Guid, CancellationToken, Task> operation)
     {
+        if (!TryRunAsync(kind, operation, out var execution))
+        {
+            throw new InvalidOperationException(
+                "Only one foreground operation can run at a time.");
+        }
+
+        return execution!;
+    }
+
+    internal bool TryRunAsync(
+        ForegroundOperationKind kind,
+        Func<Guid, CancellationToken, Task> operation,
+        out Task? execution)
+    {
         ArgumentNullException.ThrowIfNull(operation);
         if (!Enum.IsDefined(kind))
         {
@@ -49,8 +63,8 @@ public sealed class TaskLifecycleCoordinator
         {
             if (_activeOperation is not null)
             {
-                throw new InvalidOperationException(
-                    "Only one foreground operation can run at a time.");
+                execution = null;
+                return false;
             }
 
             registration = new ActiveOperation(Guid.NewGuid(), kind);
@@ -64,7 +78,8 @@ public sealed class TaskLifecycleCoordinator
         }
 
         PublishQueuedChanges();
-        return ExecuteRegisteredAsync(registration, operation);
+        execution = ExecuteRegisteredAsync(registration, operation);
+        return true;
     }
 
     public bool RequestCancellation()

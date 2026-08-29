@@ -229,16 +229,28 @@ public sealed class UnpackSession : ObservableObject
             return;
         }
 
-        try
-        {
-            await _taskLifecycleCoordinator.RunAsync(
+        var foregroundWasActive = HasActiveForegroundOperation();
+        if (!_taskLifecycleCoordinator.TryRunAsync(
                 ForegroundOperationKind.Unpack,
                 (operationId, cancellationToken) => UnpackCoreAsync(
                     operationId,
                     frozenRequest.Items.ToArray(),
                     frozenRequest.OutputDirectory.Trim(),
-                    cancellationToken))
-                .ConfigureAwait(true);
+                    cancellationToken),
+                out var execution)
+            || execution is null)
+        {
+            SetStatus(
+                foregroundWasActive
+                    ? "已有前台任务正在运行；当前处理请求未启动"
+                    : "前台任务状态已变化；当前处理请求未启动",
+                "Neutral");
+            return;
+        }
+
+        try
+        {
+            await execution.ConfigureAwait(true);
         }
         catch (OperationCanceledException)
         {
@@ -253,6 +265,12 @@ public sealed class UnpackSession : ObservableObject
     internal void SetClosingPredicate(Func<bool> isClosing)
         => _isClosing = isClosing
             ?? throw new ArgumentNullException(nameof(isClosing));
+
+    private bool HasActiveForegroundOperation()
+        => _taskLifecycleCoordinator.Current.State is
+            TaskLifecycleState.Running
+            or TaskLifecycleState.CancellationRequested
+            or TaskLifecycleState.CommitCritical;
 
     private async Task UnpackCoreAsync(
         Guid operationId,

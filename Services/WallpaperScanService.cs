@@ -92,7 +92,7 @@ public sealed class WallpaperScanService : IWallpaperScanService
             {
                 throw;
             }
-            catch (Exception exception)
+            catch (Exception exception) when (!IsFatalScanException(exception))
             {
                 errors.Add(new ScanError
                 {
@@ -198,7 +198,7 @@ public sealed class WallpaperScanService : IWallpaperScanService
             {
                 throw;
             }
-            catch (Exception exception)
+            catch (Exception exception) when (!IsFatalScanException(exception))
             {
                 warnings.Add($"project.json 读取失败：{exception.Message}");
             }
@@ -355,7 +355,8 @@ public sealed class WallpaperScanService : IWallpaperScanService
             var relativePath = Path.GetRelativePath(normalizedSource, fullPath);
             return (fullPath, relativePath);
         }
-        catch (Exception exception) when (exception is not OperationCanceledException)
+        catch (Exception exception) when (exception is not OperationCanceledException
+                                          && !IsFatalScanException(exception))
         {
             warnings.Add($"视频文件路径无效：{exception.Message}");
             return (null, null);
@@ -415,6 +416,14 @@ public sealed class WallpaperScanService : IWallpaperScanService
             warnings.Add("预览文件不可用：路径包含重解析点，或无法读取安全扫描事实。");
             return null;
         }
+    }
+
+    internal static bool IsFatalScanException(Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        return exception is OutOfMemoryException
+            or StackOverflowException
+            or AccessViolationException;
     }
 
     private static string? FindProjectFile(string directory)
