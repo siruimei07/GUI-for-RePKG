@@ -19,10 +19,15 @@ internal static class ProjectBrowserPreviewRegressionTests
 
         VerifySurfaceAndLimits(assert);
         await VerifyRealDecoderAsync(assert);
+        await VerifyImmutableValidatedSourceAsync(assert);
         await VerifyInFlightAndConcurrencyAsync(assert);
         await VerifyCacheAndLeaseLifecycleAsync(assert);
+        await VerifyMaliciousResultNormalizationAsync(assert);
+        await VerifyFatalDecoderCompletionAsync(assert);
+        await VerifyOrderedSignalLifecycleAsync(assert);
         await VerifyFailureRetryAndGenerationAsync(assert);
         await VerifyViewportControlAsync(assert);
+        await VerifyBrowseSignalAffinityAsync(assert);
         await VerifyBrowseIntegrationSurfaceAsync(assert);
     }
 
@@ -108,6 +113,11 @@ internal static class ProjectBrowserPreviewRegressionTests
             "preview.gif",
             CreateFrozenBitmap(16, 10, blue: 0, green: 0, red: 255),
             CreateFrozenBitmap(16, 10, blue: 255, green: 0, red: 0));
+        var highBitSource = CreateFrozenRgba64Bitmap(17, 3);
+        var highBitPath = fixture.WriteBitmap(
+            "preview-rgba64.png",
+            new PngBitmapEncoder(),
+            highBitSource);
         var workerThreadIds = new ConcurrentQueue<int>();
         var decoder = new WpfPreviewThumbnailDecoder(workerThreadIds.Enqueue);
         var callerThreadId = Environment.CurrentManagedThreadId;
@@ -130,7 +140,45 @@ internal static class ProjectBrowserPreviewRegressionTests
         var gifPixel = ReadFirstBgraPixel(results[2].Bitmap!);
         assert(gifPixel.Red > gifPixel.Blue,
             "The GIF thumbnail did not retain the static first frame.");
-        assert(workerThreadIds.Count == 3
+        var highBitResult = await decoder.DecodeAsync(
+            CreateDecodeRequest(highBitPath, 64),
+            CancellationToken.None);
+        assert(highBitResult.IsSuccess
+               && highBitResult.DecodedBytes == CalculateAlignedBitmapBytes(highBitResult.Bitmap!)
+               && highBitResult.DecodedBytes <= PreviewThumbnailLimits.MaximumDecodedCacheBytes,
+            "A real high-bit-depth PNG reported inaccurate decoded/cache bytes.");
+        assert(PreviewThumbnailResult.Ready(highBitSource).DecodedBytes
+               == CalculateAlignedBitmapBytes(highBitSource),
+            "PreviewThumbnailResult.Ready hard-coded 32bpp byte accounting.");
+        using (var highBitService = new PreviewThumbnailService(
+                   new WpfPreviewThumbnailDecoder()))
+        {
+            highBitService.SetGeneration(1);
+            var highBitInfo = new FileInfo(highBitPath);
+            highBitInfo.Refresh();
+            var highBitRequest = new PreviewThumbnailRequest(
+                "real-high-bit-cache",
+                highBitPath,
+                highBitInfo.Length,
+                new DateTimeOffset(highBitInfo.LastWriteTimeUtc),
+                ".png",
+                64,
+                1);
+            PreviewThumbnailResult cachedHighBit;
+            using (var lease = highBitService.Acquire(highBitRequest))
+            {
+                cachedHighBit = await lease.Completion;
+            }
+
+            var highBitMetrics = highBitService.GetMetrics();
+            assert(cachedHighBit.Bitmap?.Format == PixelFormats.Bgra32
+                   && highBitMetrics.CacheEntryCount == 1
+                   && highBitMetrics.CacheDecodedBytes == cachedHighBit.DecodedBytes
+                   && highBitMetrics.CacheDecodedBytes
+                   <= PreviewThumbnailLimits.MaximumDecodedCacheBytes,
+                "A real high-bit-depth PNG did not normalize to exact bounded cache bytes.");
+        }
+        assert(workerThreadIds.Count == 4
                && workerThreadIds.All(threadId => threadId != callerThreadId),
             "Preview FileInfo/FileStream/BitmapDecoder work did not start on worker threads.");
 
@@ -361,6 +409,54 @@ internal static class ProjectBrowserPreviewRegressionTests
         }
     }
 
+    private static async Task VerifyImmutableValidatedSourceAsync(
+        Action<bool, string> assert)
+    {
+        using var fixture = new PreviewFixture();
+        var sourcePath = fixture.WriteBitmap(
+            "stable-source.png",
+            new PngBitmapEncoder(),
+            CreateFrozenBitmap(16, 10, blue: 0, green: 0, red: 255));
+        var replacementPath = fixture.WriteBitmap(
+            "replacement.png",
+            new PngBitmapEncoder(),
+            CreateFrozenBitmap(16, 10, blue: 255, green: 0, red: 0));
+        var request = CreateDecodeRequest(sourcePath, 64);
+        var envelopeValidated = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowPixels = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var constructor = typeof(WpfPreviewThumbnailDecoder).GetConstructor(
+            BindingFlags.Instance | BindingFlags.NonPublic,
+            binder: null,
+            [typeof(Action<int>), typeof(Action)],
+            modifiers: null);
+        assert(constructor is not null,
+            "The real decoder lacks a deterministic metadata-to-pixel stable-source barrier.");
+        if (constructor is null)
+        {
+            return;
+        }
+
+        var decoder = (WpfPreviewThumbnailDecoder)constructor.Invoke(
+        [
+            (Action<int>)(_ => { }),
+            (Action)(() =>
+            {
+                envelopeValidated.TrySetResult(true);
+                allowPixels.Task.GetAwaiter().GetResult();
+            })
+        ]);
+        var completion = decoder.DecodeAsync(request, CancellationToken.None);
+        await envelopeValidated.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        File.Move(replacementPath, sourcePath, overwrite: true);
+        allowPixels.TrySetResult(true);
+        var result = await completion.WaitAsync(TimeSpan.FromSeconds(2));
+        var pixel = ReadFirstBgraPixel(result.Bitmap!);
+        assert(result.IsSuccess && pixel.Red > pixel.Blue,
+            "A pathname swap after metadata validation changed the decoded pixel source.");
+    }
+
     private static async Task VerifyCacheAndLeaseLifecycleAsync(Action<bool, string> assert)
     {
         var decoder = new ControlledDecoder((_, _) => Task.FromResult(
@@ -407,14 +503,10 @@ internal static class ProjectBrowserPreviewRegressionTests
                 "The least-recently-used thumbnail was not evicted under cache pressure.");
         }
 
-        const long fakeDecodedBytes = 3L * 1024 * 1024;
+        const long fakeDecodedBytes = 4L * 1024 * 1024;
+        var byteBudgetBitmap = CreateFrozenBitmap(1024, 1024);
         var byteDecoder = new ControlledDecoder((_, _) => Task.FromResult(
-            new PreviewThumbnailResult(
-                PreviewThumbnailStatus.Ready,
-                CreateFrozenBitmap(1, 1),
-                fakeDecodedBytes,
-                null,
-                null)));
+            PreviewThumbnailResult.Ready(byteBudgetBitmap)));
         using (var service = new PreviewThumbnailService(byteDecoder))
         {
             service.SetGeneration(31);
@@ -545,6 +637,105 @@ internal static class ProjectBrowserPreviewRegressionTests
             assert(decoder.CallCount == 3
                    && signals.Count(signal => signal.Kind == PreviewThumbnailSignalKind.Resolved) == 1,
                 "A successful preview retry did not emit one resolve signal.");
+
+            PreviewThumbnailResult recoveredOriginal;
+            using (var recovered = service.Acquire(request))
+            {
+                recoveredOriginal = await recovered.Completion;
+            }
+
+            assert(recoveredOriginal.IsSuccess
+                   && decoder.CallCount == 4
+                   && signals.Count(signal => signal.Kind == PreviewThumbnailSignalKind.Failed) == 1,
+                "A successful cross-bucket retry left an older failure cache able to reopen Failed.");
+        }
+
+        var oldStarted = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseOld = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var bucket384Attempts = 0;
+        var bucket256Attempts = 0;
+        var concurrentDecoder = new ControlledDecoder(async (decodeRequest, _) =>
+        {
+            if (decodeRequest.SizeBucket == 256
+                && Interlocked.Increment(ref bucket256Attempts) == 1)
+            {
+                oldStarted.TrySetResult(true);
+                await releaseOld.Task;
+                return PreviewThumbnailResult.Failure(
+                    PreviewThumbnailStatus.Corrupt,
+                    "PREVIEW_OLD_FAILURE",
+                    "旧尺寸解码失败。");
+            }
+
+            if (decodeRequest.SizeBucket == 384
+                && Interlocked.Increment(ref bucket384Attempts) == 1)
+            {
+                return PreviewThumbnailResult.Failure(
+                    PreviewThumbnailStatus.Corrupt,
+                    "PREVIEW_BUCKET_FAILURE",
+                    "预览图损坏。");
+            }
+
+            return PreviewThumbnailResult.Ready(CreateFrozenBitmap(6, 4));
+        });
+        using (var service = new PreviewThumbnailService(concurrentDecoder))
+        {
+            service.SetGeneration(52);
+            var signals = new ConcurrentQueue<PreviewThumbnailSignalEventArgs>();
+            service.StatusChanged += (_, args) => signals.Enqueue(args);
+            var request256 = CreateFakeRequest(52, generation: 52);
+            var request384 = new PreviewThumbnailRequest(
+                request256.ProjectKey,
+                request256.CanonicalPath,
+                request256.ScanFileLength,
+                request256.ScanLastWriteTimeUtc,
+                request256.PreviewFormat,
+                321,
+                request256.Generation);
+            var oldLease = service.Acquire(request256);
+            var oldTerminalBeforeRelease = false;
+            PreviewThumbnailResult oldResult;
+            try
+            {
+                await oldStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+                using (var failure384 = service.Acquire(request384))
+                {
+                    _ = await failure384.Completion;
+                }
+
+                await WaitUntilAsync(() => signals.Any(signal =>
+                    signal.Kind == PreviewThumbnailSignalKind.Failed));
+                using (var retry384 = service.Acquire(request384, retryFailed: true))
+                {
+                    assert((await retry384.Completion).IsSuccess,
+                        "The concurrent cross-bucket retry fixture did not recover.");
+                }
+
+                oldTerminalBeforeRelease = await Task.WhenAny(
+                                               oldLease.Completion,
+                                               Task.Delay(TimeSpan.FromSeconds(1)))
+                                           == oldLease.Completion;
+                releaseOld.TrySetResult(true);
+                oldResult = await oldLease.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+            }
+            finally
+            {
+                releaseOld.TrySetResult(true);
+                oldLease.Dispose();
+            }
+
+            using var recovered256 = service.Acquire(request256);
+            var recoveredResult = await recovered256.Completion;
+            await WaitUntilAsync(() => service.GetMetrics().ActiveDecodes == 0);
+            var published = signals.ToArray();
+            assert(oldTerminalBeforeRelease
+                   && oldResult.Status == PreviewThumbnailStatus.Stale
+                   && recoveredResult.IsSuccess
+                   && published.Select(signal => signal.Kind).SequenceEqual(
+                       [PreviewThumbnailSignalKind.Failed, PreviewThumbnailSignalKind.Resolved]),
+                "A concurrent old-bucket completion survived recovery and reopened Failed.");
         }
 
         var releaseStale = new TaskCompletionSource<bool>(
@@ -574,6 +765,298 @@ internal static class ProjectBrowserPreviewRegressionTests
             assert((await mismatched.Completion).Status == PreviewThumbnailStatus.Stale,
                 "A request from an old snapshot generation entered the decoder queue.");
         }
+    }
+
+    private static async Task VerifyMaliciousResultNormalizationAsync(
+        Action<bool, string> assert)
+    {
+        var bitmap = CreateFrozenBitmap(1, 1);
+        var poisonedFailure = new PreviewThumbnailResult(
+            PreviewThumbnailStatus.Corrupt,
+            bitmap,
+            long.MaxValue,
+            "PREVIEW_CORRUPT",
+            "预览图损坏。");
+        var failureDecoder = new ControlledDecoder((_, _) => Task.FromResult(poisonedFailure));
+        using (var service = new PreviewThumbnailService(failureDecoder))
+        {
+            service.SetGeneration(41);
+            var request = CreateFakeRequest(41, generation: 41);
+            using (var first = service.Acquire(request))
+            {
+                var result = await first.Completion;
+                assert(result.Status == PreviewThumbnailStatus.Corrupt
+                       && result.Bitmap is null
+                       && result.DecodedBytes == 0,
+                    "A stable failure retained an attacker-controlled bitmap or byte count.");
+            }
+
+            var metrics = service.GetMetrics();
+            assert(metrics.CacheDecodedBytes == 0,
+                "A poisoned stable-failure byte count overflowed cache accounting.");
+        }
+
+        var poisonedReady = new PreviewThumbnailResult(
+            PreviewThumbnailStatus.Ready,
+            bitmap,
+            long.MaxValue,
+            null,
+            null);
+        var readyDecoder = new ControlledDecoder((_, _) => Task.FromResult(poisonedReady));
+        using (var service = new PreviewThumbnailService(readyDecoder))
+        {
+            service.SetGeneration(42);
+            using var lease = service.Acquire(CreateFakeRequest(42, generation: 42));
+            var result = await lease.Completion;
+            assert(result.IsSuccess
+                   && result.DecodedBytes == CalculateAlignedBitmapBytes(bitmap),
+                "Ready-result normalization trusted a forged decoded-byte count.");
+        }
+
+        var unfrozenBitmap = new WriteableBitmap(
+            1,
+            1,
+            96,
+            96,
+            PixelFormats.Bgra32,
+            null);
+        var unfrozenDecoder = new ControlledDecoder((_, _) => Task.FromResult(
+            new PreviewThumbnailResult(
+                PreviewThumbnailStatus.Ready,
+                unfrozenBitmap,
+                4,
+                null,
+                null)));
+        using (var service = new PreviewThumbnailService(unfrozenDecoder))
+        {
+            service.SetGeneration(44);
+            using var lease = service.Acquire(CreateFakeRequest(45, generation: 44));
+            var result = await lease.Completion;
+            assert(result.Status == PreviewThumbnailStatus.Corrupt
+                   && result.FailureCode == "PREVIEW_INVALID_RESULT"
+                   && result.Bitmap is null
+                   && result.DecodedBytes == 0,
+                "Ready-result normalization accepted an unfrozen attacker-controlled bitmap.");
+        }
+    }
+
+    private static async Task VerifyFatalDecoderCompletionAsync(
+        Action<bool, string> assert)
+    {
+        var attempts = 0;
+        var decoder = new ControlledDecoder((_, _) =>
+        {
+            var attempt = Interlocked.Increment(ref attempts);
+            return attempt == 1
+                ? Task.FromException<PreviewThumbnailResult>(
+                    new OutOfMemoryException("Injected fatal preview decoder fault."))
+                : Task.FromResult(
+                    PreviewThumbnailResult.Ready(CreateFrozenBitmap(4, 4)));
+        });
+        using var service = new PreviewThumbnailService(decoder);
+        service.SetGeneration(43);
+
+        var fatalLease = service.Acquire(CreateFakeRequest(43, generation: 43));
+        try
+        {
+            var terminal = await Task.WhenAny(
+                               fatalLease.Completion,
+                               Task.Delay(TimeSpan.FromSeconds(1)))
+                           == fatalLease.Completion;
+            assert(terminal,
+                "A fatal thumbnail decoder fault left its lease completion permanently pending.");
+
+            var preservedFatal = false;
+            if (terminal)
+            {
+                try
+                {
+                    _ = await fatalLease.Completion;
+                }
+                catch (OutOfMemoryException)
+                {
+                    preservedFatal = true;
+                }
+            }
+
+            assert(preservedFatal,
+                "A fatal thumbnail decoder fault was swallowed or converted into a stable failure.");
+        }
+        finally
+        {
+            fatalLease.Dispose();
+        }
+
+        using (var recovery = service.Acquire(CreateFakeRequest(44, generation: 43)))
+        {
+            assert((await recovery.Completion.WaitAsync(TimeSpan.FromSeconds(2))).IsSuccess,
+                "A fatal thumbnail decoder fault leaked the concurrency gate.");
+        }
+
+        await WaitUntilAsync(() => service.GetMetrics().PendingDecodes == 0);
+        var metrics = service.GetMetrics();
+        assert(metrics.ActiveDecodes == 0
+               && metrics.PendingDecodes == 0
+               && metrics.ObserverCount == 0,
+            "A fatal thumbnail decoder fault left active, pending, or observed operation state behind.");
+    }
+
+    private static async Task VerifyOrderedSignalLifecycleAsync(
+        Action<bool, string> assert)
+    {
+        await VerifyFailureRecoverySignalOrderAsync(assert);
+        await VerifyGenerationSignalOrderAsync(assert);
+        await VerifySignalDisposalBarrierAsync(assert);
+    }
+
+    private static async Task VerifyFailureRecoverySignalOrderAsync(
+        Action<bool, string> assert)
+    {
+        var attempts = 0;
+        var decoder = new ControlledDecoder(async (_, _) =>
+        {
+            await Task.Yield();
+            return Interlocked.Increment(ref attempts) == 1
+                ? PreviewThumbnailResult.Failure(
+                    PreviewThumbnailStatus.Corrupt,
+                    "PREVIEW_ORDERED_FAILURE",
+                    "预览图损坏。")
+                : PreviewThumbnailResult.Ready(CreateFrozenBitmap(4, 4));
+        });
+        using var service = new PreviewThumbnailService(decoder);
+        service.SetGeneration(61);
+        using var failureEntered = new ManualResetEventSlim(false);
+        using var allowFailure = new ManualResetEventSlim(false);
+        var observed = new ConcurrentQueue<PreviewThumbnailSignalEventArgs>();
+        service.StatusChanged += (_, args) =>
+        {
+            if (args.Kind == PreviewThumbnailSignalKind.Failed)
+            {
+                failureEntered.Set();
+                allowFailure.Wait(TimeSpan.FromSeconds(5));
+            }
+
+            observed.Enqueue(args);
+        };
+
+        using var first = service.Acquire(CreateFakeRequest(61, generation: 61));
+        _ = await first.Completion;
+        await WaitUntilAsync(() => failureEntered.IsSet);
+        using var retry = service.Acquire(first.Request, retryFailed: true);
+        assert((await retry.Completion).IsSuccess,
+            "The ordered signal recovery fixture did not decode successfully.");
+        await Task.Delay(100);
+        var resolvedEscapedBarrier = observed.Any(signal =>
+            signal.Kind == PreviewThumbnailSignalKind.Resolved);
+        allowFailure.Set();
+        await WaitUntilAsync(() => observed.Count == 2);
+        var published = observed.ToArray();
+        assert(!resolvedEscapedBarrier
+               && published.Select(signal => signal.Kind).SequenceEqual(
+                   [PreviewThumbnailSignalKind.Failed, PreviewThumbnailSignalKind.Resolved])
+               && GetSignalGeneration(published[0]) == 61
+               && GetSignalGeneration(published[1]) == 61
+               && GetSignalSequence(published[0]) > 0
+               && GetSignalSequence(published[1]) > GetSignalSequence(published[0]),
+            "Concurrent failure/recovery publication inverted its linearized signal order or identity.");
+    }
+
+    private static async Task VerifyGenerationSignalOrderAsync(
+        Action<bool, string> assert)
+    {
+        var decoder = new ControlledDecoder(async (_, _) =>
+        {
+            await Task.Yield();
+            return PreviewThumbnailResult.Failure(
+                PreviewThumbnailStatus.Corrupt,
+                "PREVIEW_GENERATION_FAILURE",
+                "预览图损坏。");
+        });
+        using var service = new PreviewThumbnailService(decoder);
+        service.SetGeneration(71);
+        using var failureEntered = new ManualResetEventSlim(false);
+        using var allowFailure = new ManualResetEventSlim(false);
+        var observed = new ConcurrentQueue<PreviewThumbnailSignalEventArgs>();
+        service.StatusChanged += (_, args) =>
+        {
+            if (args.Kind == PreviewThumbnailSignalKind.Failed)
+            {
+                failureEntered.Set();
+                allowFailure.Wait(TimeSpan.FromSeconds(5));
+            }
+
+            observed.Enqueue(args);
+        };
+
+        using var lease = service.Acquire(CreateFakeRequest(71, generation: 71));
+        _ = await lease.Completion;
+        await WaitUntilAsync(() => failureEntered.IsSet);
+        await Task.Run(() => service.SetGeneration(72));
+        await Task.Delay(100);
+        var resolvedEscapedBarrier = observed.Any(signal =>
+            signal.Kind == PreviewThumbnailSignalKind.Resolved);
+        allowFailure.Set();
+        await WaitUntilAsync(() => observed.Count == 2);
+        var published = observed.ToArray();
+        assert(!resolvedEscapedBarrier
+               && published.Select(signal => signal.Kind).SequenceEqual(
+                   [PreviewThumbnailSignalKind.Failed, PreviewThumbnailSignalKind.Resolved])
+               && GetSignalGeneration(published[0]) == 71
+               && GetSignalGeneration(published[1]) == 72
+               && GetSignalSequence(published[1]) > GetSignalSequence(published[0]),
+            "Generation replacement published Resolved before the older Failed callback or lacked stale identity.");
+    }
+
+    private static async Task VerifySignalDisposalBarrierAsync(
+        Action<bool, string> assert)
+    {
+        var decoder = new ControlledDecoder(async (_, _) =>
+        {
+            await Task.Yield();
+            return PreviewThumbnailResult.Failure(
+                PreviewThumbnailStatus.Corrupt,
+                "PREVIEW_DISPOSE_FAILURE",
+                "预览图损坏。");
+        });
+        var service = new PreviewThumbnailService(decoder);
+        service.SetGeneration(81);
+        using var firstHandlerEntered = new ManualResetEventSlim(false);
+        using var allowFirstHandler = new ManualResetEventSlim(false);
+        using var firstHandlerReturned = new ManualResetEventSlim(false);
+        var disposeReturned = 0;
+        var postDisposeCallbacks = 0;
+        service.StatusChanged += (_, _) =>
+        {
+            firstHandlerEntered.Set();
+            allowFirstHandler.Wait(TimeSpan.FromSeconds(5));
+            firstHandlerReturned.Set();
+        };
+        service.StatusChanged += (_, _) =>
+        {
+            if (Volatile.Read(ref disposeReturned) != 0)
+            {
+                Interlocked.Increment(ref postDisposeCallbacks);
+            }
+        };
+
+        using var lease = service.Acquire(CreateFakeRequest(81, generation: 81));
+        _ = await lease.Completion;
+        await WaitUntilAsync(() => firstHandlerEntered.IsSet);
+        var disposeTask = Task.Run(service.Dispose);
+        var disposedWithoutWaitingOnObserver = await Task.WhenAny(
+            disposeTask,
+            Task.Delay(TimeSpan.FromSeconds(1))) == disposeTask;
+        if (disposedWithoutWaitingOnObserver)
+        {
+            Volatile.Write(ref disposeReturned, 1);
+        }
+
+        allowFirstHandler.Set();
+        await disposeTask.WaitAsync(TimeSpan.FromSeconds(2));
+        await WaitUntilAsync(() => firstHandlerReturned.IsSet);
+        await Task.Delay(50);
+        assert(disposedWithoutWaitingOnObserver && postDisposeCallbacks == 0,
+            "A captured thumbnail signal invocation ran after Dispose or disposal deadlocked on an observer.");
     }
 
     private static async Task VerifyViewportControlAsync(Action<bool, string> assert)
@@ -685,6 +1168,100 @@ internal static class ProjectBrowserPreviewRegressionTests
                 window.Close();
             }
         });
+
+        (int Item, int Pixel) viewportCounts = default;
+        await RunOnStaAsync(async () =>
+        {
+            var itemCount = await MeasureVirtualizedViewportAcquisitionsAsync(
+                ScrollUnit.Item);
+            var pixelCount = await MeasureVirtualizedViewportAcquisitionsAsync(
+                ScrollUnit.Pixel);
+            viewportCounts = (itemCount, pixelCount);
+        });
+        Console.WriteLine(
+            $"PREVIEW_VIEWPORT_COUNTS item={viewportCounts.Item} pixel={viewportCounts.Pixel}");
+        assert(viewportCounts.Item == 3 && viewportCounts.Pixel == 3,
+            "Virtualized Item/Pixel scrolling did not acquire exactly the visible rows plus one-row overscan.");
+    }
+
+    private static async Task<int> MeasureVirtualizedViewportAcquisitionsAsync(
+        ScrollUnit scrollUnit)
+    {
+        var decoder = new ControlledDecoder((_, _) => Task.FromResult(
+            PreviewThumbnailResult.Ready(CreateFrozenBitmap(16, 10))));
+        using var service = new PreviewThumbnailService(decoder);
+        service.SetGeneration(scrollUnit == ScrollUnit.Item ? 91 : 92);
+        var generation = service.Generation;
+        var list = new ListBox
+        {
+            Width = 240,
+            Height = 202,
+            BorderThickness = new Thickness(1),
+            Padding = new Thickness(0),
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            VerticalContentAlignment = VerticalAlignment.Top
+        };
+        var containerStyle = new Style(typeof(ListBoxItem));
+        containerStyle.Setters.Add(new Setter(FrameworkElement.HeightProperty, 100d));
+        containerStyle.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(0)));
+        containerStyle.Setters.Add(new Setter(
+            Control.HorizontalContentAlignmentProperty,
+            HorizontalAlignment.Stretch));
+        list.ItemContainerStyle = containerStyle;
+        VirtualizingPanel.SetIsVirtualizing(list, true);
+        VirtualizingPanel.SetVirtualizationMode(list, VirtualizationMode.Recycling);
+        VirtualizingPanel.SetCacheLength(list, new VirtualizationCacheLength(1));
+        VirtualizingPanel.SetCacheLengthUnit(list, VirtualizationCacheLengthUnit.Item);
+        VirtualizingPanel.SetScrollUnit(list, scrollUnit);
+        ScrollViewer.SetVerticalScrollBarVisibility(list, ScrollBarVisibility.Hidden);
+        ScrollViewer.SetHorizontalScrollBarVisibility(list, ScrollBarVisibility.Disabled);
+
+        foreach (var index in Enumerable.Range(0, 8))
+        {
+            list.Items.Add(new ThumbnailPreviewImage
+            {
+                Height = 100,
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                ThumbnailService = service,
+                ProjectKey = $"virtual-{scrollUnit}-{index}",
+                SourcePath = Path.Combine(
+                    Path.GetTempPath(),
+                    $"virtual-{scrollUnit}-{index}.png"),
+                ScanFileLength = 100 + index,
+                ScanLastWriteTimeUtc = DateTimeOffset.UnixEpoch.AddSeconds(index),
+                PreviewFormat = ".png",
+                SnapshotGeneration = generation,
+                DecodePixelWidth = 193
+            });
+        }
+
+        var window = new Window
+        {
+            Width = 260,
+            Height = 240,
+            Left = -10_000,
+            Top = -10_000,
+            ShowActivated = false,
+            ShowInTaskbar = false,
+            WindowStyle = WindowStyle.None,
+            SizeToContent = SizeToContent.Manual,
+            Content = list
+        };
+        try
+        {
+            window.Show();
+            await DrainAsync(window.Dispatcher, DispatcherPriority.ApplicationIdle);
+            await WaitUntilAsync(
+                () => decoder.CallCount >= 2,
+                dispatcher: window.Dispatcher);
+            await Task.Delay(100);
+            await DrainAsync(window.Dispatcher, DispatcherPriority.ApplicationIdle);
+            return decoder.CallCount;
+        }
+        finally
+        {
+            window.Close();
+        }
     }
 
     private static async Task VerifyBrowseIntegrationSurfaceAsync(
@@ -753,6 +1330,74 @@ internal static class ProjectBrowserPreviewRegressionTests
         }
     }
 
+    private static async Task VerifyBrowseSignalAffinityAsync(
+        Action<bool, string> assert)
+    {
+        await RunOnStaAsync(async () =>
+        {
+            var ownerThreadId = Environment.CurrentManagedThreadId;
+            var shell = WallpaperField.Composition.AppComposition.CreateShellViewModel();
+            var affinityCorrect = false;
+            try
+            {
+                var browse = shell.BrowsePageViewModel;
+                var published = new TaskCompletionSource<(int ThreadId,
+                    PreviewThumbnailSignalEventArgs Signal)>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                browse.PreviewStatusChanged += (_, args) => published.TrySetResult(
+                    (Environment.CurrentManagedThreadId, args));
+                var request = CreateMissingRequest(
+                    "browse-affinity",
+                    browse.ThumbnailGeneration);
+                using var lease = browse.ThumbnailService.Acquire(request);
+                _ = await lease.Completion;
+                await WaitUntilAsync(
+                    () => published.Task.IsCompleted,
+                    dispatcher: Dispatcher.CurrentDispatcher);
+                var observed = await published.Task;
+                affinityCorrect = observed.ThreadId == ownerThreadId
+                                  && GetSignalGeneration(observed.Signal)
+                                      == browse.ThumbnailGeneration
+                                  && GetSignalSequence(observed.Signal) > 0;
+            }
+            finally
+            {
+                shell.Dispose();
+            }
+
+            var disposeShell = WallpaperField.Composition.AppComposition.CreateShellViewModel();
+            var postDisposeCallbacks = 0;
+            var serviceSignalReached = new ManualResetEventSlim(false);
+            try
+            {
+                var browse = disposeShell.BrowsePageViewModel;
+                browse.PreviewStatusChanged += (_, _) =>
+                    Interlocked.Increment(ref postDisposeCallbacks);
+                browse.ThumbnailService.StatusChanged += (_, _) =>
+                    serviceSignalReached.Set();
+                var request = CreateMissingRequest(
+                    "browse-dispose",
+                    browse.ThumbnailGeneration);
+                using var lease = browse.ThumbnailService.Acquire(request);
+                var workerReachedServiceSeam = serviceSignalReached.Wait(
+                    TimeSpan.FromSeconds(2));
+                browse.Dispose();
+                await DrainAsync(Dispatcher.CurrentDispatcher, DispatcherPriority.ApplicationIdle);
+                affinityCorrect = affinityCorrect
+                                  && workerReachedServiceSeam
+                                  && Volatile.Read(ref postDisposeCallbacks) == 0;
+            }
+            finally
+            {
+                serviceSignalReached.Dispose();
+                disposeShell.Dispose();
+            }
+
+            assert(affinityCorrect,
+                "Browse preview signals were not marshalled to their owner or escaped after disposal.");
+        });
+    }
+
     private static PreviewThumbnailDecodeRequest CreateDecodeRequest(
         string path,
         int requestedPixelWidth)
@@ -775,6 +1420,20 @@ internal static class ProjectBrowserPreviewRegressionTests
             Path.Combine(Path.GetTempPath(), "WallpaperField-Preview-Fake", $"{index:D4}.png"),
             100 + index,
             DateTimeOffset.UnixEpoch.AddSeconds(index),
+            ".png",
+            193,
+            generation);
+
+    private static PreviewThumbnailRequest CreateMissingRequest(
+        string projectKey,
+        long generation)
+        => new(
+            projectKey,
+            Path.Combine(
+                Path.GetTempPath(),
+                $"WallpaperField-Missing-{Guid.NewGuid():N}.png"),
+            1,
+            DateTimeOffset.UnixEpoch,
             ".png",
             193,
             generation);
@@ -808,6 +1467,52 @@ internal static class ProjectBrowserPreviewRegressionTests
         bitmap.Freeze();
         return bitmap;
     }
+
+    private static BitmapSource CreateFrozenRgba64Bitmap(int width, int height)
+    {
+        var stride = checked(width * 8);
+        var pixels = new byte[checked(stride * height)];
+        for (var index = 0; index < pixels.Length; index += 8)
+        {
+            pixels[index] = 0xFF;
+            pixels[index + 1] = 0x3F;
+            pixels[index + 2] = 0xFF;
+            pixels[index + 3] = 0x7F;
+            pixels[index + 4] = 0xFF;
+            pixels[index + 5] = 0xBF;
+            pixels[index + 6] = 0xFF;
+            pixels[index + 7] = 0xFF;
+        }
+
+        var bitmap = BitmapSource.Create(
+            width,
+            height,
+            96,
+            96,
+            PixelFormats.Rgba64,
+            null,
+            pixels,
+            stride);
+        bitmap.Freeze();
+        return bitmap;
+    }
+
+    private static long CalculateAlignedBitmapBytes(BitmapSource bitmap)
+    {
+        var rowBits = checked((long)bitmap.PixelWidth * bitmap.Format.BitsPerPixel);
+        var stride = checked(((rowBits + 31) / 32) * 4);
+        return checked(stride * bitmap.PixelHeight);
+    }
+
+    private static long GetSignalGeneration(PreviewThumbnailSignalEventArgs args)
+        => args.GetType().GetProperty("Generation")?.GetValue(args) is long generation
+            ? generation
+            : -1;
+
+    private static long GetSignalSequence(PreviewThumbnailSignalEventArgs args)
+        => args.GetType().GetProperty("Sequence")?.GetValue(args) is long sequence
+            ? sequence
+            : -1;
 
     private static (byte Blue, byte Green, byte Red, byte Alpha) ReadFirstBgraPixel(
         BitmapSource bitmap)
@@ -1058,6 +1763,23 @@ internal static class ProjectBrowserPreviewRegressionTests
             var encoder = new GifBitmapEncoder();
             encoder.Frames.Add(BitmapFrame.Create(firstFrame));
             encoder.Frames.Add(BitmapFrame.Create(secondFrame));
+            using var stream = new FileStream(
+                path,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None);
+            encoder.Save(stream);
+            return path;
+        }
+
+        internal string WriteBitmap(
+            string relativePath,
+            BitmapEncoder encoder,
+            BitmapSource bitmap)
+        {
+            var path = Path.Combine(Root, relativePath);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            encoder.Frames.Add(BitmapFrame.Create(bitmap));
             using var stream = new FileStream(
                 path,
                 FileMode.CreateNew,

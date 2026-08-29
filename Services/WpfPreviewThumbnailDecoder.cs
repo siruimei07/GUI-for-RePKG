@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using WallpaperField.Models;
 
@@ -9,14 +10,23 @@ public sealed class WpfPreviewThumbnailDecoder : IPreviewThumbnailDecoder
     private const int StreamBufferSize = 64 * 1024;
 
     private readonly Action<int>? _workerEntered;
+    private readonly Action? _envelopeValidated;
 
     public WpfPreviewThumbnailDecoder()
     {
     }
 
     internal WpfPreviewThumbnailDecoder(Action<int> workerEntered)
+        : this(workerEntered, null)
+    {
+    }
+
+    internal WpfPreviewThumbnailDecoder(
+        Action<int> workerEntered,
+        Action? envelopeValidated)
     {
         _workerEntered = workerEntered ?? throw new ArgumentNullException(nameof(workerEntered));
+        _envelopeValidated = envelopeValidated;
     }
 
     public Task<PreviewThumbnailResult> DecodeAsync(
@@ -99,42 +109,75 @@ public sealed class WpfPreviewThumbnailDecoder : IPreviewThumbnailDecoder
                 return Missing();
             }
 
-            if (fileInfo.Length <= 0)
+            cancellationToken.ThrowIfCancellationRequested();
+            byte[] encodedBytes;
+            using (var stream = new FileStream(
+                       request.CanonicalPath,
+                       FileMode.Open,
+                       FileAccess.Read,
+                       FileShare.Read,
+                       StreamBufferSize,
+                       FileOptions.SequentialScan))
             {
-                return Failure(
-                    PreviewThumbnailStatus.Corrupt,
-                    "PREVIEW_EMPTY",
-                    "预览图为空。");
-            }
+                var handle = stream.SafeFileHandle;
+                var handleAttributes = File.GetAttributes(handle);
+                if ((handleAttributes & FileAttributes.ReparsePoint) != 0)
+                {
+                    return Failure(
+                        PreviewThumbnailStatus.ReparsePoint,
+                        "PREVIEW_REPARSE_POINT",
+                        "预览图路径包含链接或重解析点。");
+                }
 
-            if (fileInfo.Length > PreviewThumbnailLimits.MaximumInputBytes)
-            {
-                return Failure(
-                    PreviewThumbnailStatus.OverBudget,
-                    "PREVIEW_INPUT_BYTES",
-                    "预览图超过 64 MiB 输入预算。");
-            }
+                var handleLength = stream.Length;
+                if (handleLength <= 0)
+                {
+                    return Failure(
+                        PreviewThumbnailStatus.Corrupt,
+                        "PREVIEW_EMPTY",
+                        "预览图为空。");
+                }
 
-            var currentTimestamp = new DateTimeOffset(fileInfo.LastWriteTimeUtc);
-            if (fileInfo.Length != request.ScanFileLength
-                || currentTimestamp.UtcTicks != request.ScanLastWriteTimeUtc.UtcTicks)
-            {
-                return Failure(
-                    PreviewThumbnailStatus.Changed,
-                    "PREVIEW_CHANGED",
-                    "预览图自扫描后已发生变化，请重新扫描。");
+                if (handleLength > PreviewThumbnailLimits.MaximumInputBytes)
+                {
+                    return Failure(
+                        PreviewThumbnailStatus.OverBudget,
+                        "PREVIEW_INPUT_BYTES",
+                        "预览图超过 64 MiB 输入预算。");
+                }
+
+                var handleTimestamp = new DateTimeOffset(
+                    File.GetLastWriteTimeUtc(handle));
+                if (handleLength != request.ScanFileLength
+                    || handleTimestamp.UtcTicks != request.ScanLastWriteTimeUtc.UtcTicks)
+                {
+                    return Failure(
+                        PreviewThumbnailStatus.Changed,
+                        "PREVIEW_CHANGED",
+                        "预览图自扫描后已发生变化，请重新扫描。");
+                }
+
+                OutputPathPolicy.RejectReparsePointsInExistingPath(
+                    request.CanonicalPath,
+                    "预览文件");
+                encodedBytes = GC.AllocateUninitializedArray<byte>(
+                    checked((int)handleLength));
+                ReadExactly(stream, encodedBytes, cancellationToken);
+
+                if (stream.Length != handleLength
+                    || File.GetLastWriteTimeUtc(handle).Ticks != handleTimestamp.UtcTicks)
+                {
+                    return Failure(
+                        PreviewThumbnailStatus.Changed,
+                        "PREVIEW_CHANGED",
+                        "预览图自扫描后已发生变化，请重新扫描。");
+                }
             }
 
             cancellationToken.ThrowIfCancellationRequested();
-            using var stream = new FileStream(
-                request.CanonicalPath,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.ReadWrite | FileShare.Delete,
-                StreamBufferSize,
-                FileOptions.SequentialScan);
+            using var envelopeStream = new MemoryStream(encodedBytes, writable: false);
             var decoder = BitmapDecoder.Create(
-                stream,
+                envelopeStream,
                 BitmapCreateOptions.DelayCreation | BitmapCreateOptions.IgnoreColorProfile,
                 BitmapCacheOption.None);
             if (decoder is not (PngBitmapDecoder or JpegBitmapDecoder or GifBitmapDecoder)
@@ -179,14 +222,9 @@ public sealed class WpfPreviewThumbnailDecoder : IPreviewThumbnailDecoder
                     exception.Message);
             }
 
+            _envelopeValidated?.Invoke();
             cancellationToken.ThrowIfCancellationRequested();
-            using var decodeStream = new FileStream(
-                request.CanonicalPath,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.ReadWrite | FileShare.Delete,
-                StreamBufferSize,
-                FileOptions.SequentialScan);
+            using var decodeStream = new MemoryStream(encodedBytes, writable: false);
             var image = new BitmapImage();
             image.BeginInit();
             image.CacheOption = BitmapCacheOption.OnLoad;
@@ -202,9 +240,33 @@ public sealed class WpfPreviewThumbnailDecoder : IPreviewThumbnailDecoder
                     "预览图无法创建安全的静态帧。");
             }
 
-            image.Freeze();
+            BitmapSource thumbnail;
+            if (image.Format == PixelFormats.Bgra32)
+            {
+                image.Freeze();
+                thumbnail = image;
+            }
+            else
+            {
+                var converted = new FormatConvertedBitmap(
+                    image,
+                    PixelFormats.Bgra32,
+                    null,
+                    0);
+                if (!converted.CanFreeze)
+                {
+                    return Failure(
+                        PreviewThumbnailStatus.Corrupt,
+                        "PREVIEW_NOT_FREEZABLE",
+                        "预览图无法创建安全的静态帧。");
+                }
+
+                converted.Freeze();
+                thumbnail = converted;
+            }
+
             cancellationToken.ThrowIfCancellationRequested();
-            var decodedBytes = checked((long)image.PixelWidth * image.PixelHeight * 4);
+            var decodedBytes = PreviewThumbnailLimits.CalculateDecodedBytes(thumbnail);
             if (decodedBytes <= 0
                 || decodedBytes > PreviewThumbnailLimits.MaximumDecodedCacheBytes)
             {
@@ -216,7 +278,7 @@ public sealed class WpfPreviewThumbnailDecoder : IPreviewThumbnailDecoder
 
             return new PreviewThumbnailResult(
                 PreviewThumbnailStatus.Ready,
-                image,
+                thumbnail,
                 decodedBytes,
                 null,
                 null);
@@ -239,6 +301,30 @@ public sealed class WpfPreviewThumbnailDecoder : IPreviewThumbnailDecoder
                 PreviewThumbnailStatus.Corrupt,
                 "PREVIEW_CORRUPT",
                 "预览图损坏或无法解码。");
+        }
+    }
+
+    private static void ReadExactly(
+        Stream stream,
+        byte[] buffer,
+        CancellationToken cancellationToken)
+    {
+        var totalRead = 0;
+        while (totalRead < buffer.Length)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var read = stream.Read(buffer, totalRead, buffer.Length - totalRead);
+            if (read == 0)
+            {
+                throw new EndOfStreamException("Preview source ended before its validated length.");
+            }
+
+            totalRead = checked(totalRead + read);
+        }
+
+        if (stream.ReadByte() != -1)
+        {
+            throw new InvalidDataException("Preview source grew beyond its validated length.");
         }
     }
 

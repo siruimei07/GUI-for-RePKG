@@ -26,6 +26,8 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
     private readonly ScanSession _scanSession;
     private readonly ProblemCenterSession _problemCenterSession;
     private readonly PreviewThumbnailService _thumbnailService;
+    private readonly SynchronizationContext? _ownerContext;
+    private readonly int _ownerThreadId;
     private readonly List<BrowseProjectViewModel> _allProjects = [];
     private ScanProjectSnapshot? _snapshot;
     private BrowseProjectViewModel? _currentProject;
@@ -36,7 +38,8 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
     private ProjectBrowserSort _sort;
     private int _columnCount = 4;
     private string? _focusedProjectKey;
-    private bool _disposed;
+    private volatile bool _disposed;
+    private long _lastPreviewSignalSequence;
     private bool _suppressSelectionNotifications;
     private bool _selectionChangedWhileSuppressed;
     private bool _problemStateChanged;
@@ -51,6 +54,8 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
 
         _scanSession = scanSession;
         _problemCenterSession = problemCenterSession;
+        _ownerContext = CaptureOwnerContext();
+        _ownerThreadId = Environment.CurrentManagedThreadId;
         _thumbnailService = thumbnailService
             ?? new PreviewThumbnailService(new WpfPreviewThumbnailDecoder());
         _scanSession.PropertyChanged += OnScanSessionPropertyChanged;
@@ -339,10 +344,10 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
                 string.Equals(project.ProjectKey, previousFocusKey, StringComparison.Ordinal))
                 ?.WorkshopId;
 
+        _snapshot = snapshot;
         _thumbnailService.SetGeneration(snapshot?.Revision ?? 0);
         DetachCards();
         _allProjects.Clear();
-        _snapshot = snapshot;
         if (snapshot is not null)
         {
             foreach (var card in snapshot.Projects)
@@ -383,7 +388,56 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
     private void OnThumbnailStatusChanged(
         object? sender,
         PreviewThumbnailSignalEventArgs args)
-        => PreviewStatusChanged?.Invoke(this, args);
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        if (_ownerContext is not null
+            && Environment.CurrentManagedThreadId != _ownerThreadId)
+        {
+            try
+            {
+                _ownerContext.Post(
+                    static state =>
+                    {
+                        var delivery = (PreviewSignalDelivery)state!;
+                        delivery.Owner.DeliverPreviewSignal(delivery.Args);
+                    },
+                    new PreviewSignalDelivery(this, args));
+            }
+            catch (Exception exception) when (exception is
+                       InvalidOperationException or TaskCanceledException)
+            {
+                // The owning dispatcher is shutting down; the signal is obsolete.
+            }
+
+            return;
+        }
+
+        DeliverPreviewSignal(args);
+    }
+
+    private void DeliverPreviewSignal(PreviewThumbnailSignalEventArgs args)
+    {
+        if (_disposed
+            || args.Generation != ThumbnailGeneration
+            || args.Sequence <= _lastPreviewSignalSequence)
+        {
+            return;
+        }
+
+        _lastPreviewSignalSequence = args.Sequence;
+        PreviewStatusChanged?.Invoke(this, args);
+    }
+
+    private static SynchronizationContext? CaptureOwnerContext()
+        => SynchronizationContext.Current;
+
+    private sealed record PreviewSignalDelivery(
+        BrowsePageViewModel Owner,
+        PreviewThumbnailSignalEventArgs Args);
 
     private BrowseProjectViewModel? FindRestoredProject(string? projectKey, string? workshopId)
         => _allProjects.FirstOrDefault(project =>

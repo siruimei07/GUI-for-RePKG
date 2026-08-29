@@ -239,8 +239,10 @@ public sealed class ThumbnailPreviewImage : Image
             return true;
         }
 
-        var viewportWidth = _viewport.ViewportWidth;
-        var viewportHeight = _viewport.ViewportHeight;
+        var presenter = FindVisualDescendant<ScrollContentPresenter>(_viewport);
+        var viewportVisual = (Visual?)presenter ?? _viewport;
+        var viewportWidth = presenter?.ActualWidth ?? _viewport.ActualWidth;
+        var viewportHeight = presenter?.ActualHeight ?? _viewport.ActualHeight;
         if (!double.IsFinite(viewportWidth)
             || !double.IsFinite(viewportHeight)
             || viewportWidth <= 0
@@ -266,7 +268,7 @@ public sealed class ThumbnailPreviewImage : Image
                 return false;
             }
 
-            var bounds = parent.TransformToAncestor(_viewport).TransformBounds(slot);
+            var bounds = parent.TransformToAncestor(viewportVisual).TransformBounds(slot);
             var rowHeight = slot.Height;
             var overscan = new Rect(
                 0,
@@ -404,6 +406,27 @@ public sealed class ThumbnailPreviewImage : Image
             current = current is Visual or Visual3D
                 ? VisualTreeHelper.GetParent(current)
                 : LogicalTreeHelper.GetParent(current);
+        }
+
+        return null;
+    }
+
+    private static T? FindVisualDescendant<T>(DependencyObject start)
+        where T : DependencyObject
+    {
+        var childCount = VisualTreeHelper.GetChildrenCount(start);
+        for (var index = 0; index < childCount; index++)
+        {
+            var child = VisualTreeHelper.GetChild(start, index);
+            if (child is T match)
+            {
+                return match;
+            }
+
+            if (FindVisualDescendant<T>(child) is { } descendant)
+            {
+                return descendant;
+            }
         }
 
         return null;

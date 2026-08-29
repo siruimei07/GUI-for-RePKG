@@ -33,6 +33,33 @@ public static class PreviewThumbnailLimits
                 "预览图源画布超过安全像素预算。");
         }
     }
+
+    internal static long CalculateDecodedBytes(BitmapSource bitmap)
+    {
+        ArgumentNullException.ThrowIfNull(bitmap);
+        if (bitmap.PixelWidth <= 0
+            || bitmap.PixelHeight <= 0
+            || bitmap.Format.BitsPerPixel <= 0)
+        {
+            throw new PreviewThumbnailBudgetException(
+                "PREVIEW_DECODED_FORMAT",
+                "预览图解码格式无法计算安全内存预算。");
+        }
+
+        try
+        {
+            var rowBits = checked((long)bitmap.PixelWidth * bitmap.Format.BitsPerPixel);
+            var stride = checked(((rowBits + 31) / 32) * 4);
+            return checked(stride * bitmap.PixelHeight);
+        }
+        catch (OverflowException exception)
+        {
+            throw new PreviewThumbnailBudgetException(
+                "PREVIEW_DECODED_BYTES",
+                "预览图解码结果超过内存预算。",
+                exception);
+        }
+    }
 }
 
 public enum PreviewThumbnailStatus
@@ -151,7 +178,7 @@ public sealed record PreviewThumbnailResult(
     public static PreviewThumbnailResult Ready(BitmapSource bitmap)
     {
         ArgumentNullException.ThrowIfNull(bitmap);
-        var decodedBytes = checked((long)bitmap.PixelWidth * bitmap.PixelHeight * 4);
+        var decodedBytes = PreviewThumbnailLimits.CalculateDecodedBytes(bitmap);
         return new PreviewThumbnailResult(
             PreviewThumbnailStatus.Ready,
             bitmap,
@@ -195,13 +222,17 @@ public sealed class PreviewThumbnailSignalEventArgs : EventArgs
         string projectKey,
         string previewVersion,
         string failureCode,
-        string summary)
+        string summary,
+        long generation,
+        long sequence)
     {
         Kind = kind;
         ProjectKey = projectKey;
         PreviewVersion = previewVersion;
         FailureCode = failureCode;
         Summary = summary;
+        Generation = generation;
+        Sequence = sequence;
     }
 
     public PreviewThumbnailSignalKind Kind { get; }
@@ -213,6 +244,10 @@ public sealed class PreviewThumbnailSignalEventArgs : EventArgs
     public string FailureCode { get; }
 
     public string Summary { get; }
+
+    public long Generation { get; }
+
+    public long Sequence { get; }
 }
 
 public sealed record PreviewThumbnailMetrics(
@@ -240,6 +275,15 @@ internal sealed class PreviewThumbnailBudgetException : IOException
 {
     internal PreviewThumbnailBudgetException(string code, string message)
         : base(message)
+    {
+        Code = code;
+    }
+
+    internal PreviewThumbnailBudgetException(
+        string code,
+        string message,
+        Exception innerException)
+        : base(message, innerException)
     {
         Code = code;
     }

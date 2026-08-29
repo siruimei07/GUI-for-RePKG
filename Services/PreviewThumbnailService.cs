@@ -12,9 +12,12 @@ public sealed class PreviewThumbnailService : IDisposable
     private readonly Dictionary<PreviewThumbnailCacheKey, DecodeOperation> _operations = [];
     private readonly Dictionary<PreviewThumbnailCacheKey, CacheEntry> _cache = [];
     private readonly Dictionary<FailureIdentity, FailureDetails> _openFailures = [];
+    private readonly Queue<PreviewThumbnailSignalEventArgs> _pendingSignals = [];
 
     private bool _disposed;
+    private bool _signalPublisherActive;
     private long _generation;
+    private long _signalSequence;
     private long _accessOrdinal;
     private int _activeDecodes;
     private int _peakActiveDecodes;
@@ -32,7 +35,28 @@ public sealed class PreviewThumbnailService : IDisposable
         _decoder = decoder ?? throw new ArgumentNullException(nameof(decoder));
     }
 
-    public event EventHandler<PreviewThumbnailSignalEventArgs>? StatusChanged;
+    private EventHandler<PreviewThumbnailSignalEventArgs>? _statusChanged;
+
+    public event EventHandler<PreviewThumbnailSignalEventArgs>? StatusChanged
+    {
+        add
+        {
+            lock (_sync)
+            {
+                if (!_disposed)
+                {
+                    _statusChanged += value;
+                }
+            }
+        }
+        remove
+        {
+            lock (_sync)
+            {
+                _statusChanged -= value;
+            }
+        }
+    }
 
     public long Generation
     {
@@ -88,10 +112,11 @@ public sealed class PreviewThumbnailService : IDisposable
             }
 
             _openFailures.Clear();
+            EnqueueSignalsLocked(signals);
         }
 
         CancelAll(cancellations);
-        PublishAll(signals);
+        DrainSignals();
     }
 
     public PreviewThumbnailLease Acquire(
@@ -101,6 +126,7 @@ public sealed class PreviewThumbnailService : IDisposable
         ArgumentNullException.ThrowIfNull(request);
 
         DecodeOperation? operationToStart = null;
+        List<CancellationTokenSource>? cancellations = null;
         List<PreviewThumbnailSignalEventArgs>? signals = null;
         PreviewThumbnailLease lease;
 
@@ -134,6 +160,14 @@ public sealed class PreviewThumbnailService : IDisposable
                     _inFlightShareCount++;
                     if (addedIdentity && existing.Completed && existing.Result is not null)
                     {
+                        if (existing.Result.IsSuccess)
+                        {
+                            RetireFailureStateLocked(
+                                [identity],
+                                existing,
+                                ref cancellations);
+                        }
+
                         CollectSignalsLocked(
                             existing.Result,
                             [identity],
@@ -147,7 +181,8 @@ public sealed class PreviewThumbnailService : IDisposable
 
             if (_cache.Remove(key, out var cached))
             {
-                _cacheDecodedBytes -= cached.Result.DecodedBytes;
+                _cacheDecodedBytes = checked(
+                    _cacheDecodedBytes - cached.Result.DecodedBytes);
                 if (!retryFailed || !cached.Result.IsStableFailure)
                 {
                     _cacheHitCount++;
@@ -160,9 +195,21 @@ public sealed class PreviewThumbnailService : IDisposable
                         key,
                         request,
                         identity,
-                        cached.Result);
+                        cached.Result,
+                        cached.FailureIdentities);
                     _operations.Add(key, completed);
-                    CollectSignalsLocked(cached.Result, [identity], ref signals);
+                    if (cached.Result.IsSuccess)
+                    {
+                        RetireFailureStateLocked(
+                            completed.FailureIdentities,
+                            completed,
+                            ref cancellations);
+                    }
+
+                    CollectSignalsLocked(
+                        cached.Result,
+                        completed.FailureIdentities,
+                        ref signals);
                     lease = CreateLease(request, completed);
                     goto CompleteAcquire;
                 }
@@ -174,10 +221,11 @@ public sealed class PreviewThumbnailService : IDisposable
             lease = CreateLease(request, operationToStart);
 
         CompleteAcquire:
-            ;
+            EnqueueSignalsLocked(signals);
         }
 
-        PublishAll(signals);
+        CancelAll(cancellations);
+        DrainSignals();
         if (operationToStart is not null)
         {
             _ = RunDecodeAsync(operationToStart);
@@ -232,7 +280,8 @@ public sealed class PreviewThumbnailService : IDisposable
             _operations.Clear();
             ClearCacheLocked();
             _openFailures.Clear();
-            StatusChanged = null;
+            _pendingSignals.Clear();
+            _statusChanged = null;
         }
 
         CancelAll(cancellations);
@@ -275,7 +324,10 @@ public sealed class PreviewThumbnailService : IDisposable
             }
             else if (operation.Result is { } result && IsCacheable(result))
             {
-                AddToCacheLocked(operation.Key, result);
+                AddToCacheLocked(
+                    operation.Key,
+                    result,
+                    operation.FailureIdentities);
             }
         }
 
@@ -286,7 +338,8 @@ public sealed class PreviewThumbnailService : IDisposable
     {
         var enteredGate = false;
         var countedActive = false;
-        PreviewThumbnailResult result;
+        PreviewThumbnailResult? result = null;
+        Exception? fatalException = null;
 
         try
         {
@@ -326,6 +379,10 @@ public sealed class PreviewThumbnailService : IDisposable
                 "PREVIEW_DECODE_FAILED",
                 "预览图无法安全解码。");
         }
+        catch (Exception exception) when (IsFatal(exception))
+        {
+            fatalException = exception;
+        }
         finally
         {
             if (countedActive)
@@ -342,14 +399,46 @@ public sealed class PreviewThumbnailService : IDisposable
             }
         }
 
-        CompleteOperation(operation, result);
-        operation.Cancellation.Dispose();
+        try
+        {
+            if (fatalException is not null)
+            {
+                CompleteOperationFault(operation, fatalException);
+            }
+            else
+            {
+                CompleteOperation(operation, result!);
+            }
+        }
+        finally
+        {
+            operation.Cancellation.Dispose();
+        }
+    }
+
+    private void CompleteOperationFault(
+        DecodeOperation operation,
+        Exception exception)
+    {
+        lock (_sync)
+        {
+            if (operation.Retired
+                || !_operations.TryGetValue(operation.Key, out var current)
+                || !ReferenceEquals(current, operation))
+            {
+                return;
+            }
+
+            operation.Completed = true;
+            operation.Completion.TrySetException(exception);
+        }
     }
 
     private void CompleteOperation(
         DecodeOperation operation,
         PreviewThumbnailResult result)
     {
+        List<CancellationTokenSource>? cancellations = null;
         List<PreviewThumbnailSignalEventArgs>? signals = null;
 
         lock (_sync)
@@ -372,6 +461,14 @@ public sealed class PreviewThumbnailService : IDisposable
 
             operation.Completed = true;
             operation.Result = result;
+            if (result.IsSuccess)
+            {
+                RetireFailureStateLocked(
+                    operation.FailureIdentities,
+                    operation,
+                    ref cancellations);
+            }
+
             CollectSignalsLocked(result, operation.FailureIdentities, ref signals);
             operation.Completion.TrySetResult(result);
 
@@ -381,12 +478,18 @@ public sealed class PreviewThumbnailService : IDisposable
                 _operations.Remove(operation.Key);
                 if (IsCacheable(result))
                 {
-                    AddToCacheLocked(operation.Key, result);
+                    AddToCacheLocked(
+                        operation.Key,
+                        result,
+                        operation.FailureIdentities);
                 }
             }
+
+            EnqueueSignalsLocked(signals);
         }
 
-        PublishAll(signals);
+        CancelAll(cancellations);
+        DrainSignals();
     }
 
     private void CollectSignalsLocked(
@@ -420,7 +523,7 @@ public sealed class PreviewThumbnailService : IDisposable
         }
     }
 
-    private static PreviewThumbnailSignalEventArgs CreateSignal(
+    private PreviewThumbnailSignalEventArgs CreateSignal(
         PreviewThumbnailSignalKind kind,
         FailureIdentity identity,
         FailureDetails details)
@@ -429,19 +532,28 @@ public sealed class PreviewThumbnailService : IDisposable
             identity.ProjectKey,
             identity.PreviewVersion,
             details.Code,
-            details.Summary);
+            details.Summary,
+            _generation,
+            checked(++_signalSequence));
 
     private void AddToCacheLocked(
         PreviewThumbnailCacheKey key,
-        PreviewThumbnailResult result)
+        PreviewThumbnailResult result,
+        IEnumerable<FailureIdentity> failureIdentities)
     {
         if (_cache.Remove(key, out var replaced))
         {
-            _cacheDecodedBytes -= replaced.Result.DecodedBytes;
+            _cacheDecodedBytes = checked(
+                _cacheDecodedBytes - replaced.Result.DecodedBytes);
         }
 
-        _cache.Add(key, new CacheEntry(result, ++_accessOrdinal));
-        _cacheDecodedBytes += result.DecodedBytes;
+        _cache.Add(
+            key,
+            new CacheEntry(
+                result,
+                ++_accessOrdinal,
+                failureIdentities.Distinct().ToArray()));
+        _cacheDecodedBytes = checked(_cacheDecodedBytes + result.DecodedBytes);
 
         while (_cache.Count > PreviewThumbnailLimits.MaximumEntries
                || _cacheDecodedBytes > PreviewThumbnailLimits.MaximumDecodedCacheBytes)
@@ -452,8 +564,57 @@ public sealed class PreviewThumbnailService : IDisposable
                 break;
             }
 
-            _cacheDecodedBytes -= evicted.Result.DecodedBytes;
+            _cacheDecodedBytes = checked(_cacheDecodedBytes - evicted.Result.DecodedBytes);
             _evictionCount++;
+        }
+    }
+
+    private void RetireFailureStateLocked(
+        IEnumerable<FailureIdentity> recoveredIdentities,
+        DecodeOperation except,
+        ref List<CancellationTokenSource>? cancellations)
+    {
+        var recovered = recoveredIdentities.ToHashSet();
+        if (recovered.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var (key, entry) in _cache.ToArray())
+        {
+            if (!entry.Result.IsStableFailure
+                || !entry.FailureIdentities.Any(recovered.Contains)
+                || !_cache.Remove(key, out var removed))
+            {
+                continue;
+            }
+
+            _cacheDecodedBytes = checked(
+                _cacheDecodedBytes - removed.Result.DecodedBytes);
+        }
+
+        foreach (var (key, operation) in _operations.ToArray())
+        {
+            if (ReferenceEquals(operation, except)
+                || !operation.FailureIdentities.Any(recovered.Contains)
+                || (operation.Completed && operation.Result?.IsStableFailure != true))
+            {
+                continue;
+            }
+
+            operation.Retired = true;
+            if (_operations.TryGetValue(key, out var current)
+                && ReferenceEquals(current, operation))
+            {
+                _operations.Remove(key);
+            }
+
+            if (!operation.Completed)
+            {
+                _staleDiscardCount++;
+                operation.Completion.TrySetResult(PreviewThumbnailResult.Stale());
+                (cancellations ??= []).Add(operation.Cancellation);
+            }
         }
     }
 
@@ -475,7 +636,7 @@ public sealed class PreviewThumbnailService : IDisposable
 
         if (result.Status == PreviewThumbnailStatus.Ready)
         {
-            if (result.Bitmap is null || !result.Bitmap.IsFrozen || result.DecodedBytes <= 0)
+            if (result.Bitmap is null || !result.Bitmap.IsFrozen)
             {
                 return PreviewThumbnailResult.Failure(
                     PreviewThumbnailStatus.Corrupt,
@@ -483,34 +644,69 @@ public sealed class PreviewThumbnailService : IDisposable
                     "预览图解码结果无效。");
             }
 
-            if (result.DecodedBytes > PreviewThumbnailLimits.MaximumDecodedCacheBytes)
+            try
+            {
+                if (result.Bitmap.PixelWidth > PreviewThumbnailLimits.MaximumDimension
+                    || result.Bitmap.PixelHeight > PreviewThumbnailLimits.MaximumDimension)
+                {
+                    return PreviewThumbnailResult.Failure(
+                        PreviewThumbnailStatus.OverBudget,
+                        "PREVIEW_DIMENSION",
+                        "预览图边长超过 4096 像素预算。");
+                }
+
+                PreviewThumbnailLimits.ValidateSourcePixelCount(
+                    checked((long)result.Bitmap.PixelWidth * result.Bitmap.PixelHeight));
+                var actualBytes = PreviewThumbnailLimits.CalculateDecodedBytes(result.Bitmap);
+                if (actualBytes > PreviewThumbnailLimits.MaximumDecodedCacheBytes)
+                {
+                    return PreviewThumbnailResult.Failure(
+                        PreviewThumbnailStatus.OverBudget,
+                        "PREVIEW_DECODED_BYTES",
+                        "预览图解码结果超过内存预算。");
+                }
+
+                return new PreviewThumbnailResult(
+                    PreviewThumbnailStatus.Ready,
+                    result.Bitmap,
+                    actualBytes,
+                    null,
+                    null);
+            }
+            catch (Exception exception) when (exception is
+                       PreviewThumbnailBudgetException or OverflowException)
             {
                 return PreviewThumbnailResult.Failure(
                     PreviewThumbnailStatus.OverBudget,
                     "PREVIEW_DECODED_BYTES",
                     "预览图解码结果超过内存预算。");
             }
-
-            return result;
         }
 
-        if (result.IsStableFailure
-            && (string.IsNullOrWhiteSpace(result.FailureCode)
-                || string.IsNullOrWhiteSpace(result.FailureSummary)))
+        if (result.IsStableFailure)
         {
             return PreviewThumbnailResult.Failure(
-                PreviewThumbnailStatus.Corrupt,
-                "PREVIEW_DECODE_FAILED",
-                "预览图无法安全解码。");
+                Enum.IsDefined(result.Status)
+                    ? result.Status
+                    : PreviewThumbnailStatus.Corrupt,
+                string.IsNullOrWhiteSpace(result.FailureCode)
+                    ? "PREVIEW_DECODE_FAILED"
+                    : result.FailureCode,
+                string.IsNullOrWhiteSpace(result.FailureSummary)
+                    ? "预览图无法安全解码。"
+                    : result.FailureSummary);
         }
 
-        return result;
+        return result.Status == PreviewThumbnailStatus.Stale
+            ? PreviewThumbnailResult.Stale()
+            : PreviewThumbnailResult.Cancelled();
     }
 
     private static bool IsCacheable(PreviewThumbnailResult result)
         => result.IsSuccess || result.IsStableFailure;
 
-    private void PublishAll(List<PreviewThumbnailSignalEventArgs>? signals)
+    private void EnqueueSignalsLocked(
+        List<PreviewThumbnailSignalEventArgs>? signals)
     {
         if (signals is null)
         {
@@ -519,23 +715,84 @@ public sealed class PreviewThumbnailService : IDisposable
 
         foreach (var signal in signals)
         {
-            var handlers = StatusChanged;
-            if (handlers is null)
+            _pendingSignals.Enqueue(signal);
+        }
+    }
+
+    private void DrainSignals()
+    {
+        lock (_sync)
+        {
+            if (_disposed || _signalPublisherActive || _pendingSignals.Count == 0)
             {
-                continue;
+                return;
             }
 
-            foreach (EventHandler<PreviewThumbnailSignalEventArgs> handler
-                     in handlers.GetInvocationList())
+            _signalPublisherActive = true;
+        }
+
+        var restart = false;
+        try
+        {
+            while (true)
             {
-                try
+                PreviewThumbnailSignalEventArgs signal;
+                Delegate[] handlers;
+                lock (_sync)
                 {
-                    handler(this, signal);
+                    if (_disposed)
+                    {
+                        _pendingSignals.Clear();
+                        return;
+                    }
+
+                    if (!_pendingSignals.TryDequeue(out signal!))
+                    {
+                        return;
+                    }
+
+                    handlers = _statusChanged?.GetInvocationList() ?? [];
                 }
-                catch (Exception exception) when (!IsFatal(exception))
+
+                foreach (EventHandler<PreviewThumbnailSignalEventArgs> handler in handlers)
                 {
-                    // A diagnostic observer must not break thumbnail delivery.
+                    lock (_sync)
+                    {
+                        if (_disposed)
+                        {
+                            _pendingSignals.Clear();
+                            return;
+                        }
+
+                        if (_statusChanged is null
+                            || !_statusChanged.GetInvocationList().Contains(handler))
+                        {
+                            continue;
+                        }
+                    }
+
+                    try
+                    {
+                        handler(this, signal);
+                    }
+                    catch (Exception exception) when (!IsFatal(exception))
+                    {
+                        // A diagnostic observer must not break thumbnail delivery.
+                    }
                 }
+            }
+        }
+        finally
+        {
+            lock (_sync)
+            {
+                _signalPublisherActive = false;
+                restart = !_disposed && _pendingSignals.Count > 0;
+            }
+
+            if (restart)
+            {
+                DrainSignals();
             }
         }
     }
@@ -614,13 +871,15 @@ public sealed class PreviewThumbnailService : IDisposable
             PreviewThumbnailCacheKey key,
             PreviewThumbnailRequest request,
             FailureIdentity identity,
-            PreviewThumbnailResult result)
+            PreviewThumbnailResult result,
+            IEnumerable<FailureIdentity> cachedFailureIdentities)
         {
             var operation = new DecodeOperation(key, request, identity)
             {
                 Completed = true,
                 Result = result
             };
+            operation.FailureIdentities.UnionWith(cachedFailureIdentities);
             operation.Completion.TrySetResult(result);
             operation.Cancellation.Dispose();
             return operation;
@@ -629,7 +888,8 @@ public sealed class PreviewThumbnailService : IDisposable
 
     private sealed record CacheEntry(
         PreviewThumbnailResult Result,
-        long AccessOrdinal);
+        long AccessOrdinal,
+        IReadOnlyList<FailureIdentity> FailureIdentities);
 
     private readonly record struct FailureIdentity(
         string ProjectKey,
