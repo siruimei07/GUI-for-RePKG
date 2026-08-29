@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Automation.Peers;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -20,6 +21,7 @@ public sealed partial class BrowsePageView : UserControl
     private const double DetailColumnGap = 16;
     private const double WideSixColumnThreshold = 780;
     private const double MinimumCardCellWidth = 112;
+    private const int MaxProcessingLiveRegionQueueDepth = 32;
     private string? _detailReturnProjectKey;
     private bool _layoutRefreshPending;
     private BrowseViewportAnchor? _pendingViewportAnchor;
@@ -31,12 +33,26 @@ public sealed partial class BrowsePageView : UserControl
     private string? _pendingDirectionalProjectKey;
     private Button? _pendingDirectionalFocusOwner;
     private ShellViewModel? _subscribedShell;
-    private long _processingLiveRegionVersion;
+    private readonly Queue<string> _processingLiveRegionQueue = [];
+    private readonly DispatcherTimer _processingLiveRegionDrainTimer;
+    private long _processingLiveRegionGeneration;
+    private bool _processingLiveRegionDrainPending;
+    private ShellViewModel? _processingLiveRegionDrainShell;
+    private long _processingLiveRegionDrainGeneration;
+    private string? _lastQueuedProcessingLiveText;
     private string? _lastRaisedProcessingLiveText;
 
     public BrowsePageView()
     {
         InitializeComponent();
+        _processingLiveRegionDrainTimer = new DispatcherTimer(
+            DispatcherPriority.ContextIdle,
+            Dispatcher)
+        {
+            Interval = TimeSpan.FromMilliseconds(40)
+        };
+        _processingLiveRegionDrainTimer.Tick +=
+            ProcessingLiveRegionDrainTimer_Tick;
     }
 
     private BrowsePageViewModel? BrowseViewModel
@@ -481,9 +497,17 @@ public sealed partial class BrowsePageView : UserControl
                 OnUnpackSessionPropertyChanged;
         }
 
-        Interlocked.Increment(ref _processingLiveRegionVersion);
+        Interlocked.Increment(ref _processingLiveRegionGeneration);
+        _processingLiveRegionDrainTimer.Stop();
+        _processingLiveRegionQueue.Clear();
+        _processingLiveRegionDrainPending = false;
+        _processingLiveRegionDrainShell = null;
+        _lastQueuedProcessingLiveText = null;
         _lastRaisedProcessingLiveText = null;
         _subscribedShell = shell;
+        AutomationProperties.SetName(
+            BrowseProcessingLiveRegion,
+            shell?.UnpackSession.TrayLiveRegionText ?? string.Empty);
         if (_subscribedShell is not null)
         {
             _subscribedShell.UnpackSession.SetProjectionOwnerContext(
@@ -510,39 +534,126 @@ public sealed partial class BrowsePageView : UserControl
 
     private void QueueProcessingLiveRegionChanged(ShellViewModel shell)
     {
-        var version = Interlocked.Increment(ref _processingLiveRegionVersion);
+        if (!Dispatcher.CheckAccess()
+            || !ReferenceEquals(_subscribedShell, shell)
+            || !ReferenceEquals(DataContext, shell))
+        {
+            return;
+        }
+
+        var text = shell.UnpackSession.TrayLiveRegionText;
+        AutomationProperties.SetName(BrowseProcessingLiveRegion, text);
+        if (!IsProcessingLiveRegionVisible(shell)
+            || string.IsNullOrWhiteSpace(text)
+            || string.Equals(
+                _lastQueuedProcessingLiveText
+                ?? _lastRaisedProcessingLiveText,
+                text,
+                StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (_processingLiveRegionQueue.Count
+            >= MaxProcessingLiveRegionQueueDepth)
+        {
+            RaiseProcessingLiveRegionAnnouncement(
+                _processingLiveRegionQueue.Dequeue());
+        }
+
+        _processingLiveRegionQueue.Enqueue(text);
+        _lastQueuedProcessingLiveText = text;
+        if (_processingLiveRegionDrainPending)
+        {
+            return;
+        }
+
+        _processingLiveRegionDrainPending = true;
+        var generation = Volatile.Read(ref _processingLiveRegionGeneration);
+        _processingLiveRegionDrainShell = shell;
+        _processingLiveRegionDrainGeneration = generation;
         _ = Dispatcher.BeginInvoke(
-            () =>
-            {
-                if (version != Volatile.Read(ref _processingLiveRegionVersion)
-                    || !ReferenceEquals(_subscribedShell, shell)
-                    || !ReferenceEquals(DataContext, shell)
-                    || !shell.IsBrowsePage
-                    || !BrowseView.IsVisible
-                    || !BrowseProcessingTraySlot.IsVisible
-                    || !BrowseProcessingTraySlot.IsHitTestVisible)
-                {
-                    return;
-                }
-
-                var text = shell.UnpackSession.TrayLiveRegionText;
-                if (string.IsNullOrWhiteSpace(text)
-                    || string.Equals(
-                        _lastRaisedProcessingLiveText,
-                        text,
-                        StringComparison.Ordinal))
-                {
-                    return;
-                }
-
-                _lastRaisedProcessingLiveText = text;
-                var peer = UIElementAutomationPeer.CreatePeerForElement(
-                               BrowseProcessingLiveRegion)
-                           ?? new TextBlockAutomationPeer(
-                               BrowseProcessingLiveRegion);
-                peer.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
-            },
+            () => DeliverNextProcessingLiveRegionAnnouncement(
+                shell,
+                generation),
             DispatcherPriority.ContextIdle);
+    }
+
+    private void ProcessingLiveRegionDrainTimer_Tick(
+        object? sender,
+        EventArgs e)
+    {
+        _processingLiveRegionDrainTimer.Stop();
+        if (_processingLiveRegionDrainShell is { } shell)
+        {
+            DeliverNextProcessingLiveRegionAnnouncement(
+                shell,
+                _processingLiveRegionDrainGeneration);
+        }
+    }
+
+    private void DeliverNextProcessingLiveRegionAnnouncement(
+        ShellViewModel shell,
+        long generation)
+    {
+        if (generation != Volatile.Read(ref _processingLiveRegionGeneration))
+        {
+            return;
+        }
+
+        if (!IsProcessingLiveRegionVisible(shell))
+        {
+            _processingLiveRegionQueue.Clear();
+            _lastQueuedProcessingLiveText = _lastRaisedProcessingLiveText;
+            _processingLiveRegionDrainShell = null;
+            _processingLiveRegionDrainPending = false;
+            return;
+        }
+
+        if (_processingLiveRegionQueue.Count == 0)
+        {
+            _lastQueuedProcessingLiveText = _lastRaisedProcessingLiveText;
+            _processingLiveRegionDrainShell = null;
+            _processingLiveRegionDrainPending = false;
+            return;
+        }
+
+        RaiseProcessingLiveRegionAnnouncement(
+            _processingLiveRegionQueue.Dequeue());
+        if (generation != Volatile.Read(ref _processingLiveRegionGeneration))
+        {
+            return;
+        }
+
+        if (_processingLiveRegionQueue.Count == 0)
+        {
+            _lastQueuedProcessingLiveText = _lastRaisedProcessingLiveText;
+            _processingLiveRegionDrainShell = null;
+            _processingLiveRegionDrainPending = false;
+            return;
+        }
+
+        _processingLiveRegionDrainShell = shell;
+        _processingLiveRegionDrainGeneration = generation;
+        _processingLiveRegionDrainTimer.Start();
+    }
+
+    private bool IsProcessingLiveRegionVisible(ShellViewModel shell)
+        => ReferenceEquals(_subscribedShell, shell)
+           && ReferenceEquals(DataContext, shell)
+           && shell.IsBrowsePage
+           && BrowseView.IsVisible
+           && BrowseProcessingTraySlot.IsVisible
+           && BrowseProcessingTraySlot.IsHitTestVisible;
+
+    private void RaiseProcessingLiveRegionAnnouncement(string text)
+    {
+        AutomationProperties.SetName(BrowseProcessingLiveRegion, text);
+        _lastRaisedProcessingLiveText = text;
+        var peer = UIElementAutomationPeer.CreatePeerForElement(
+                       BrowseProcessingLiveRegion)
+                   ?? new TextBlockAutomationPeer(BrowseProcessingLiveRegion);
+        peer.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
     }
 
     private void OnBrowseProjectFocusRequested(

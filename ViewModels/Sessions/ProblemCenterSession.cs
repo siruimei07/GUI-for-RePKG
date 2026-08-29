@@ -9,6 +9,8 @@ public sealed class ProblemCenterSession : ObservableObject
 {
     private readonly AppIssueStore _store = new();
     private AppIssue? _selectedIssue;
+    private bool _isSynchronizingIssues;
+    private AppIssue? _selectionRestoreIssue;
     private string _searchText = string.Empty;
     private string _severityFilter = "ALL";
     private string _sourceFilter = "ALL";
@@ -119,6 +121,22 @@ public sealed class ProblemCenterSession : ObservableObject
         get => _selectedIssue;
         set
         {
+            if (_isSynchronizingIssues)
+            {
+                if (_selectionRestoreIssue is null)
+                {
+                    value = null;
+                }
+                else if (value?.Id != _selectionRestoreIssue.Id)
+                {
+                    return;
+                }
+                else
+                {
+                    value = _selectionRestoreIssue;
+                }
+            }
+
             if (SetProperty(ref _selectedIssue, value))
             {
                 OnPropertyChanged(nameof(HasSelectedIssue));
@@ -305,23 +323,37 @@ public sealed class ProblemCenterSession : ObservableObject
 
     private void Synchronize()
     {
-        Issues.ReplaceRange(_store.Snapshot());
-        if (SelectedIssue is { } selected)
+        var snapshot = _store.Snapshot();
+        var selectedIssueId = SelectedIssue?.Id;
+        var restoredSelection = selectedIssueId is { } id
+            ? snapshot.FirstOrDefault(issue => issue.Id == id)
+            : null;
+        _isSynchronizingIssues = true;
+        _selectionRestoreIssue = restoredSelection;
+        try
         {
-            SelectedIssue = Issues.FirstOrDefault(issue => issue.Id == selected.Id);
+            Issues.ReplaceRange(snapshot);
+            SelectedIssue = restoredSelection;
+
+            OnPropertiesChanged(
+                nameof(FilteredIssues),
+                nameof(FilteredIssueCount),
+                nameof(OpenIssueCount),
+                nameof(ResolvedIssueCount),
+                nameof(ScanIssueCount),
+                nameof(LibraryIssueCount),
+                nameof(HighestOpenIssueSeverity),
+                nameof(SummaryText),
+                nameof(ScanSummary),
+                nameof(LibrarySummary));
+            OnPropertyChanged(nameof(SelectedIssue));
+        }
+        finally
+        {
+            _selectionRestoreIssue = null;
+            _isSynchronizingIssues = false;
         }
 
-        OnPropertiesChanged(
-            nameof(FilteredIssues),
-            nameof(FilteredIssueCount),
-            nameof(OpenIssueCount),
-            nameof(ResolvedIssueCount),
-            nameof(ScanIssueCount),
-            nameof(LibraryIssueCount),
-            nameof(HighestOpenIssueSeverity),
-            nameof(SummaryText),
-            nameof(ScanSummary),
-            nameof(LibrarySummary));
         ClearResolvedCommand.NotifyCanExecuteChanged();
         Changed?.Invoke(this, EventArgs.Empty);
     }

@@ -851,7 +851,7 @@
                            Text="{Binding UnpackSession.TrayLiveRegionText}"
                            AutomationProperties.AutomationId="BrowseProcessingLiveRegion"
                            AutomationProperties.LiveSetting="Polite"
-                           AutomationProperties.Name="{Binding UnpackSession.TrayLiveRegionText}" />
+                           AutomationProperties.Name="项目处理状态" />
                 <Grid x:Name="BrowseSelectionTray">
                     <Grid.Style>
                         <Style TargetType="Grid">

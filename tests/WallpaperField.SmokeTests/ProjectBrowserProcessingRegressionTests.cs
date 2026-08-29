@@ -8,6 +8,8 @@ using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Automation.Peers;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -18,6 +20,7 @@ using WallpaperField.Models;
 using WallpaperField.Services;
 using WallpaperField.ViewModels;
 using WallpaperField.ViewModels.Sessions;
+using WallpaperField.Views;
 
 internal static class ProjectBrowserProcessingRegressionTests
 {
@@ -27,6 +30,7 @@ internal static class ProjectBrowserProcessingRegressionTests
         await VerifyLateProgressCannotOverwriteTerminalProjectionAsync(failures);
         await VerifyInSlotIdentityGateAsync(failures);
         await VerifyActiveScopeObserverCannotDriftServiceEntryAsync(failures);
+        await VerifyPreServiceCancellationReportsCancelledAsync(failures);
         await VerifyResultsStayInsideFrozenScopeAsync(failures);
         await VerifyIssueTransactionsStayBoundedAsync(failures);
         await VerifySameIdWarningsAreAttributedExactlyAsync(failures);
@@ -35,7 +39,7 @@ internal static class ProjectBrowserProcessingRegressionTests
         VerifyExactProjectIssueLifecycle(failures);
         await VerifyScanAndUnpackIssuesUseExactProjectKeysAsync(failures);
         await VerifyUnpackErrorPathsAreAmbiguitySafeAsync(failures);
-        await VerifyLegacyFallbackNeverResolvesExactProjectsAsync(failures);
+        await VerifyRejectedLegacyFallbackResolvesNothingAsync(failures);
         VerifyContextResolversAreLegacyOnly(failures);
         await VerifyPreviewAndFolderBrowseIssueFactsAsync(failures);
         await VerifyShellProcessingAndExactNavigationAsync(failures);
@@ -439,13 +443,24 @@ internal static class ProjectBrowserProcessingRegressionTests
                     + $"summary={foreignCompletion})");
             }
 
+            var duplicateService = new DuplicateResultUnpackService(recordA);
             using var duplicateShell = CreateShell(
                 recordA,
-                new DuplicateResultUnpackService(recordA),
+                duplicateService,
                 new TaskLifecycleCoordinator(),
                 sourceRoot,
                 outputRoot);
             await duplicateShell.ScanSession.ScanAsync();
+            var legacyFailure = AppIssue.Create(
+                "UNPACK_ITEM_FAILED",
+                AppIssueSeverity.Error,
+                AppIssueSource.Unpack,
+                "Legacy failure fixture",
+                "A rejected contradictory result must not resolve this fact.",
+                AppDiskFact.NotModified,
+                AppIssueAction.Retry,
+                recordA.WorkshopId.ToUpperInvariant());
+            duplicateShell.ProblemCenterSession.Publish([legacyFailure]);
             var duplicateCard = duplicateShell.ScannedWallpapers.Single();
             duplicateShell.ScanSession.TrySetUnpackSelection(duplicateCard, true);
             duplicateShell.ScanSession.TryFreezeItemRequest(
@@ -453,6 +468,12 @@ internal static class ProjectBrowserProcessingRegressionTests
                 out var duplicateRequest);
             await duplicateShell.UnpackSession.UnpackAsync(duplicateRequest!);
             var duplicateCompletion = duplicateShell.UnpackSession.CompletionSummary;
+            var legacyAfterDuplicate = duplicateShell.ProblemCenterSession.Issues
+                .Single(issue => issue.Id == legacyFailure.Id);
+            var duplicateItemFacts = duplicateShell.ProblemCenterSession.Issues
+                .Where(issue => issue.Code is
+                    "UNPACK_ITEM_FAILED" or "UNPACK_ITEM_WARNING")
+                .ToArray();
             if (!duplicateCard.IsSelectedForUnpack
                 || duplicateCompletion is not
                 {
@@ -460,12 +481,44 @@ internal static class ProjectBrowserProcessingRegressionTests
                     SucceededCount: 0,
                     FailedCount: 1,
                     CommittedCount: 0
-                })
+                }
+                || legacyAfterDuplicate.ResolutionState
+                    != AppIssueResolutionState.Open
+                || legacyAfterDuplicate.OccurrenceCount != 1
+                || duplicateItemFacts.Length != 1)
             {
                 failures.Add(
-                    "duplicate project results were accepted by position/order "
+                    "rejected duplicate project results affected authoritative or issue facts "
                     + $"(selected={duplicateCard.IsSelectedForUnpack}; "
-                    + $"summary={duplicateCompletion})");
+                    + $"summary={duplicateCompletion}; "
+                    + $"legacy={legacyAfterDuplicate.ResolutionState}/"
+                    + $"{legacyAfterDuplicate.OccurrenceCount}; "
+                    + $"itemFacts={duplicateItemFacts.Length})");
+            }
+
+            duplicateService.ReturnUniqueSuccess = true;
+            duplicateShell.ScanSession.TryFreezeItemRequest(
+                duplicateCard,
+                out var uniqueRequest);
+            await duplicateShell.UnpackSession.UnpackAsync(uniqueRequest!);
+            var legacyAfterUnique = duplicateShell.ProblemCenterSession.Issues
+                .Single(issue => issue.Id == legacyFailure.Id);
+            if (duplicateCard.IsSelectedForUnpack
+                || duplicateShell.UnpackSession.CompletionSummary is not
+                {
+                    TotalCount: 1,
+                    SucceededCount: 1,
+                    FailedCount: 0,
+                    CommittedCount: 1
+                }
+                || legacyAfterUnique.ResolutionState
+                    != AppIssueResolutionState.Resolved)
+            {
+                failures.Add(
+                    "an accepted unique committed result did not retain legacy resolution "
+                    + $"(selected={duplicateCard.IsSelectedForUnpack}; "
+                    + $"summary={duplicateShell.UnpackSession.CompletionSummary}; "
+                    + $"legacy={legacyAfterUnique.ResolutionState})");
             }
         }
         finally
@@ -525,6 +578,77 @@ internal static class ProjectBrowserProcessingRegressionTests
                     + $"completion={shell.UnpackSession.CompletionSummary is not null}; "
                     + $"scope={shell.UnpackSession.ActiveScope is not null}; "
                     + $"running={shell.UnpackSession.IsUnpacking}; "
+                    + $"live={shell.UnpackSession.TrayLiveRegionText})");
+            }
+        }
+        finally
+        {
+            Directory.Delete(testRoot, recursive: true);
+        }
+    }
+
+    private static async Task VerifyPreServiceCancellationReportsCancelledAsync(
+        ICollection<string> failures)
+    {
+        var testRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"WallpaperField-Task6-PreServiceCancel-{Guid.NewGuid():N}");
+        var sourceRoot = Path.Combine(testRoot, "source");
+        var outputRoot = Path.Combine(testRoot, "output");
+        Directory.CreateDirectory(sourceRoot);
+        try
+        {
+            var record = CreatePackageRecord(
+                sourceRoot,
+                outputRoot,
+                "pre-service-cancel");
+            var coordinator = new TaskLifecycleCoordinator();
+            var service = new CapturingUnpackService();
+            using var shell = CreateShell(
+                record,
+                service,
+                coordinator,
+                sourceRoot,
+                outputRoot);
+            await shell.ScanSession.ScanAsync();
+            var card = shell.ScannedWallpapers.Single();
+            shell.ScanSession.TrySetUnpackSelection(card, true);
+            shell.ScanSession.TryFreezeSelectedRequest(out var request);
+
+            var cancellationRequested = false;
+            shell.UnpackSession.PropertyChanged += (_, args) =>
+            {
+                if (!cancellationRequested
+                    && args.PropertyName == nameof(UnpackSession.ActiveScope)
+                    && shell.UnpackSession.ActiveScope is not null)
+                {
+                    cancellationRequested = coordinator.RequestCancellation();
+                }
+            };
+
+            await shell.UnpackSession.UnpackAsync(request!);
+            var terminal = coordinator.Current;
+            if (!cancellationRequested
+                || service.CallCount != 0
+                || terminal.State != TaskLifecycleState.Cancelled
+                || terminal.CancellationPending
+                || shell.UnpackSession.CompletionSummary is not null
+                || shell.UnpackSession.ActiveScope is not null
+                || shell.UnpackSession.IsUnpacking
+                || shell.UnpackSession.CurrentStage != "IDLE"
+                || shell.UnpackSession.ProcessedCount != 0
+                || shell.UnpackSession.TotalCount != 0
+                || !string.IsNullOrEmpty(shell.UnpackSession.TrayLiveRegionText))
+            {
+                failures.Add(
+                    "pre-service token cancellation reported the wrong terminal state "
+                    + $"(requested={cancellationRequested}; calls={service.CallCount}; "
+                    + $"state={terminal.State}; pending={terminal.CancellationPending}; "
+                    + $"completion={shell.UnpackSession.CompletionSummary is not null}; "
+                    + $"scope={shell.UnpackSession.ActiveScope is not null}; "
+                    + $"running={shell.UnpackSession.IsUnpacking}; "
+                    + $"stage={shell.UnpackSession.CurrentStage}; "
+                    + $"count={shell.UnpackSession.ProcessedCount}/{shell.UnpackSession.TotalCount}; "
                     + $"live={shell.UnpackSession.TrayLiveRegionText})");
             }
         }
@@ -769,6 +893,7 @@ internal static class ProjectBrowserProcessingRegressionTests
         window.Width = 1190;
         window.Height = 800;
         PumpWindow(window);
+        VerifyProblemSelectionSurvivesBoundReset(window, assert);
 
         var currentButton = WpfElementFinder.FindByName<Button>(
             window,
@@ -1034,6 +1159,116 @@ internal static class ProjectBrowserProcessingRegressionTests
         VerifyProcessingLiveRegion(window, shell, assert);
     }
 
+    private static void VerifyProblemSelectionSurvivesBoundReset(
+        WallpaperField.MainWindow owner,
+        Action<bool, string> assert)
+    {
+        const string projectKey = "wpf-reset-project";
+        const string context = "wpf-reset-selection";
+        var center = new ProblemCenterSession();
+        var selected = center.PublishProjectIssue(AppIssue.Create(
+            "WPF_RESET_SELECTION",
+            AppIssueSeverity.Warning,
+            AppIssueSource.Browse,
+            "Reset selection fixture",
+            "A real two-way ListBox must retain this exact issue.",
+            AppDiskFact.NotModified,
+            AppIssueAction.Retry,
+            context,
+            projectKey: projectKey));
+        center.Publish(
+        [
+            AppIssue.Create(
+                "WPF_RESET_SIBLING",
+                AppIssueSeverity.Information,
+                AppIssueSource.Diagnostics,
+                "Reset sibling fixture",
+                "Keeps an item after selected removal.",
+                AppDiskFact.NotModified,
+                AppIssueAction.None,
+                "wpf-reset-sibling")
+        ]);
+
+        var list = new ListBox { DataContext = center };
+        list.SetBinding(
+            ItemsControl.ItemsSourceProperty,
+            new Binding(nameof(ProblemCenterSession.Issues)));
+        list.SetBinding(
+            Selector.SelectedItemProperty,
+            new Binding(nameof(ProblemCenterSession.SelectedIssue))
+            {
+                Mode = BindingMode.TwoWay
+            });
+        var host = new Window
+        {
+            Owner = owner,
+            Content = list,
+            Width = 320,
+            Height = 240,
+            ShowActivated = false,
+            ShowInTaskbar = false,
+            WindowStyle = WindowStyle.ToolWindow
+        };
+        try
+        {
+            host.Show();
+            PumpWindow(host);
+            list.SelectedItem = selected;
+            PumpWindow(host);
+            center.ApplyBatch(
+                publications:
+                [
+                    AppIssue.Create(
+                        "WPF_RESET_FILLER",
+                        AppIssueSeverity.Information,
+                        AppIssueSource.Diagnostics,
+                        "Reset publication fixture",
+                        "Forces the same batch transaction to publish.",
+                        AppDiskFact.NotModified,
+                        AppIssueAction.None,
+                        "wpf-reset-filler")
+                ],
+                resolutions:
+                [
+                    new AppIssueResolutionRequest(
+                        AppIssueSource.Browse,
+                        "WPF_RESET_SELECTION",
+                        projectKey,
+                        context)
+                ]);
+            PumpWindow(host);
+            var listSelection = list.SelectedItem as AppIssue;
+            assert(center.SelectedIssue is
+                   {
+                       Id: var sessionId,
+                       ResolutionState: AppIssueResolutionState.Resolved
+                   }
+                   && sessionId == selected.Id
+                   && listSelection is
+                   {
+                       Id: var listId,
+                       ResolutionState: AppIssueResolutionState.Resolved
+                   }
+                   && listId == selected.Id,
+                "A real two-way ListBox Reset erased the frozen selected issue ID/state "
+                + $"(session={center.SelectedIssue?.Id}/"
+                + $"{center.SelectedIssue?.ResolutionState}; list={listSelection?.Id}/"
+                + $"{listSelection?.ResolutionState}).");
+
+            center.ClearResolvedCount();
+            PumpWindow(host);
+            assert(center.Issues.All(issue => issue.Id != selected.Id)
+                   && center.SelectedIssue is null
+                   && list.SelectedItem is null,
+                "Actual selected-issue removal did not clear session/ListBox selection.");
+        }
+        finally
+        {
+            host.Close();
+            PumpWindow(owner);
+        }
+    }
+
     private static void VerifyProcessingLiveRegion(
         WallpaperField.MainWindow window,
         ShellViewModel originalShell,
@@ -1081,6 +1316,7 @@ internal static class ProjectBrowserProcessingRegressionTests
             var automationRoot = AutomationElement.FromHandle(
                 new WindowInteropHelper(window).Handle);
             var eventCount = 0;
+            var eventNames = new System.Collections.Concurrent.ConcurrentQueue<string>();
             AutomationEventHandler handler = (sender, _) =>
             {
                 try
@@ -1091,6 +1327,7 @@ internal static class ProjectBrowserProcessingRegressionTests
                             "BrowseProcessingLiveRegion",
                             StringComparison.Ordinal))
                     {
+                        eventNames.Enqueue(element.Current.Name);
                         Interlocked.Increment(ref eventCount);
                     }
                 }
@@ -1133,7 +1370,13 @@ internal static class ProjectBrowserProcessingRegressionTests
                     expectedButtonCount: 1,
                     assert);
 
-                var beforeStage = Volatile.Read(ref eventCount);
+                var beforeBurst = Volatile.Read(ref eventCount);
+                var expectedBurstNames = new[]
+                {
+                    "EXTRACTING · 已处理 0/100",
+                    "EXTRACTING · 已处理 10/100",
+                    "正在完成安全提交"
+                };
                 service.Report(new WallpaperUnpackProgress
                 {
                     ProcessedCount = 0,
@@ -1146,34 +1389,6 @@ internal static class ProjectBrowserProcessingRegressionTests
                     IsIndeterminate = false,
                     CanCancel = true
                 });
-                PumpWindow(window);
-                var stageRaised = WaitForAutomationEventCount(
-                    window,
-                    () => Volatile.Read(ref eventCount),
-                    beforeStage + 1);
-                var afterStage = Volatile.Read(ref eventCount);
-
-                for (var index = 2; index <= 102; index++)
-                {
-                    service.Report(new WallpaperUnpackProgress
-                    {
-                        ProcessedCount = 0,
-                        TotalCount = 100,
-                        Stage = WallpaperUnpackStage.Extracting,
-                        Message = "Extracting fixture",
-                        CompletedWork = index,
-                        TotalWork = 1_000,
-                        WorkUnit = WallpaperWorkUnit.Bytes,
-                        IsIndeterminate = false,
-                        CanCancel = true
-                    });
-                }
-
-                PumpWindow(window);
-                WaitForAutomationEventQuietPeriod(window);
-                var byteStormCount = Volatile.Read(ref eventCount);
-
-                var beforeCount = Volatile.Read(ref eventCount);
                 service.Report(new WallpaperUnpackProgress
                 {
                     ProcessedCount = 10,
@@ -1186,14 +1401,6 @@ internal static class ProjectBrowserProcessingRegressionTests
                     IsIndeterminate = false,
                     CanCancel = true
                 });
-                PumpWindow(window);
-                var countRaised = WaitForAutomationEventCount(
-                    window,
-                    () => Volatile.Read(ref eventCount),
-                    beforeCount + 1);
-                var afterCount = Volatile.Read(ref eventCount);
-
-                var beforeCommit = Volatile.Read(ref eventCount);
                 service.Report(new WallpaperUnpackProgress
                 {
                     ProcessedCount = 10,
@@ -1206,15 +1413,63 @@ internal static class ProjectBrowserProcessingRegressionTests
                     IsIndeterminate = false,
                     CanCancel = false
                 });
+                window.Dispatcher.Invoke(
+                    () => { },
+                    DispatcherPriority.DataBind);
+                var browsePage = FindVisualDescendants<BrowsePageView>(window)
+                    .FirstOrDefault(view => view.IsVisible);
+                var queueField = typeof(BrowsePageView).GetField(
+                    "_processingLiveRegionQueue",
+                    BindingFlags.Instance | BindingFlags.NonPublic);
+                var capacityField = typeof(BrowsePageView).GetField(
+                    "MaxProcessingLiveRegionQueueDepth",
+                    BindingFlags.Static | BindingFlags.NonPublic);
+                var pendingQueue = queueField?.GetValue(browsePage)
+                    as System.Collections.ICollection;
+                var queueCapacity = capacityField?.GetRawConstantValue() as int?;
+                var pendingQueueDepth = pendingQueue?.Count;
+                var queueStayedBounded = browsePage is not null
+                                       && queueCapacity is > 0
+                                       && pendingQueue is not null
+                                       && pendingQueueDepth <= queueCapacity;
                 PumpWindow(window);
-                var commitRaised = WaitForAutomationEventCount(
+                var burstRaised = WaitForAutomationEventCount(
                     window,
                     () => Volatile.Read(ref eventCount),
-                    beforeCommit + 1);
-                var afterCommit = Volatile.Read(ref eventCount);
+                    beforeBurst + expectedBurstNames.Length);
+                WaitForAutomationEventQuietPeriod(window);
+                var afterBurst = Volatile.Read(ref eventCount);
+                var burstNames = eventNames.ToArray()
+                    .Skip(beforeBurst)
+                    .Take(expectedBurstNames.Length)
+                    .ToArray();
+                var burstStayedOrdered = burstNames.SequenceEqual(
+                    expectedBurstNames,
+                    StringComparer.Ordinal);
+
+                for (var index = 1; index <= 101; index++)
+                {
+                    service.Report(new WallpaperUnpackProgress
+                    {
+                        ProcessedCount = 10,
+                        TotalCount = 100,
+                        Stage = WallpaperUnpackStage.Committing,
+                        Message = "Committing fixture",
+                        CompletedWork = index,
+                        TotalWork = 1_000,
+                        WorkUnit = WallpaperWorkUnit.Bytes,
+                        IsIndeterminate = false,
+                        CanCancel = false
+                    });
+                }
+
+                PumpWindow(window);
+                WaitForAutomationEventQuietPeriod(window);
+                var byteStormCount = Volatile.Read(ref eventCount);
 
                 liveShell.NavigateTo("PROBLEMS");
                 PumpWindow(window);
+                var beforeHiddenCapture = Volatile.Read(ref eventCount);
                 service.Report(new WallpaperUnpackProgress
                 {
                     ProcessedCount = 20,
@@ -1227,11 +1482,19 @@ internal static class ProjectBrowserProcessingRegressionTests
                     IsIndeterminate = false,
                     CanCancel = true
                 });
-                PumpWindow(window);
+                window.Dispatcher.Invoke(
+                    () => { },
+                    DispatcherPriority.DataBind);
+                liveShell.NavigateTo("BROWSE");
+                window.Dispatcher.Invoke(
+                    () => { },
+                    DispatcherPriority.DataBind);
+                window.Dispatcher.Invoke(
+                    () => { },
+                    DispatcherPriority.ContextIdle);
                 WaitForAutomationEventQuietPeriod(window);
                 var hiddenCount = Volatile.Read(ref eventCount);
 
-                liveShell.NavigateTo("BROWSE");
                 PumpWindow(window);
                 var beforeCompletion = Volatile.Read(ref eventCount);
                 service.Complete();
@@ -1241,29 +1504,40 @@ internal static class ProjectBrowserProcessingRegressionTests
                     window,
                     () => Volatile.Read(ref eventCount),
                     beforeCompletion + 1);
+                var completionEventName = eventNames.ToArray()
+                    .Skip(beforeCompletion)
+                    .FirstOrDefault();
                 var peer = UIElementAutomationPeer.CreatePeerForElement(liveRegion)
                            ?? new TextBlockAutomationPeer(liveRegion);
                 assert(startRaised
-                       && stageRaised
-                       && countRaised
-                       && commitRaised
+                       && burstRaised
+                       && burstStayedOrdered
+                       && queueStayedBounded
                        && completionRaised
-                       && byteStormCount == afterStage
-                       && hiddenCount == afterCommit
+                       && byteStormCount == afterBurst
+                       && hiddenCount == beforeHiddenCapture
                        && liveShell.UnpackSession.TrayLiveRegionText.Contains(
                            "完成",
+                           StringComparison.Ordinal)
+                       && string.Equals(
+                           completionEventName,
+                           liveShell.UnpackSession.TrayLiveRegionText,
                            StringComparison.Ordinal)
                        && string.Equals(
                            peer.GetName(),
                            liveShell.UnpackSession.TrayLiveRegionText,
                            StringComparison.Ordinal),
                     "Processing live announcements were missing, duplicated, hidden, or stale "
-                    + $"(events={eventCount}; stage={afterStage}; bytes={byteStormCount}; "
-                     + $"count={afterCount}; commit={afterCommit}; hidden={hiddenCount}; "
-                     + $"name={peer.GetName()}).");
+                    + $"(events={eventCount}; burst={afterBurst - beforeBurst}/"
+                    + $"{expectedBurstNames.Length}; ordered={burstStayedOrdered}; "
+                    + $"burstNames={string.Join(" | ", burstNames)}; "
+                    + $"queue={pendingQueueDepth}/{queueCapacity}; bytes={byteStormCount}; "
+                    + $"hidden={hiddenCount}/{beforeHiddenCapture}; "
+                    + $"completionEvent={completionEventName}; name={peer.GetName()}).");
                 Console.WriteLine(
-                    $"PROCESSING_LIVE_REGION events={eventCount} stage={afterStage} "
-                    + $"bytes={byteStormCount} count={afterCount} commit={afterCommit} "
+                    $"PROCESSING_LIVE_REGION events={eventCount} "
+                    + $"burst={afterBurst - beforeBurst} ordered={burstStayedOrdered} "
+                    + $"queue={pendingQueueDepth}/{queueCapacity} bytes={byteStormCount} "
                     + $"hidden={hiddenCount} name={peer.GetName()}");
 
                 var completionTray = WpfElementFinder.FindByName<FrameworkElement>(
@@ -2178,7 +2452,7 @@ internal static class ProjectBrowserProcessingRegressionTests
         }
     }
 
-    private static async Task VerifyLegacyFallbackNeverResolvesExactProjectsAsync(
+    private static async Task VerifyRejectedLegacyFallbackResolvesNothingAsync(
         ICollection<string> failures)
     {
         var testRoot = Path.Combine(
@@ -2251,10 +2525,10 @@ internal static class ProjectBrowserProcessingRegressionTests
                 || issues.Single(issue => issue.Id == exactB.Id).ResolutionState
                     != AppIssueResolutionState.Open
                 || issues.Single(issue => issue.Id == legacy.Id).ResolutionState
-                    != AppIssueResolutionState.Resolved)
+                    != AppIssueResolutionState.Open)
             {
                 failures.Add(
-                    "a null-key legacy success resolved exact same-ID project issues");
+                    "a rejected ambiguous result resolved exact or legacy same-ID issues");
             }
         }
         finally
@@ -2823,6 +3097,8 @@ internal static class ProjectBrowserProcessingRegressionTests
     private sealed class DuplicateResultUnpackService(WallpaperRecord record)
         : IWallpaperUnpackService
     {
+        internal bool ReturnUniqueSuccess { get; set; }
+
         public Task<WallpaperUnpackResult> UnpackAsync(
             WallpaperUnpackRequest request,
             IProgress<WallpaperUnpackProgress>? progress = null,
@@ -2838,25 +3114,37 @@ internal static class ProjectBrowserProcessingRegressionTests
                 SucceededCount = 1,
                 CommittedCount = 1,
                 Message = "Duplicate result fixture",
-                ItemResults =
-                [
-                    new WallpaperUnpackItemResult
-                    {
-                        WorkshopId = record.WorkshopId,
-                        OutputTarget = record.OutputDirectory,
-                        Outcome = WallpaperUnpackOutcome.Failed,
-                        CommitState = WallpaperItemCommitState.NotModified,
-                        WorkUnit = WallpaperWorkUnit.Items
-                    },
-                    new WallpaperUnpackItemResult
-                    {
-                        WorkshopId = record.WorkshopId,
-                        OutputTarget = record.OutputDirectory,
-                        Outcome = WallpaperUnpackOutcome.Succeeded,
-                        CommitState = WallpaperItemCommitState.Committed,
-                        WorkUnit = WallpaperWorkUnit.Items
-                    }
-                ]
+                ItemResults = ReturnUniqueSuccess
+                    ?
+                    [
+                        new WallpaperUnpackItemResult
+                        {
+                            WorkshopId = record.WorkshopId,
+                            OutputTarget = record.OutputDirectory,
+                            Outcome = WallpaperUnpackOutcome.Succeeded,
+                            CommitState = WallpaperItemCommitState.Committed,
+                            WorkUnit = WallpaperWorkUnit.Items
+                        }
+                    ]
+                    :
+                    [
+                        new WallpaperUnpackItemResult
+                        {
+                            WorkshopId = record.WorkshopId,
+                            OutputTarget = record.OutputDirectory,
+                            Outcome = WallpaperUnpackOutcome.Failed,
+                            CommitState = WallpaperItemCommitState.NotModified,
+                            WorkUnit = WallpaperWorkUnit.Items
+                        },
+                        new WallpaperUnpackItemResult
+                        {
+                            WorkshopId = record.WorkshopId,
+                            OutputTarget = record.OutputDirectory,
+                            Outcome = WallpaperUnpackOutcome.Succeeded,
+                            CommitState = WallpaperItemCommitState.Committed,
+                            WorkUnit = WallpaperWorkUnit.Items
+                        }
+                    ]
             });
         }
     }

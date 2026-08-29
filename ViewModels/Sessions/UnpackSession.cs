@@ -499,6 +499,7 @@ public sealed class UnpackSession : ObservableObject
 
         var progress = new Progress<WallpaperUnpackProgress>(value =>
             UpdateProgress(progressLease, value));
+        var preServiceCancellation = false;
         try
         {
             var request = new WallpaperUnpackRequest
@@ -511,6 +512,7 @@ public sealed class UnpackSession : ObservableObject
                     frozenRequest,
                     cancellationToken))
             {
+                var wasCancelled = cancellationToken.IsCancellationRequested;
                 CloseProgressLease(progressLease);
                 CurrentStage = "IDLE";
                 CurrentTitle = string.Empty;
@@ -526,10 +528,16 @@ public sealed class UnpackSession : ObservableObject
                 _lastLiveRegionCountBucket = -1;
                 TrayLiveRegionText = string.Empty;
                 SetStatus(
-                    cancellationToken.IsCancellationRequested
+                    wasCancelled
                         ? "处理请求在服务启动前已取消"
                         : "扫描快照或窗口状态已变化；当前处理请求未启动",
                     "Neutral");
+                if (wasCancelled)
+                {
+                    preServiceCancellation = true;
+                    throw new OperationCanceledException(cancellationToken);
+                }
+
                 return;
             }
 
@@ -542,15 +550,11 @@ public sealed class UnpackSession : ObservableObject
             {
                 ItemResults = attribution.AcceptedResults
             };
-            var issueResult = result with
-            {
-                ItemResults = attribution.IssueResults
-            };
 
             PublishItemResults(operationId, enrichedResult.ItemResults);
             PublishIssues(
                 operationId,
-                issueResult,
+                enrichedResult,
                 items,
                 NormalizeIssueContext(request.OutputDirectory),
                 attribution.RejectedCount);
@@ -596,14 +600,10 @@ public sealed class UnpackSession : ObservableObject
             {
                 ItemResults = attribution.AcceptedResults
             };
-            var issueResult = exception.Result with
-            {
-                ItemResults = attribution.IssueResults
-            };
             PublishItemResults(operationId, enrichedResult.ItemResults);
             PublishIssues(
                 operationId,
-                issueResult,
+                enrichedResult,
                 items,
                 operationFailureContext: null,
                 attribution.RejectedCount);
@@ -628,7 +628,9 @@ public sealed class UnpackSession : ObservableObject
             SetStatus(exception.Result.Message, "Neutral");
             throw;
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException)
+            when (cancellationToken.IsCancellationRequested
+                  && !preServiceCancellation)
         {
             CloseProgressLease(progressLease);
             CompletionSummary = CreateCompletionSummary(
@@ -644,7 +646,7 @@ public sealed class UnpackSession : ObservableObject
             SetStatus($"解包已取消 · 已处理 {ProcessedCount}/{TotalCount}", "Neutral");
             throw;
         }
-        catch (Exception exception)
+        catch (Exception exception) when (!preServiceCancellation)
         {
             CloseProgressLease(progressLease);
             CompletionSummary = CreateCompletionSummary(
@@ -1127,18 +1129,8 @@ public sealed class UnpackSession : ObservableObject
             .OrderBy(candidate => candidate.Index)
             .Select(candidate => candidate.Result)
             .ToArray();
-        var acceptedByIndex = candidates
-            .Where(candidate => !duplicateProjectKeys.Contains(
-                candidate.Result.ProjectKey!))
-            .ToDictionary(candidate => candidate.Index, candidate => candidate.Result);
-        var issueResults = itemResults
-            .Select((result, index) => acceptedByIndex.TryGetValue(index, out var exact)
-                ? exact
-                : result with { ProjectKey = null })
-            .ToArray();
         return new ResultAttribution(
             Array.AsReadOnly(accepted),
-            Array.AsReadOnly(issueResults),
             Math.Max(0, itemResults.Count - accepted.Length));
     }
 
@@ -1473,6 +1465,5 @@ public sealed class UnpackSession : ObservableObject
 
     private sealed record ResultAttribution(
         IReadOnlyList<WallpaperUnpackItemResult> AcceptedResults,
-        IReadOnlyList<WallpaperUnpackItemResult> IssueResults,
         int RejectedCount);
 }
