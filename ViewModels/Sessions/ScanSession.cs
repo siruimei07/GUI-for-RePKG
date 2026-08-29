@@ -596,8 +596,12 @@ public sealed class ScanSession : ObservableObject
             var revision = checked(_snapshotRevision + 1);
             ReplaceItems(cards);
             var identity = new ScanSnapshotIdentity(
-                Path.GetFullPath(request.SourceDirectory),
-                Path.GetFullPath(request.OutputDirectory),
+                OutputPathPolicy.NormalizeDirectoryPath(
+                    request.SourceDirectory,
+                    "壁纸源目录"),
+                OutputPathPolicy.NormalizeDirectoryPath(
+                    request.OutputDirectory,
+                    "输出目录"),
                 result.CompletedAtUtc);
             ScanIdentity = identity;
             _snapshotRevision = revision;

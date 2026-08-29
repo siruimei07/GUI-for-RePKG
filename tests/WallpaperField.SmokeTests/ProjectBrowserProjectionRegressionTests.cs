@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.IO;
+using System.Reflection;
+using System.Reflection.Emit;
 using WallpaperField.Application;
 using WallpaperField.Contracts;
 using WallpaperField.Models;
@@ -94,11 +96,193 @@ internal static class ProjectBrowserProjectionRegressionTests
             missing.Count == 0,
             "Browse projection contract is missing: " + string.Join(", ", missing));
 
+        VerifyProjectionHasNoFileSystemCalls(assert);
         await VerifyProjectionFilteringSortingAndRowsAsync(assert);
         await VerifyCurrentAndSharedSelectionAsync(assert);
         await VerifySnapshotRecoveryAndDisposalAsync(assert);
         await VerifyThousandItemProjectionPerformanceAsync(assert);
     }
+
+    private static void VerifyProjectionHasNoFileSystemCalls(Action<bool, string> assert)
+    {
+        var probe = typeof(ProjectBrowserProjectionRegressionTests).GetMethod(
+            nameof(ForbiddenFileSystemProbe),
+            BindingFlags.NonPublic | BindingFlags.Static)!;
+        var probeCalls = FindForbiddenFileSystemCalls([probe]);
+        assert(probeCalls.Any(call => call.Contains("System.IO.File.Exists", StringComparison.Ordinal)),
+            "The Browse filesystem-call guard did not detect its controlled File.Exists probe.");
+
+        var projectionRoots = new[]
+            {
+                typeof(BrowsePageViewModel),
+                typeof(BrowseProjectViewModel),
+                typeof(BrowseRowViewModel)
+            }
+            .SelectMany(type => type
+                .GetMethods(
+                    BindingFlags.Instance
+                    | BindingFlags.Static
+                    | BindingFlags.Public
+                    | BindingFlags.NonPublic
+                    | BindingFlags.DeclaredOnly)
+                .Cast<MethodBase>()
+                .Concat(type.GetConstructors(
+                    BindingFlags.Instance
+                    | BindingFlags.Static
+                    | BindingFlags.Public
+                    | BindingFlags.NonPublic)))
+            .ToArray();
+        var forbiddenCalls = FindForbiddenFileSystemCalls(projectionRoots);
+        assert(forbiddenCalls.Count == 0,
+            "Browse projection methods reached forbidden filesystem APIs: "
+            + string.Join("; ", forbiddenCalls));
+    }
+
+    private static IReadOnlyList<string> FindForbiddenFileSystemCalls(
+        IEnumerable<MethodBase> roots)
+    {
+        var wallpaperAssembly = typeof(BrowsePageViewModel).Assembly;
+        var pending = new Queue<MethodBase>(roots);
+        var visited = new HashSet<(Module Module, int Token)>();
+        var forbidden = new SortedSet<string>(StringComparer.Ordinal);
+        while (pending.Count > 0)
+        {
+            var caller = pending.Dequeue();
+            if (!TryGetMethodIdentity(caller, out var identity) || !visited.Add(identity))
+            {
+                continue;
+            }
+
+            foreach (var called in ReadCalledMethods(caller))
+            {
+                if (IsForbiddenFileSystemType(called.DeclaringType))
+                {
+                    forbidden.Add(
+                        $"{caller.DeclaringType?.FullName}.{caller.Name} -> "
+                        + $"{called.DeclaringType?.FullName}.{called.Name}");
+                }
+
+                if (called.Module.Assembly == wallpaperAssembly
+                    && called.DeclaringType?.Namespace?.StartsWith(
+                        "WallpaperField",
+                        StringComparison.Ordinal) == true)
+                {
+                    pending.Enqueue(called);
+                }
+            }
+        }
+
+        return forbidden.ToArray();
+    }
+
+    private static IEnumerable<MethodBase> ReadCalledMethods(MethodBase caller)
+    {
+        var body = caller.GetMethodBody();
+        var bytes = body?.GetILAsByteArray();
+        if (bytes is null)
+        {
+            yield break;
+        }
+
+        var position = 0;
+        while (position < bytes.Length)
+        {
+            var value = bytes[position++];
+            var key = value == 0xfe
+                ? 0xfe00 | bytes[position++]
+                : value;
+            if (!IlOpCodes.TryGetValue(key, out var opCode))
+            {
+                throw new InvalidOperationException($"Unknown IL opcode 0x{key:X4}.");
+            }
+
+            if (opCode.OperandType == OperandType.InlineMethod)
+            {
+                var token = BitConverter.ToInt32(bytes, position);
+                MethodBase? called = null;
+                try
+                {
+                    called = caller.Module.ResolveMethod(
+                        token,
+                        caller.DeclaringType?.GetGenericArguments(),
+                        (caller as MethodInfo)?.GetGenericArguments());
+                }
+                catch (ArgumentException)
+                {
+                    // Invalid metadata is not expected in the product assembly; keep parsing
+                    // so the guard still covers the remaining reachable calls.
+                }
+
+                if (called is not null)
+                {
+                    yield return called;
+                }
+            }
+
+            position += GetOperandSize(opCode.OperandType, bytes, position);
+        }
+    }
+
+    private static int GetOperandSize(OperandType operandType, byte[] bytes, int position)
+        => operandType switch
+        {
+            OperandType.InlineNone => 0,
+            OperandType.ShortInlineBrTarget
+                or OperandType.ShortInlineI
+                or OperandType.ShortInlineVar => 1,
+            OperandType.InlineVar => 2,
+            OperandType.InlineBrTarget
+                or OperandType.InlineField
+                or OperandType.InlineI
+                or OperandType.InlineMethod
+                or OperandType.InlineSig
+                or OperandType.InlineString
+                or OperandType.InlineTok
+                or OperandType.InlineType
+                or OperandType.ShortInlineR => 4,
+            OperandType.InlineI8 or OperandType.InlineR => 8,
+            OperandType.InlineSwitch => 4 + BitConverter.ToInt32(bytes, position) * 4,
+            _ => throw new InvalidOperationException(
+                $"Unsupported IL operand type {operandType}.")
+        };
+
+    private static bool TryGetMethodIdentity(
+        MethodBase method,
+        out (Module Module, int Token) identity)
+    {
+        try
+        {
+            identity = (method.Module, method.MetadataToken);
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            identity = default;
+            return false;
+        }
+    }
+
+    private static bool IsForbiddenFileSystemType(Type? type)
+        => type?.FullName is { } name
+           && (name is "System.IO.File"
+               or "System.IO.Directory"
+               or "System.IO.FileInfo"
+               or "System.IO.DirectoryInfo"
+               or "System.IO.FileStream"
+               or "System.IO.FileSystemInfo"
+               or "System.IO.FileSystemWatcher"
+               or "System.IO.DriveInfo"
+               or "System.IO.RandomAccess"
+               or "System.IO.FileSystemAclExtensions"
+               || typeof(FileSystemInfo).IsAssignableFrom(type));
+
+    private static bool ForbiddenFileSystemProbe(string path) => File.Exists(path);
+
+    private static readonly IReadOnlyDictionary<int, OpCode> IlOpCodes = typeof(OpCodes)
+        .GetFields(BindingFlags.Public | BindingFlags.Static)
+        .Where(field => field.FieldType == typeof(OpCode))
+        .Select(field => (OpCode)field.GetValue(null)!)
+        .ToDictionary(opCode => (int)(ushort)opCode.Value);
 
     private static async Task VerifyProjectionFilteringSortingAndRowsAsync(
         Action<bool, string> assert)
@@ -376,12 +560,17 @@ internal static class ProjectBrowserProjectionRegressionTests
             CreateRecord(fixture.SourceRoot, fixture.OutputRoot, "b", "Beta refreshed", WallpaperProjectKind.Video),
             CreateRecord(fixture.SourceRoot, fixture.OutputRoot, "a", "Alpha refreshed", WallpaperProjectKind.Package)
         };
-        await fixture.ScanAsync(sameSourceRecords);
+        await fixture.ScanAsync(
+            sameSourceRecords,
+            fixture.SourceRoot + Path.DirectorySeparatorChar,
+            fixture.OutputRoot + Path.DirectorySeparatorChar);
         assert(fixture.Browse.CurrentProject is { WorkshopId: "b" } currentB
                && !ReferenceEquals(currentB, oldB)
                && fixture.Browse.FocusedProjectKey == currentB.ProjectKey
+               && fixture.Scan.ProjectSnapshot!.Identity.SourceDirectory == fixture.SourceRoot
+               && fixture.Scan.ProjectSnapshot.Identity.OutputDirectory == fixture.OutputRoot
                && fixture.Browse.SelectedCount == 0,
-            "A same-source rescan did not restore current/focus by identity or clear old selection.");
+            "Trailing directory separators changed canonical snapshot identity or reset current/focus.");
 
         var movedB = CreateRecord(
             fixture.SourceRoot,
@@ -410,14 +599,30 @@ internal static class ProjectBrowserProjectionRegressionTests
             "A source-root change falsely restored the same Workshop ID from another source.");
 
         var stableSnapshot = fixture.Scan.ProjectSnapshot;
+        var selectedHidden = fixture.Browse.VisibleProjects.Single(project =>
+            project.WorkshopId == "b");
+        assert(fixture.Scan.TrySetUnpackSelection(selectedHidden.Card, true),
+            "The failure/cancellation fixture could not select its shared non-first card.");
+        fixture.Browse.KindFilter = ProjectBrowserKindFilter.Package;
         var stableVisible = fixture.Browse.VisibleProjects;
         var stableCurrent = fixture.Browse.CurrentProject;
+        assert(selectedHidden.Card.IsSelectedForUnpack
+               && fixture.Browse.SelectedCount == 1
+               && fixture.Browse.SelectedPackageCount == 0
+               && fixture.Browse.SelectedVideoCount == 1
+               && fixture.Browse.HiddenSelectedCount == 1,
+            "The failure/cancellation fixture did not establish a hidden shared selection.");
         fixture.Service.EnqueueFailure(new IOException("injected scan failure"));
         await fixture.Scan.ScanAsync();
         assert(ReferenceEquals(fixture.Scan.ProjectSnapshot, stableSnapshot)
                && ReferenceEquals(fixture.Browse.VisibleProjects, stableVisible)
-               && ReferenceEquals(fixture.Browse.CurrentProject, stableCurrent),
-            "A failed scan replaced the last successful Browse snapshot.");
+               && ReferenceEquals(fixture.Browse.CurrentProject, stableCurrent)
+               && selectedHidden.Card.IsSelectedForUnpack
+               && fixture.Browse.SelectedCount == 1
+               && fixture.Browse.SelectedPackageCount == 0
+               && fixture.Browse.SelectedVideoCount == 1
+               && fixture.Browse.HiddenSelectedCount == 1,
+            "A failed scan replaced snapshot/current/projection or discarded hidden selection.");
 
         var cancellationStarted = fixture.Service.EnqueueCancellation();
         var cancelledScan = fixture.Scan.ScanAsync();
@@ -426,8 +631,13 @@ internal static class ProjectBrowserProjectionRegressionTests
         await cancelledScan.WaitAsync(TimeSpan.FromSeconds(2));
         assert(ReferenceEquals(fixture.Scan.ProjectSnapshot, stableSnapshot)
                && ReferenceEquals(fixture.Browse.VisibleProjects, stableVisible)
-               && ReferenceEquals(fixture.Browse.CurrentProject, stableCurrent),
-            "A cancelled scan replaced the last successful Browse snapshot.");
+               && ReferenceEquals(fixture.Browse.CurrentProject, stableCurrent)
+               && selectedHidden.Card.IsSelectedForUnpack
+               && fixture.Browse.SelectedCount == 1
+               && fixture.Browse.SelectedPackageCount == 0
+               && fixture.Browse.SelectedVideoCount == 1
+               && fixture.Browse.HiddenSelectedCount == 1,
+            "A cancelled scan replaced snapshot/current/projection or discarded hidden selection.");
 
         fixture.Browse.SearchText = "Alpha";
         assert(fixture.Browse.CurrentProject is { WorkshopId: "a" },
@@ -435,15 +645,54 @@ internal static class ProjectBrowserProjectionRegressionTests
         fixture.Browse.SearchText = "no-match";
         assert(fixture.Browse.CurrentProject is null,
             "A zero-match projection retained a hidden current project.");
+        fixture.Browse.SearchText = string.Empty;
         fixture.Browse.KindFilter = ProjectBrowserKindFilter.Website;
         assert(fixture.Browse.CurrentProject is null,
-            "Blocking filters unexpectedly selected a hidden project.");
-        var targetKey = stableVisible.Single(project => project.WorkshopId == "b").ProjectKey;
+            "A kind filter with no match unexpectedly retained current.");
+
+        var targetKey = selectedHidden.ProjectKey;
+        var targetSource = selectedHidden.Record.SourceDirectory;
+        fixture.Problems.Publish(
+        [
+            AppIssue.Create(
+                "BROWSE_REVEAL_CONTEXT",
+                AppIssueSeverity.Warning,
+                AppIssueSource.Scan,
+                "reveal context",
+                "reveal context details",
+                AppDiskFact.NotModified,
+                AppIssueAction.ReviewInput,
+                Path.GetFullPath(targetSource))
+        ]);
+        fixture.Browse.SearchText = "Beta new source";
+        fixture.Browse.KindFilter = ProjectBrowserKindFilter.Video;
+        fixture.Browse.ShowOnlyProcessable = true;
+        fixture.Browse.ShowOnlyProblems = true;
+        assert(fixture.Browse.RevealProject(targetKey, clearBlockingFilters: true)
+               && fixture.Browse.CurrentProject is { WorkshopId: "b" }
+               && fixture.Browse.SearchText == "Beta new source"
+               && fixture.Browse.KindFilter == ProjectBrowserKindFilter.Video
+               && fixture.Browse.ShowOnlyProcessable
+               && fixture.Browse.ShowOnlyProblems,
+            "RevealProject cleared filter context that already included the target.");
+
+        fixture.Problems.Resolve(
+            AppIssueSource.Scan,
+            "BROWSE_REVEAL_CONTEXT",
+            Path.GetFullPath(targetSource),
+            DateTimeOffset.UtcNow);
+        fixture.Browse.SearchText = "Alpha";
+        fixture.Browse.KindFilter = ProjectBrowserKindFilter.Package;
+        fixture.Browse.ShowOnlyProblems = true;
+        assert(fixture.Browse.CurrentProject is null,
+            "Blocking filters unexpectedly retained a hidden project.");
         assert(fixture.Browse.RevealProject(targetKey, clearBlockingFilters: true)
                && fixture.Browse.CurrentProject is { WorkshopId: "b" }
                && fixture.Browse.SearchText.Length == 0
-               && fixture.Browse.KindFilter == ProjectBrowserKindFilter.All,
-            "RevealProject did not clear blocking filters and select the exact ProjectKey.");
+               && fixture.Browse.KindFilter == ProjectBrowserKindFilter.All
+               && fixture.Browse.ShowOnlyProcessable
+               && !fixture.Browse.ShowOnlyProblems,
+            "RevealProject did not clear only the conditions blocking its exact target.");
 
         var disposedVisible = fixture.Browse.VisibleProjects;
         var disposedCurrent = fixture.Browse.CurrentProject;
@@ -674,12 +923,14 @@ internal static class ProjectBrowserProjectionRegressionTests
 
         internal async Task ScanAsync(
             IReadOnlyList<WallpaperRecord> records,
-            string? sourceRoot = null)
+            string? sourceRoot = null,
+            string? outputRoot = null)
         {
             var actualSource = sourceRoot ?? SourceRoot;
+            var actualOutput = outputRoot ?? OutputRoot;
             Directory.CreateDirectory(actualSource);
             Scan.SourcePath = actualSource;
-            Scan.OutputPath = OutputRoot;
+            Scan.OutputPath = actualOutput;
             Service.EnqueueSuccess(records);
             await Scan.ScanAsync();
         }

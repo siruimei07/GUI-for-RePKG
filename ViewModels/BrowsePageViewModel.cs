@@ -199,10 +199,25 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
 
         if (clearBlockingFilters)
         {
-            SearchText = string.Empty;
-            KindFilter = ProjectBrowserKindFilter.All;
-            ShowOnlyProcessable = false;
-            ShowOnlyProblems = false;
+            if (!MatchesSearch(target))
+            {
+                SearchText = string.Empty;
+            }
+
+            if (!MatchesKind(target.ProjectKind))
+            {
+                KindFilter = ProjectBrowserKindFilter.All;
+            }
+
+            if (ShowOnlyProcessable && !target.IsProcessable)
+            {
+                ShowOnlyProcessable = false;
+            }
+
+            if (ShowOnlyProblems && !target.HasProblems)
+            {
+                ShowOnlyProblems = false;
+            }
         }
 
         target = VisibleProjects.FirstOrDefault(project => ReferenceEquals(project, target));
@@ -363,14 +378,17 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
     }
 
     private bool MatchesFilters(BrowseProjectViewModel project)
-    {
-        var search = SearchText.Trim();
-        return (search.Length == 0
-                || project.Title.Contains(search, StringComparison.OrdinalIgnoreCase)
-                || project.WorkshopId.Contains(search, StringComparison.OrdinalIgnoreCase))
+        => MatchesSearch(project)
                && MatchesKind(project.ProjectKind)
                && (!ShowOnlyProcessable || project.IsProcessable)
                && (!ShowOnlyProblems || project.HasProblems);
+
+    private bool MatchesSearch(BrowseProjectViewModel project)
+    {
+        var search = SearchText.Trim();
+        return search.Length == 0
+               || project.Title.Contains(search, StringComparison.OrdinalIgnoreCase)
+               || project.WorkshopId.Contains(search, StringComparison.OrdinalIgnoreCase);
     }
 
     private bool MatchesKind(WallpaperProjectKind kind)
