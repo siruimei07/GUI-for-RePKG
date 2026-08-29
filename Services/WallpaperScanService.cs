@@ -7,6 +7,19 @@ namespace WallpaperField.Services;
 
 public sealed class WallpaperScanService : IWallpaperScanService
 {
+    private readonly Action<string> _validateProjectPath;
+
+    public WallpaperScanService()
+        : this(ValidateProjectPath)
+    {
+    }
+
+    internal WallpaperScanService(Action<string> validateProjectPath)
+    {
+        _validateProjectPath = validateProjectPath
+            ?? throw new ArgumentNullException(nameof(validateProjectPath));
+    }
+
     public async Task<ScanResult> ScanAsync(
         WallpaperScanRequest request,
         IProgress<ScanProgress>? progress = null,
@@ -62,9 +75,7 @@ public sealed class WallpaperScanService : IWallpaperScanService
 
             try
             {
-                OutputPathPolicy.RejectReparsePointsInExistingPath(
-                    sourceFolder,
-                    "壁纸项目目录");
+                _validateProjectPath(sourceFolder);
                 progress?.Report(CreateProgress(
                     index,
                     sourceFolders.Length,
@@ -94,10 +105,12 @@ public sealed class WallpaperScanService : IWallpaperScanService
             }
             catch (Exception exception) when (!IsFatalScanException(exception))
             {
+                const string failureMessage =
+                    "项目扫描失败；请检查项目文件格式、访问权限与路径安全性。";
                 errors.Add(new ScanError
                 {
                     FolderPath = sourceFolder,
-                    Message = exception.Message,
+                    Message = failureMessage,
                     ExceptionType = exception.GetType().Name
                 });
 
@@ -107,7 +120,7 @@ public sealed class WallpaperScanService : IWallpaperScanService
                     sourceFolder,
                     currentTitle,
                     ScanStage.Failed,
-                    $"跳过：{exception.Message}"));
+                    $"跳过：{failureMessage}"));
             }
 
             progress?.Report(CreateProgress(
@@ -425,6 +438,11 @@ public sealed class WallpaperScanService : IWallpaperScanService
             or StackOverflowException
             or AccessViolationException;
     }
+
+    private static void ValidateProjectPath(string sourceFolder)
+        => OutputPathPolicy.RejectReparsePointsInExistingPath(
+            sourceFolder,
+            "壁纸项目目录");
 
     private static string? FindProjectFile(string directory)
     {

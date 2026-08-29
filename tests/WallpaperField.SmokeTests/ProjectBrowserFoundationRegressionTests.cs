@@ -75,6 +75,8 @@ internal static class ProjectBrowserFoundationRegressionTests
             await VerifyPreviewAndProjectKeyFactsAsync(assert);
             await VerifyAtomicSnapshotAndAuthorizationAsync(assert);
             VerifyFatalScanExceptionClassification(missingContracts);
+            await VerifyScanExceptionIsolationThroughScanAsync(missingContracts);
+            VerifyObservedBusyReturnsBeforeRegistration(missingContracts);
             await VerifyBusyForegroundRequestRejectedAsync(missingContracts);
             await VerifyLargeSnapshotFreezeCostAsync(missingContracts);
         }
@@ -288,6 +290,103 @@ internal static class ProjectBrowserFoundationRegressionTests
         }
     }
 
+    private static async Task VerifyScanExceptionIsolationThroughScanAsync(
+        ICollection<string> failures)
+    {
+        var testRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"WallpaperField-ScanExceptionIsolation-{Guid.NewGuid():N}");
+        var sourceRoot = Path.Combine(testRoot, "source");
+        var outputRoot = Path.Combine(testRoot, "output");
+        Directory.CreateDirectory(Path.Combine(sourceRoot, "a-rejected"));
+        Directory.CreateDirectory(Path.Combine(sourceRoot, "b-accepted"));
+        Directory.CreateDirectory(outputRoot);
+
+        try
+        {
+            const string privateMarker = @"C:\private\attacker-controlled-marker";
+            var fatal = new OutOfMemoryException(privateMarker);
+            var fatalService = new WallpaperScanService(_ => throw fatal);
+            Exception? propagated = null;
+            try
+            {
+                _ = await fatalService.ScanAsync(
+                    new WallpaperScanRequest(sourceRoot, outputRoot));
+            }
+            catch (Exception exception)
+            {
+                propagated = exception;
+            }
+
+            if (!ReferenceEquals(propagated, fatal))
+            {
+                failures.Add("actual ScanAsync isolated an OutOfMemoryException instead of propagating it");
+            }
+
+            foreach (var recoverable in new Exception[]
+                     {
+                         new IOException(privateMarker),
+                         new UnauthorizedAccessException(privateMarker)
+                     })
+            {
+                var progressMessages = new List<string>();
+                var service = new WallpaperScanService(path =>
+                {
+                    if (string.Equals(
+                            Path.GetFileName(path),
+                            "a-rejected",
+                            StringComparison.Ordinal))
+                    {
+                        throw recoverable;
+                    }
+                });
+                var result = await service.ScanAsync(
+                    new WallpaperScanRequest(sourceRoot, outputRoot),
+                    new InlineProgress<ScanProgress>(value =>
+                        progressMessages.Add(value.Message)));
+
+                if (result.Items.Count != 1
+                    || result.Items[0].WorkshopId != "b-accepted"
+                    || result.Errors.Count != 1
+                    || result.Errors[0].ExceptionType != recoverable.GetType().Name
+                    || result.Errors[0].Message.Contains(
+                        privateMarker,
+                        StringComparison.OrdinalIgnoreCase)
+                    || progressMessages.Any(message => message.Contains(
+                        privateMarker,
+                        StringComparison.OrdinalIgnoreCase)))
+                {
+                    failures.Add(
+                        $"actual ScanAsync did not isolate {recoverable.GetType().Name} with path-private diagnostics");
+                }
+            }
+        }
+        finally
+        {
+            Directory.Delete(testRoot, recursive: true);
+        }
+    }
+
+    private static void VerifyObservedBusyReturnsBeforeRegistration(
+        ICollection<string> failures)
+    {
+        var source = File.ReadAllText(FindRepositoryFile(
+            Path.Combine("ViewModels", "Sessions", "UnpackSession.cs")));
+        const string busyGuard = "if (HasActiveForegroundOperation())";
+        var guardIndex = source.IndexOf(busyGuard, StringComparison.Ordinal);
+        var registrationIndex = source.IndexOf(
+            "_taskLifecycleCoordinator.TryRunAsync(",
+            StringComparison.Ordinal);
+        if (guardIndex < 0
+            || registrationIndex <= guardIndex
+            || !source[guardIndex..registrationIndex].Contains(
+                "return;",
+                StringComparison.Ordinal))
+        {
+            failures.Add("observed busy foreground state does not return before atomic registration");
+        }
+    }
+
     private static async Task VerifyBusyForegroundRequestRejectedAsync(
         ICollection<string> failures)
     {
@@ -356,6 +455,26 @@ internal static class ProjectBrowserFoundationRegressionTests
         {
             Directory.Delete(testRoot, recursive: true);
         }
+    }
+
+    private static string FindRepositoryFile(string relativePath)
+    {
+        foreach (var start in new[] { Environment.CurrentDirectory, AppContext.BaseDirectory })
+        {
+            for (var directory = new DirectoryInfo(start);
+                 directory is not null;
+                 directory = directory.Parent)
+            {
+                var candidate = Path.Combine(directory.FullName, relativePath);
+                if (File.Exists(candidate))
+                {
+                    return candidate;
+                }
+            }
+        }
+
+        throw new FileNotFoundException(
+            $"Could not find repository file '{relativePath}'.");
     }
 
     private static async Task VerifyLargeSnapshotFreezeCostAsync(

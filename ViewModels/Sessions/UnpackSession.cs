@@ -229,7 +229,12 @@ public sealed class UnpackSession : ObservableObject
             return;
         }
 
-        var foregroundWasActive = HasActiveForegroundOperation();
+        if (HasActiveForegroundOperation())
+        {
+            SetStatus("已有前台任务正在运行；当前处理请求未启动", "Neutral");
+            return;
+        }
+
         if (!_taskLifecycleCoordinator.TryRunAsync(
                 ForegroundOperationKind.Unpack,
                 (operationId, cancellationToken) => UnpackCoreAsync(
@@ -240,11 +245,7 @@ public sealed class UnpackSession : ObservableObject
                 out var execution)
             || execution is null)
         {
-            SetStatus(
-                foregroundWasActive
-                    ? "已有前台任务正在运行；当前处理请求未启动"
-                    : "前台任务状态已变化；当前处理请求未启动",
-                "Neutral");
+            SetStatus("前台任务状态已变化；当前处理请求未启动", "Neutral");
             return;
         }
 
