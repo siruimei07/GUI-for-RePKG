@@ -36,6 +36,7 @@ try
     await CoordinatorRegressionTests.RunAsync(Assert);
     await SessionBoundaryRegressionTests.RunAsync(Assert);
     await ProjectBrowserFoundationRegressionTests.RunAsync(Assert);
+    await ProjectBrowserProjectionRegressionTests.RunAsync(Assert);
     await TaskLifecycleRegressionTests.RunAsync(Assert);
     await ScanLifecycleRegressionTests.RunAsync(Assert);
     await LibraryLifecycleRegressionTests.RunAsync(Assert);

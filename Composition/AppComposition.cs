@@ -74,6 +74,15 @@ public static class AppComposition
                     DateTimeOffset.UtcNow));
     }
 
+    public static BrowsePageViewModel CreateBrowsePageViewModel(
+        ShellViewModel shell)
+    {
+        ArgumentNullException.ThrowIfNull(shell);
+        return new BrowsePageViewModel(
+            shell.ScanSession,
+            shell.ProblemCenterSession);
+    }
+
     public static DiagnosticExportService CreateDiagnosticExportService(
         ShellViewModel shell)
     {
