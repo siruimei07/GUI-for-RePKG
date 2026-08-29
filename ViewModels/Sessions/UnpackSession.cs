@@ -16,6 +16,7 @@ public sealed class UnpackSession : ObservableObject
     private readonly ScanSession _scanSession;
     private readonly TaskLifecycleCoordinator _taskLifecycleCoordinator;
     private readonly ProblemCenterSession _problemCenter;
+    private readonly Func<bool> _foregroundActivityObserver;
     private Func<bool> _isClosing;
     private bool _isUnpacking;
     private bool _isProgressIndeterminate;
@@ -39,6 +40,23 @@ public sealed class UnpackSession : ObservableObject
         TaskLifecycleCoordinator taskLifecycleCoordinator,
         ProblemCenterSession problemCenter,
         Func<bool>? isClosing = null)
+        : this(
+            unpackService,
+            scanSession,
+            taskLifecycleCoordinator,
+            problemCenter,
+            isClosing,
+            foregroundActivityObserver: null)
+    {
+    }
+
+    internal UnpackSession(
+        IWallpaperUnpackService unpackService,
+        ScanSession scanSession,
+        TaskLifecycleCoordinator taskLifecycleCoordinator,
+        ProblemCenterSession problemCenter,
+        Func<bool>? isClosing,
+        Func<bool>? foregroundActivityObserver)
     {
         _unpackService = unpackService
             ?? throw new ArgumentNullException(nameof(unpackService));
@@ -48,6 +66,8 @@ public sealed class UnpackSession : ObservableObject
             ?? throw new ArgumentNullException(nameof(taskLifecycleCoordinator));
         _problemCenter = problemCenter
             ?? throw new ArgumentNullException(nameof(problemCenter));
+        _foregroundActivityObserver = foregroundActivityObserver
+            ?? HasCoordinatorForegroundActivity;
         _isClosing = isClosing ?? (() => false);
 
         CancelUnpackCommand = new RelayCommand(
@@ -229,7 +249,7 @@ public sealed class UnpackSession : ObservableObject
             return;
         }
 
-        if (HasActiveForegroundOperation())
+        if (_foregroundActivityObserver())
         {
             SetStatus("已有前台任务正在运行；当前处理请求未启动", "Neutral");
             return;
@@ -267,7 +287,7 @@ public sealed class UnpackSession : ObservableObject
         => _isClosing = isClosing
             ?? throw new ArgumentNullException(nameof(isClosing));
 
-    private bool HasActiveForegroundOperation()
+    private bool HasCoordinatorForegroundActivity()
         => _taskLifecycleCoordinator.Current.State is
             TaskLifecycleState.Running
             or TaskLifecycleState.CancellationRequested

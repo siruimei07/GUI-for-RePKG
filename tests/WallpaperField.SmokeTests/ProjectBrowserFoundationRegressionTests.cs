@@ -6,6 +6,7 @@ using WallpaperField.Contracts;
 using WallpaperField.Models;
 using WallpaperField.Services;
 using WallpaperField.ViewModels;
+using WallpaperField.ViewModels.Sessions;
 
 internal static class ProjectBrowserFoundationRegressionTests
 {
@@ -76,7 +77,7 @@ internal static class ProjectBrowserFoundationRegressionTests
             await VerifyAtomicSnapshotAndAuthorizationAsync(assert);
             VerifyFatalScanExceptionClassification(missingContracts);
             await VerifyScanExceptionIsolationThroughScanAsync(missingContracts);
-            VerifyObservedBusyReturnsBeforeRegistration(missingContracts);
+            await VerifyObservedBusyRejectsWithoutRegistrationAsync(missingContracts);
             await VerifyBusyForegroundRequestRejectedAsync(missingContracts);
             await VerifyLargeSnapshotFreezeCostAsync(missingContracts);
         }
@@ -367,23 +368,97 @@ internal static class ProjectBrowserFoundationRegressionTests
         }
     }
 
-    private static void VerifyObservedBusyReturnsBeforeRegistration(
+    private static async Task VerifyObservedBusyRejectsWithoutRegistrationAsync(
         ICollection<string> failures)
     {
-        var source = File.ReadAllText(FindRepositoryFile(
-            Path.Combine("ViewModels", "Sessions", "UnpackSession.cs")));
-        const string busyGuard = "if (HasActiveForegroundOperation())";
-        var guardIndex = source.IndexOf(busyGuard, StringComparison.Ordinal);
-        var registrationIndex = source.IndexOf(
-            "_taskLifecycleCoordinator.TryRunAsync(",
-            StringComparison.Ordinal);
-        if (guardIndex < 0
-            || registrationIndex <= guardIndex
-            || !source[guardIndex..registrationIndex].Contains(
-                "return;",
-                StringComparison.Ordinal))
+        var testRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"WallpaperField-ObservedBusy-{Guid.NewGuid():N}");
+        var sourceRoot = Path.Combine(testRoot, "source");
+        var outputRoot = Path.Combine(testRoot, "output");
+        Directory.CreateDirectory(sourceRoot);
+        Directory.CreateDirectory(outputRoot);
+
+        try
         {
-            failures.Add("observed busy foreground state does not return before atomic registration");
+            var coordinator = new TaskLifecycleCoordinator();
+            var unpackService = new CapturingUnpackService();
+            var shell = new ShellViewModel(
+                new SnapshotScanService(sourceRoot, outputRoot),
+                new EmptyLibraryService(),
+                new NullFolderPickerService(),
+                new NullSystemFolderService(),
+                unpackService,
+                new PathInputValidator(),
+                coordinator)
+            {
+                SourcePath = sourceRoot,
+                OutputPath = outputRoot
+            };
+            await shell.ScanSession.ScanAsync();
+            var card = shell.ScannedWallpapers.Single();
+            FrozenWallpaperProcessRequest? request = null;
+            var requestReady = shell.ScanSession.TrySetUnpackSelection(card, true);
+            requestReady = requestReady
+                           && shell.ScanSession.TryFreezeSelectedRequest(out request);
+            if (!requestReady || request is null)
+            {
+                failures.Add("observed-busy fixture could not freeze a current request");
+                return;
+            }
+
+            var coordinatorBefore = coordinator.Current;
+            var observerCalls = 0;
+            var unpackRegistrations = 0;
+            coordinator.Changed += (_, snapshot) =>
+            {
+                if (snapshot.OperationKind == ForegroundOperationKind.Unpack)
+                {
+                    unpackRegistrations++;
+                }
+            };
+            var observedBusySession = new UnpackSession(
+                unpackService,
+                shell.ScanSession,
+                coordinator,
+                shell.ProblemCenterSession,
+                isClosing: null,
+                foregroundActivityObserver: () =>
+                {
+                    observerCalls++;
+                    return true;
+                });
+
+            Exception? rejectionFailure = null;
+            try
+            {
+                await observedBusySession.UnpackAsync(request);
+            }
+            catch (Exception exception)
+            {
+                rejectionFailure = exception;
+            }
+
+            if (rejectionFailure is not null
+                || observerCalls != 1
+                || unpackRegistrations != 0
+                || coordinator.Current != coordinatorBefore
+                || unpackService.CallCount != 0
+                || observedBusySession.StatusKind != "Neutral"
+                || !observedBusySession.StatusText.Contains(
+                    "已有前台任务正在运行",
+                    StringComparison.Ordinal))
+            {
+                failures.Add(
+                    "an observed-busy current request registered or reached unpack instead of returning stably"
+                    + (rejectionFailure is null
+                        ? string.Empty
+                        : $" ({rejectionFailure.GetType().Name}: {rejectionFailure.Message})"));
+            }
+        }
+        finally
+        {
+            Directory.Delete(testRoot, recursive: true);
         }
     }
 
@@ -455,26 +530,6 @@ internal static class ProjectBrowserFoundationRegressionTests
         {
             Directory.Delete(testRoot, recursive: true);
         }
-    }
-
-    private static string FindRepositoryFile(string relativePath)
-    {
-        foreach (var start in new[] { Environment.CurrentDirectory, AppContext.BaseDirectory })
-        {
-            for (var directory = new DirectoryInfo(start);
-                 directory is not null;
-                 directory = directory.Parent)
-            {
-                var candidate = Path.Combine(directory.FullName, relativePath);
-                if (File.Exists(candidate))
-                {
-                    return candidate;
-                }
-            }
-        }
-
-        throw new FileNotFoundException(
-            $"Could not find repository file '{relativePath}'.");
     }
 
     private static async Task VerifyLargeSnapshotFreezeCostAsync(
