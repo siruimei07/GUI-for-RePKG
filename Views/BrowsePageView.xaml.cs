@@ -24,6 +24,9 @@ public sealed partial class BrowsePageView : UserControl
     private long _focusRequestVersion;
     private long _responsiveFocusTransferVersion;
     private bool _isApplyingProjectFocus;
+    private ResponsiveFocusTransferLease? _pendingResponsiveFocusTransfer;
+    private string? _pendingDirectionalProjectKey;
+    private Button? _pendingDirectionalFocusOwner;
 
     public BrowsePageView()
     {
@@ -118,7 +121,10 @@ public sealed partial class BrowsePageView : UserControl
 
         var geometryChanged = previousColumns != columns
                               || wasCompact != viewModel.IsCompactLayout;
-        QueueResponsiveFocusTransfer(responsiveFocusSurface, mode);
+        if (wasCompact != viewModel.IsCompactLayout)
+        {
+            QueueResponsiveFocusTransfer(responsiveFocusSurface, mode);
+        }
         if (hadGridKeyboardFocus && focusedKey is not null && geometryChanged)
         {
             _ = FocusProjectAsync(focusedKey);
@@ -151,23 +157,36 @@ public sealed partial class BrowsePageView : UserControl
         ResponsiveFocusSurface surface,
         ShellLayoutMode mode)
     {
-        if (surface == ResponsiveFocusSurface.None)
+        if (surface == ResponsiveFocusSurface.None || !BrowseView.IsVisible)
         {
             return;
         }
 
-        var version = Interlocked.Increment(ref _responsiveFocusTransferVersion);
+        var lease = new ResponsiveFocusTransferLease(
+            Interlocked.Increment(ref _responsiveFocusTransferVersion),
+            DataContext,
+            Keyboard.FocusedElement);
+        _pendingResponsiveFocusTransfer = lease;
         _ = Dispatcher.BeginInvoke(
             () =>
             {
-                if (version != Volatile.Read(ref _responsiveFocusTransferVersion)
+                if (lease.Version != Volatile.Read(ref _responsiveFocusTransferVersion)
+                    || !ReferenceEquals(_pendingResponsiveFocusTransfer, lease)
+                    || !ReferenceEquals(DataContext, lease.DataContext)
+                    || !IsResponsiveFocusOwnerCurrent(lease)
                     || BrowseViewModel is not { } viewModel
                     || viewModel.IsCompactLayout != (mode == ShellLayoutMode.Compact)
-                    || !IsVisible)
+                    || !BrowseView.IsVisible)
                 {
+                    if (ReferenceEquals(_pendingResponsiveFocusTransfer, lease))
+                    {
+                        _pendingResponsiveFocusTransfer = null;
+                    }
+
                     return;
                 }
 
+                _pendingResponsiveFocusTransfer = null;
                 if (surface == ResponsiveFocusSurface.Details)
                 {
                     if (viewModel.IsCompactLayout)
@@ -193,6 +212,20 @@ public sealed partial class BrowsePageView : UserControl
                 }
             },
             DispatcherPriority.Input);
+    }
+
+    private bool IsResponsiveFocusOwnerCurrent(ResponsiveFocusTransferLease lease)
+    {
+        var focused = Keyboard.FocusedElement;
+        if (ReferenceEquals(focused, lease.FocusOwner))
+        {
+            return true;
+        }
+
+        // WPF temporarily focuses the host when the responsive change collapses
+        // the old owner. That transition still belongs to this transfer.
+        return lease.FocusOwner is UIElement { IsVisible: false }
+               && ReferenceEquals(focused, Window.GetWindow(this));
     }
 
     internal void CaptureResponsiveViewportAnchor()
@@ -406,10 +439,14 @@ public sealed partial class BrowsePageView : UserControl
         DependencyPropertyChangedEventArgs e)
     {
         CancelPendingProjectFocus();
+        CancelPendingResponsiveFocusTransfer();
         if (Window.GetWindow(this) is MainWindow window)
         {
             ApplyLayoutMode(window.LayoutMode);
         }
+
+        // A replacement context owns no transfer captured from the prior model.
+        CancelPendingResponsiveFocusTransfer();
     }
 
     private void BrowsePageView_PreviewGotKeyboardFocus(
@@ -424,7 +461,17 @@ public sealed partial class BrowsePageView : UserControl
     }
 
     private void CancelPendingProjectFocus()
-        => Interlocked.Increment(ref _focusRequestVersion);
+    {
+        Interlocked.Increment(ref _focusRequestVersion);
+        _pendingDirectionalProjectKey = null;
+        _pendingDirectionalFocusOwner = null;
+    }
+
+    private void CancelPendingResponsiveFocusTransfer()
+    {
+        Interlocked.Increment(ref _responsiveFocusTransferVersion);
+        _pendingResponsiveFocusTransfer = null;
+    }
 
     private void BrowsePageView_IsVisibleChanged(
         object sender,
@@ -439,6 +486,7 @@ public sealed partial class BrowsePageView : UserControl
         if (!routeSurface.IsVisible)
         {
             CancelPendingProjectFocus();
+            CancelPendingResponsiveFocusTransfer();
             viewModel.CloseDetails();
             viewModel.CloseFilterLayer();
             UpdateModalBackgroundState();
@@ -448,6 +496,7 @@ public sealed partial class BrowsePageView : UserControl
         if (Window.GetWindow(this) is MainWindow window)
         {
             ApplyLayoutMode(window.LayoutMode);
+            CancelPendingResponsiveFocusTransfer();
         }
     }
 
@@ -460,6 +509,7 @@ public sealed partial class BrowsePageView : UserControl
         }
 
         CancelPendingProjectFocus();
+        CancelPendingResponsiveFocusTransfer();
         viewModel.CurrentProject = project;
         viewModel.FocusedProjectKey = project.ProjectKey;
         _detailReturnProjectKey = project.ProjectKey;
@@ -476,16 +526,18 @@ public sealed partial class BrowsePageView : UserControl
             return;
         }
 
-        viewModel.FocusedProjectKey = project.ProjectKey;
         switch (e.Key)
         {
             case Key.Space:
                 e.Handled = true;
+                viewModel.FocusedProjectKey = project.ProjectKey;
                 viewModel.TryToggleSelection(project);
                 return;
             case Key.Enter:
                 e.Handled = true;
                 CancelPendingProjectFocus();
+                CancelPendingResponsiveFocusTransfer();
+                viewModel.FocusedProjectKey = project.ProjectKey;
                 viewModel.CurrentProject = project;
                 _detailReturnProjectKey = project.ProjectKey;
                 if (viewModel.IsCompactLayout)
@@ -506,34 +558,60 @@ public sealed partial class BrowsePageView : UserControl
                 return;
             case Key.Left:
                 e.Handled = true;
-                await MoveCardFocusAsync(project, ProjectBrowserFocusDirection.Left);
+                await MoveCardFocusAsync(button, project, ProjectBrowserFocusDirection.Left);
                 return;
             case Key.Right:
                 e.Handled = true;
-                await MoveCardFocusAsync(project, ProjectBrowserFocusDirection.Right);
+                await MoveCardFocusAsync(button, project, ProjectBrowserFocusDirection.Right);
                 return;
             case Key.Up:
                 e.Handled = true;
-                await MoveCardFocusAsync(project, ProjectBrowserFocusDirection.Up);
+                await MoveCardFocusAsync(button, project, ProjectBrowserFocusDirection.Up);
                 return;
             case Key.Down:
                 e.Handled = true;
-                await MoveCardFocusAsync(project, ProjectBrowserFocusDirection.Down);
+                await MoveCardFocusAsync(button, project, ProjectBrowserFocusDirection.Down);
                 return;
             case Key.Escape:
                 e.Handled = true;
+                viewModel.FocusedProjectKey = project.ProjectKey;
                 button.Focus();
                 return;
         }
     }
 
     private async Task MoveCardFocusAsync(
+        Button focusOwner,
         BrowseProjectViewModel project,
         ProjectBrowserFocusDirection direction)
     {
-        if (BrowseViewModel?.MoveFocus(project, direction) is { } target)
+        if (BrowseViewModel is not { } viewModel)
         {
+            return;
+        }
+
+        var origin = ReferenceEquals(_pendingDirectionalFocusOwner, focusOwner)
+            ? viewModel.VisibleProjects.FirstOrDefault(candidate =>
+                  string.Equals(
+                      candidate.ProjectKey,
+                      _pendingDirectionalProjectKey,
+                      StringComparison.Ordinal))
+              ?? project
+            : project;
+        if (viewModel.MoveFocus(origin, direction) is { } target)
+        {
+            _pendingDirectionalFocusOwner = focusOwner;
+            _pendingDirectionalProjectKey = target.ProjectKey;
             await FocusProjectAsync(target.ProjectKey).ConfigureAwait(true);
+            if (ReferenceEquals(_pendingDirectionalFocusOwner, focusOwner)
+                && string.Equals(
+                    _pendingDirectionalProjectKey,
+                    target.ProjectKey,
+                    StringComparison.Ordinal))
+            {
+                _pendingDirectionalProjectKey = null;
+                _pendingDirectionalFocusOwner = null;
+            }
         }
     }
 
@@ -646,6 +724,12 @@ public sealed partial class BrowsePageView : UserControl
         }
 
         BrowseProjectGrid.UpdateLayout();
+        if (!IsProjectFocusLeaseCurrent(projectKey, lease))
+        {
+            completion.TrySetResult(false);
+            return;
+        }
+
         if (BrowseProjectGrid.ItemContainerGenerator.Status
                 == GeneratorStatus.ContainersGenerated
             && BrowseProjectGrid.ItemContainerGenerator.ContainerFromIndex(rowIndex)
@@ -796,6 +880,7 @@ public sealed partial class BrowsePageView : UserControl
         }
 
         CancelPendingProjectFocus();
+        CancelPendingResponsiveFocusTransfer();
         viewModel.OpenFilterLayer();
         UpdateModalBackgroundState();
         await Dispatcher.InvokeAsync(
@@ -813,6 +898,7 @@ public sealed partial class BrowsePageView : UserControl
         }
 
         CancelPendingProjectFocus();
+        CancelPendingResponsiveFocusTransfer();
         _detailReturnProjectKey = project.ProjectKey;
         viewModel.OpenDetails();
         UpdateModalBackgroundState();
@@ -854,6 +940,7 @@ public sealed partial class BrowsePageView : UserControl
         }
 
         CancelPendingProjectFocus();
+        CancelPendingResponsiveFocusTransfer();
         var key = _detailReturnProjectKey
                   ?? viewModel.CurrentProject?.ProjectKey
                   ?? viewModel.FocusedProjectKey;
@@ -874,6 +961,7 @@ public sealed partial class BrowsePageView : UserControl
         }
 
         CancelPendingProjectFocus();
+        CancelPendingResponsiveFocusTransfer();
         viewModel.CloseFilterLayer();
         UpdateModalBackgroundState();
         await Dispatcher.InvokeAsync(
@@ -945,6 +1033,11 @@ public sealed partial class BrowsePageView : UserControl
         double NormalizedPosition);
 
     private sealed record ProjectFocusLease(
+        long Version,
+        object? DataContext,
+        IInputElement? FocusOwner);
+
+    private sealed record ResponsiveFocusTransferLease(
         long Version,
         object? DataContext,
         IInputElement? FocusOwner);

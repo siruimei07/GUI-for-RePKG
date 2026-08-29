@@ -466,7 +466,7 @@
                                                         </Grid>
                                                         <Border x:Name="BrowseProjectMetadata"
                                                                 MaxHeight="74"
-                                                                Padding="7,3"
+                                                                Padding="7,2"
                                                                 VerticalAlignment="Bottom"
                                                                 Background="{DynamicResource OverlayBrush}"
                                                                 ClipToBounds="True">
@@ -475,37 +475,46 @@
                                                                     <RowDefinition Height="Auto" />
                                                                     <RowDefinition Height="Auto" />
                                                                     <RowDefinition Height="Auto" />
+                                                                    <RowDefinition Height="Auto" />
                                                                 </Grid.RowDefinitions>
-                                                                <TextBlock Height="24"
-                                                                           FontSize="11"
+                                                                <TextBlock Height="20"
+                                                                           FontSize="10"
                                                                            FontWeight="SemiBold"
                                                                            Foreground="{DynamicResource PaperBrush}"
-                                                                           LineHeight="12"
+                                                                           LineHeight="10"
                                                                            LineStackingStrategy="BlockLineHeight"
                                                                            Text="{Binding Title}"
                                                                            TextTrimming="CharacterEllipsis"
                                                                            TextWrapping="Wrap" />
-                                                                <Grid Grid.Row="1" Height="10">
+                                                                <TextBlock Grid.Row="1"
+                                                                           Height="8"
+                                                                           FontFamily="Consolas"
+                                                                           FontSize="7"
+                                                                           Foreground="{DynamicResource PaperBrush}"
+                                                                           LineHeight="8"
+                                                                           Text="{Binding WorkshopId, StringFormat=ID {0}}"
+                                                                           TextTrimming="CharacterEllipsis" />
+                                                                <Grid Grid.Row="2" Height="9">
                                                                     <TextBlock HorizontalAlignment="Left"
                                                                                FontFamily="Consolas"
-                                                                               FontSize="8"
+                                                                               FontSize="7.5"
                                                                                Foreground="{DynamicResource SignalBrush}"
-                                                                               LineHeight="10"
+                                                                               LineHeight="9"
                                                                                Text="{Binding TypeLabel}" />
                                                                     <TextBlock HorizontalAlignment="Right"
                                                                                FontFamily="Consolas"
-                                                                               FontSize="8"
+                                                                               FontSize="7.5"
                                                                                Foreground="{DynamicResource SignalBrush}"
-                                                                               LineHeight="10"
+                                                                               LineHeight="9"
                                                                                Text="{Binding WarningCount, StringFormat=! {0}}" />
                                                                 </Grid>
                                                                 <TextBlock x:Name="BrowseProjectProcessabilityText"
-                                                                           Grid.Row="2"
-                                                                           Height="10"
-                                                                           FontSize="8"
+                                                                           Grid.Row="3"
+                                                                           Height="9"
+                                                                           FontSize="7.5"
                                                                            FontWeight="SemiBold"
                                                                            Foreground="{DynamicResource SignalBrush}"
-                                                                           LineHeight="10"
+                                                                           LineHeight="9"
                                                                            Text="{Binding ProcessabilityText}"
                                                                            TextTrimming="CharacterEllipsis">
                                                                     <TextBlock.Style>

@@ -96,7 +96,8 @@ internal static class ProjectBrowserUiRegressionTests
             new BrowserScanService(sourceRoot, outputRoot, previewPath, RuntimeProjectCount),
             sourceRoot,
             outputRoot,
-            fixtureCoordinator);
+            fixtureCoordinator,
+            new ControlledFailureFolderResolver(sourceRoot));
         try
         {
             WaitForDispatcherTask(window, fixtureShell.ScanSession.ScanAsync());
@@ -106,11 +107,14 @@ internal static class ProjectBrowserUiRegressionTests
             fixtureShell.NavigateTo("BROWSE");
             VerifyResponsiveGeometry(window, fixtureShell, assert);
             VerifyCardSemantics(window, fixtureShell, assert);
+            VerifyQueuedDirectionalFocus(window, fixtureShell, assert);
             VerifySelectionBusyStates(window, fixtureShell, fixtureCoordinator, assert);
             VerifyRovingTabEntryAndResponsiveFocus(window, fixtureShell, assert);
             VerifyDelayedFocusCancellation(window, fixtureShell, assert);
+            VerifyFocusLifecycleCancellation(window, fixtureShell, assert);
             VerifyProcessabilityAndToggleVisibility(window, fixtureShell, assert);
             VerifyCompactModalAndFilter(window, fixtureShell, assert);
+            VerifySameBandResponsiveFocus(window, fixtureShell, assert);
             VerifyEmptySnapshotFilterRecovery(window, fixtureShell, assert);
             VerifyPendingResolverEnterFocus(window, fixtureShell, assert);
             VerifyThumbnailBindings(window, fixtureShell, previewPath, assert);
@@ -391,6 +395,81 @@ internal static class ProjectBrowserUiRegressionTests
         }
     }
 
+    private static void VerifyQueuedDirectionalFocus(
+        WallpaperField.MainWindow window,
+        ShellViewModel shell,
+        Action<bool, string> assert)
+    {
+        window.Width = 920;
+        window.Height = 680;
+        PumpLayout(window);
+        var viewModel = shell.BrowsePageViewModel;
+        var grid = WpfElementFinder.FindByName<ListBox>(window, "BrowseProjectGrid")!;
+        var viewport = FindVisualDescendants<ScrollViewer>(grid).First();
+        viewport.ScrollToHome();
+        PumpLayout(window);
+        var first = FindCardButtons(grid).First(card =>
+            card.DataContext is BrowseProjectViewModel project
+            && ReferenceEquals(project, viewModel.VisibleProjects[0]));
+        viewModel.FocusedProjectKey = viewModel.VisibleProjects[0].ProjectKey;
+        assert(first.Focus(),
+            "The queued-direction fixture could not establish real first-card focus.");
+        PumpLayout(window);
+        var originAnchor = CaptureVisibleRowAnchor(grid, viewport);
+
+        _ = window.Dispatcher.BeginInvoke(
+            () =>
+            {
+                RaiseKey(first, Key.Right);
+                RaiseKey(first, Key.Right);
+            },
+            DispatcherPriority.Input);
+        PumpLayout(window);
+        PumpLayout(window);
+        var focusedCard = Keyboard.FocusedElement as Button;
+        var horizontalTarget = viewModel.VisibleProjects[2];
+        var horizontalAnchor = CaptureVisibleRowAnchor(grid, viewport);
+        assert(viewModel.FocusedProjectKey == horizontalTarget.ProjectKey
+               && focusedCard?.DataContext is BrowseProjectViewModel horizontalProject
+               && horizontalProject.ProjectKey == horizontalTarget.ProjectKey
+               && horizontalAnchor.ProjectKey == originAnchor.ProjectKey
+               && Math.Abs(horizontalAnchor.NormalizedPosition - originAnchor.NormalizedPosition) < 0.08,
+            "Two queued Right keys collapsed to one move or lost real/semantic focus. "
+            + $"key={viewModel.FocusedProjectKey}; keyboard="
+            + $"{(focusedCard?.DataContext as BrowseProjectViewModel)?.ProjectKey ?? "<none>"}; "
+            + $"anchor={originAnchor}->{horizontalAnchor}.");
+
+        viewModel.FocusedProjectKey = viewModel.VisibleProjects[0].ProjectKey;
+        assert(first.Focus(),
+            "The queued-direction fixture could not restore first-card focus for Down.");
+        PumpLayout(window);
+        _ = window.Dispatcher.BeginInvoke(
+            () =>
+            {
+                RaiseKey(first, Key.Down);
+                RaiseKey(first, Key.Down);
+            },
+            DispatcherPriority.Input);
+        PumpLayout(window);
+        PumpLayout(window);
+        focusedCard = Keyboard.FocusedElement as Button;
+        var verticalTarget = viewModel.VisibleProjects[6];
+        var verticalAnchor = CaptureVisibleRowAnchor(grid, viewport);
+        var verticalBounds = focusedCard is null
+            ? Rect.Empty
+            : BoundsRelativeTo(focusedCard, viewport);
+        assert(viewModel.FocusedProjectKey == verticalTarget.ProjectKey
+               && focusedCard?.DataContext is BrowseProjectViewModel verticalProject
+               && verticalProject.ProjectKey == verticalTarget.ProjectKey
+               && verticalBounds.Top >= -0.75
+               && verticalBounds.Bottom <= viewport.ActualHeight + 0.75,
+            "Two queued Down keys collapsed to one row move or lost real/semantic focus. "
+            + $"key={viewModel.FocusedProjectKey}; keyboard="
+            + $"{(focusedCard?.DataContext as BrowseProjectViewModel)?.ProjectKey ?? "<none>"}; "
+            + $"anchor={originAnchor}->{verticalAnchor}; target={verticalBounds} / "
+            + $"viewport={viewport.ActualHeight:0.###}.");
+    }
+
     private static void VerifyRovingTabEntryAndResponsiveFocus(
         WallpaperField.MainWindow window,
         ShellViewModel shell,
@@ -663,6 +742,244 @@ internal static class ProjectBrowserUiRegressionTests
         offsetBefore = scrollViewer.VerticalOffset;
         var projectKey = viewModel.VisibleProjects[projectIndex].ProjectKey;
         return (Task<bool>)focusMethod.Invoke(browseView, [projectKey])!;
+    }
+
+    private static void VerifyFocusLifecycleCancellation(
+        WallpaperField.MainWindow window,
+        ShellViewModel shell,
+        Action<bool, string> assert)
+    {
+        shell.NavigateTo("BROWSE");
+        window.Width = 920;
+        window.Height = 680;
+        PumpLayout(window);
+        var browseView = FindVisualDescendants<WallpaperField.Views.BrowsePageView>(window).Single();
+        var viewModel = shell.BrowsePageViewModel;
+        var applyLayout = typeof(WallpaperField.Views.BrowsePageView).GetMethod(
+            "ApplyLayoutMode", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)!;
+        var updateModal = typeof(WallpaperField.Views.BrowsePageView).GetMethod(
+            "UpdateModalBackgroundState", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var tryFocusMethod = typeof(WallpaperField.Views.BrowsePageView).GetMethod(
+            "TryFocusRealizedProject", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var focusLeaseType = typeof(WallpaperField.Views.BrowsePageView).GetNestedType(
+            "ProjectFocusLease", BindingFlags.NonPublic)!;
+        var focusVersionField = typeof(WallpaperField.Views.BrowsePageView).GetField(
+            "_focusRequestVersion", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var search = WpfElementFinder.FindByName<TextBox>(window, "BrowseSearchTextBox")!;
+        var filterButton = WpfElementFinder.FindByName<Button>(window, "BrowseFilterButton")!;
+        var compactKindFilter = WpfElementFinder.FindByName<ComboBox>(
+            window, "BrowseCompactKindFilterComboBox")!;
+        var close = WpfElementFinder.FindByName<Button>(window, "BrowseDetailCloseButton")!;
+        var persistent = WpfElementFinder.FindByName<FrameworkElement>(
+            window, "BrowsePersistentDetails")!;
+        var browseSurface = WpfElementFinder.FindByName<FrameworkElement>(window, "BrowseView")!;
+        var grid = WpfElementFinder.FindByName<ListBox>(window, "BrowseProjectGrid")!;
+        var viewport = FindVisualDescendants<ScrollViewer>(grid).First();
+        var sourceRoot = Path.GetDirectoryName(viewModel.VisibleProjects[0].Record.SourceDirectory)!;
+        var outputRoot = Path.GetDirectoryName(viewModel.VisibleProjects[0].Record.OutputDirectory)!;
+        var replacement = CreateShell(
+            new BrowserScanService(sourceRoot, outputRoot, null, 10),
+            sourceRoot,
+            outputRoot,
+            folderResolver: new ControlledFailureFolderResolver(sourceRoot));
+        var externalFocusRetained = false;
+        var modalOwnershipRetained = false;
+        var routeStayedClosed = false;
+        var replacementStayedClosed = false;
+        var finalLeaseCancelled = false;
+        var reenteredFinalLayout = false;
+        var reentrantFocusCall = false;
+        IInputElement? reentrantFocusedElement = null;
+        var reentrantTaskWasCompleted = false;
+        long reentrantVersionBefore = -1;
+        long reentrantVersionAfter = -1;
+        Task<bool>? reentrantFocus = null;
+        try
+        {
+            WaitForDispatcherTask(window, replacement.ScanSession.ScanAsync());
+
+            viewModel.CloseDetails();
+            viewModel.CloseFilterLayer();
+            applyLayout.Invoke(browseView, [WallpaperField.ShellLayoutMode.Compact]);
+            updateModal.Invoke(browseView, null);
+            viewport.ScrollToHome();
+            PumpLayout(window);
+            var origin = FindCardButtons(grid).First(card =>
+                card.DataContext is BrowseProjectViewModel project
+                && ReferenceEquals(project, viewModel.VisibleProjects[0]));
+            viewModel.FocusedProjectKey = viewModel.VisibleProjects[0].ProjectKey;
+            if (!origin.Focus())
+            {
+                throw new InvalidOperationException(
+                    "The final-focus lease fixture could not establish card ownership.");
+            }
+
+            PumpLayout(window);
+            if (!ReferenceEquals(Keyboard.FocusedElement, origin))
+            {
+                throw new InvalidOperationException(
+                    "The final-focus lease fixture lost its real card focus before invoking the layout seam.");
+            }
+
+            var targetProject = viewModel.VisibleProjects[1];
+            var focusCompletion = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var focusLease = Activator.CreateInstance(
+                focusLeaseType,
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                binder: null,
+                args:
+                [
+                    (long)focusVersionField.GetValue(browseView)!,
+                    browseView.DataContext,
+                    Keyboard.FocusedElement
+                ],
+                culture: null)!;
+            reentrantFocus = focusCompletion.Task;
+            EventHandler? layoutHandler = null;
+            layoutHandler = (_, _) =>
+            {
+                if (reenteredFinalLayout)
+                {
+                    return;
+                }
+
+                reenteredFinalLayout = true;
+                reentrantTaskWasCompleted = reentrantFocus?.IsCompleted == true;
+                reentrantVersionBefore = (long)focusVersionField.GetValue(browseView)!;
+                reentrantFocusCall = search.Focus();
+                reentrantVersionAfter = (long)focusVersionField.GetValue(browseView)!;
+                reentrantFocusedElement = Keyboard.FocusedElement;
+            };
+            grid.LayoutUpdated += layoutHandler;
+            try
+            {
+                grid.InvalidateMeasure();
+                tryFocusMethod.Invoke(
+                    browseView,
+                    [targetProject.ProjectKey, 0, focusLease, 0, focusCompletion]);
+                WaitForDispatcherTask(window, reentrantFocus);
+            }
+            finally
+            {
+                grid.LayoutUpdated -= layoutHandler;
+            }
+
+            finalLeaseCancelled = reenteredFinalLayout
+                                  && !reentrantTaskWasCompleted
+                                  && reentrantFocus is { Result: false }
+                                  && ReferenceEquals(Keyboard.FocusedElement, search)
+                                  && reentrantVersionAfter > reentrantVersionBefore
+                                  && viewModel.FocusedProjectKey
+                                  == viewModel.VisibleProjects[0].ProjectKey;
+
+            viewModel.CurrentProject ??= viewModel.VisibleProjects[0];
+            applyLayout.Invoke(browseView, [WallpaperField.ShellLayoutMode.Compact]);
+            viewModel.OpenDetails();
+            updateModal.Invoke(browseView, null);
+            PumpLayout(window);
+            close.Focus();
+            PumpLayout(window);
+            _ = window.Dispatcher.BeginInvoke(
+                () =>
+                {
+                    applyLayout.Invoke(browseView, [WallpaperField.ShellLayoutMode.Regular]);
+                    search.Focus();
+                },
+                DispatcherPriority.Input);
+            PumpLayout(window);
+            PumpLayout(window);
+            externalFocusRetained = ReferenceEquals(Keyboard.FocusedElement, search)
+                                    && !persistent.IsKeyboardFocusWithin
+                                    && !viewModel.IsDetailsOpen;
+
+            viewModel.CloseDetails();
+            updateModal.Invoke(browseView, null);
+            applyLayout.Invoke(browseView, [WallpaperField.ShellLayoutMode.Regular]);
+            persistent.Focus();
+            PumpLayout(window);
+            _ = window.Dispatcher.BeginInvoke(
+                () =>
+                {
+                    applyLayout.Invoke(browseView, [WallpaperField.ShellLayoutMode.Compact]);
+                    RaiseClick(filterButton);
+                },
+                DispatcherPriority.Input);
+            PumpLayout(window);
+            PumpLayout(window);
+            modalOwnershipRetained = viewModel.IsFilterLayerOpen
+                                     && !viewModel.IsDetailsOpen
+                                     && compactKindFilter.IsKeyboardFocusWithin;
+
+            viewModel.CloseFilterLayer();
+            updateModal.Invoke(browseView, null);
+            applyLayout.Invoke(browseView, [WallpaperField.ShellLayoutMode.Regular]);
+            persistent.Focus();
+            PumpLayout(window);
+            _ = window.Dispatcher.BeginInvoke(
+                () =>
+                {
+                    applyLayout.Invoke(browseView, [WallpaperField.ShellLayoutMode.Compact]);
+                    shell.NavigateTo("SCAN");
+                },
+                DispatcherPriority.Input);
+            PumpLayout(window);
+            PumpLayout(window);
+            routeStayedClosed = !browseSurface.IsVisible
+                                && !viewModel.IsDetailsOpen
+                                && !IsVisualDescendantOf(
+                                    Keyboard.FocusedElement as DependencyObject,
+                                    browseView);
+
+            viewModel.CloseDetails();
+            updateModal.Invoke(browseView, null);
+            shell.NavigateTo("BROWSE");
+            applyLayout.Invoke(browseView, [WallpaperField.ShellLayoutMode.Compact]);
+            viewModel.OpenDetails();
+            updateModal.Invoke(browseView, null);
+            PumpLayout(window);
+            close.Focus();
+            PumpLayout(window);
+            _ = window.Dispatcher.BeginInvoke(
+                () =>
+                {
+                    applyLayout.Invoke(browseView, [WallpaperField.ShellLayoutMode.Regular]);
+                    window.DataContext = replacement;
+                    replacement.NavigateTo("BROWSE");
+                },
+                DispatcherPriority.Input);
+            PumpLayout(window);
+            PumpLayout(window);
+            replacementStayedClosed = !replacement.BrowsePageViewModel.IsDetailsOpen
+                                      && !close.IsKeyboardFocusWithin;
+        }
+        finally
+        {
+            window.DataContext = shell;
+            shell.NavigateTo("BROWSE");
+            viewModel.CloseDetails();
+            viewModel.CloseFilterLayer();
+            applyLayout.Invoke(browseView, [WallpaperField.ShellLayoutMode.Compact]);
+            updateModal.Invoke(browseView, null);
+            replacement.Dispose();
+            PumpLayout(window);
+        }
+
+        assert(externalFocusRetained
+               && modalOwnershipRetained
+               && routeStayedClosed
+               && replacementStayedClosed
+               && finalLeaseCancelled,
+            "A delayed responsive/final focus action crossed an ownership lifecycle boundary. "
+            + $"external={externalFocusRetained}; modal={modalOwnershipRetained}; "
+            + $"route={routeStayedClosed}; "
+            + $"replacement={replacementStayedClosed}; layout_reentered={reenteredFinalLayout}; "
+            + $"layout_focus_call={reentrantFocusCall}; layout_focused="
+            + $"{(reentrantFocusedElement as FrameworkElement)?.Name ?? "<unnamed>"}; "
+            + $"layout_task_done={reentrantTaskWasCompleted}; "
+            + $"layout_version={reentrantVersionBefore}->{reentrantVersionAfter}; "
+            + $"final={finalLeaseCancelled}; final_result={reentrantFocus?.Result}; "
+            + $"focused={(Keyboard.FocusedElement as FrameworkElement)?.Name ?? "<unnamed>"}.");
     }
 
     private static void VerifyProcessabilityAndToggleVisibility(
@@ -1078,6 +1395,101 @@ internal static class ProjectBrowserUiRegressionTests
         PumpLayout(window);
     }
 
+    private static void VerifySameBandResponsiveFocus(
+        WallpaperField.MainWindow window,
+        ShellViewModel shell,
+        Action<bool, string> assert)
+    {
+        shell.NavigateTo("BROWSE");
+        window.Width = 920;
+        window.Height = 680;
+        var viewModel = shell.BrowsePageViewModel;
+        viewModel.SearchText = string.Empty;
+        PumpLayout(window);
+        var grid = WpfElementFinder.FindByName<ListBox>(window, "BrowseProjectGrid")!;
+        var card = FindCardButtons(grid).First(candidate =>
+            candidate.DataContext is BrowseProjectViewModel { IsProcessable: true });
+        var project = (BrowseProjectViewModel)card.DataContext;
+        viewModel.CurrentProject = null;
+        RaiseClick(card);
+        PumpLayout(window);
+        RaiseKey(card, Key.Enter);
+        PumpLayout(window);
+        var compactFolder = WpfElementFinder.FindByName<Button>(
+            window, "BrowseCompactOpenFolderButton")!;
+        var compactFolderFocused = compactFolder.IsEnabled && compactFolder.Focus();
+        PumpLayout(window);
+        window.Width = 1059;
+        PumpLayout(window);
+        assert(compactFolderFocused
+               && ReferenceEquals(Keyboard.FocusedElement, compactFolder),
+            "A same-Compact-band resize replaced the exact details action focus. "
+            + $"enabled={compactFolder.IsEnabled}; focused="
+            + $"{(Keyboard.FocusedElement as FrameworkElement)?.Name ?? "<unnamed>"}.");
+
+        window.Width = 1060;
+        PumpLayout(window);
+        var persistentFolder = WpfElementFinder.FindByName<Button>(
+            window, "BrowseOpenFolderButton")!;
+        assert(persistentFolder.IsEnabled && persistentFolder.Focus(),
+            "The same-band details fixture could not focus the persistent folder action.");
+        PumpLayout(window);
+        window.Width = 1189;
+        PumpLayout(window);
+        assert(ReferenceEquals(Keyboard.FocusedElement, persistentFolder),
+            "A same-Regular-band resize replaced the exact persistent details action focus.");
+        window.Width = 1190;
+        PumpLayout(window);
+        assert(ReferenceEquals(Keyboard.FocusedElement, persistentFolder),
+            "Regular-to-Wide resized a still-visible details surface and replaced exact focus.");
+        window.Width = 1600;
+        PumpLayout(window);
+        assert(ReferenceEquals(Keyboard.FocusedElement, persistentFolder),
+            "A same-Wide-band resize replaced the exact persistent details action focus.");
+
+        var search = WpfElementFinder.FindByName<TextBox>(window, "BrowseSearchTextBox")!;
+        search.Focus();
+        window.Width = 920;
+        PumpLayout(window);
+        var filterButton = WpfElementFinder.FindByName<Button>(window, "BrowseFilterButton")!;
+        RaiseClick(filterButton);
+        PumpLayout(window);
+        var filterLayer = WpfElementFinder.FindByName<FrameworkElement>(
+            window, "BrowseCompactFilterLayer")!;
+        var compactToggle = FindVisualDescendants<ToggleButton>(filterLayer).First(toggle =>
+            AutomationProperties.GetName(toggle) == "仅显示可处理项目");
+        assert(compactToggle.Focus(),
+            "The same-band filter fixture could not focus the second Compact filter control.");
+        PumpLayout(window);
+        window.Width = 1059;
+        PumpLayout(window);
+        assert(ReferenceEquals(Keyboard.FocusedElement, compactToggle),
+            "A same-Compact-band resize reset exact filter focus to its first control.");
+
+        window.Width = 1060;
+        PumpLayout(window);
+        var sort = WpfElementFinder.FindByName<ComboBox>(window, "BrowseSortComboBox")!;
+        assert(sort.Focus(),
+            "The same-band filter fixture could not focus the full sort control.");
+        PumpLayout(window);
+        window.Width = 1189;
+        PumpLayout(window);
+        assert(ReferenceEquals(Keyboard.FocusedElement, sort),
+            "A same-Regular-band resize reset exact full-filter focus.");
+        window.Width = 1190;
+        PumpLayout(window);
+        assert(ReferenceEquals(Keyboard.FocusedElement, sort),
+            "Regular-to-Wide resized still-visible filters and replaced exact focus.");
+        window.Width = 1600;
+        PumpLayout(window);
+        assert(ReferenceEquals(Keyboard.FocusedElement, sort),
+            "A same-Wide-band resize reset exact full-filter focus.");
+
+        search.Focus();
+        window.Width = 920;
+        PumpLayout(window);
+    }
+
     private static void VerifyEmptySnapshotFilterRecovery(
         WallpaperField.MainWindow window,
         ShellViewModel populatedShell,
@@ -1415,6 +1827,18 @@ internal static class ProjectBrowserUiRegressionTests
         var type = textBlocks.First(text =>
             BindingOperations.GetBindingExpression(text, TextBlock.TextProperty)
                 ?.ParentBinding.Path?.Path == nameof(BrowseProjectViewModel.TypeLabel));
+        var workshopId = textBlocks.FirstOrDefault(text =>
+            BindingOperations.GetBindingExpression(text, TextBlock.TextProperty)
+                ?.ParentBinding.Path?.Path == nameof(BrowseProjectViewModel.WorkshopId));
+        if (workshopId is null)
+        {
+            assert(false,
+                $"Browse card did not visibly expose its Workshop ID at {width:0} DIP "
+                + $"(HC={highContrast}).");
+            return;
+        }
+
+        var project = (BrowseProjectViewModel)card.DataContext;
         var warning = textBlocks.First(text =>
             BindingOperations.GetBindingExpression(text, TextBlock.TextProperty)
                 ?.ParentBinding.Path?.Path == nameof(BrowseProjectViewModel.WarningCount));
@@ -1425,6 +1849,7 @@ internal static class ProjectBrowserUiRegressionTests
 
         var metadataBounds = BoundsRelativeTo(metadata, card);
         var titleBounds = BoundsRelativeTo(title, card);
+        var workshopIdBounds = BoundsRelativeTo(workshopId, card);
         var typeBounds = BoundsRelativeTo(type, card);
         var warningBounds = BoundsRelativeTo(warning, card);
         var processabilityBounds = BoundsRelativeTo(processability, card);
@@ -1432,6 +1857,7 @@ internal static class ProjectBrowserUiRegressionTests
         var textBounds = new[]
         {
             titleBounds,
+            workshopIdBounds,
             typeBounds,
             warningBounds,
             processabilityBounds
@@ -1441,14 +1867,16 @@ internal static class ProjectBrowserUiRegressionTests
             && bounds.Top >= -tolerance
             && bounds.Right <= card.ActualWidth + tolerance
             && bounds.Bottom <= card.ActualHeight + tolerance);
-        var rowsDoNotOverlap = titleBounds.Bottom <= typeBounds.Top + tolerance
+        var rowsDoNotOverlap = titleBounds.Bottom <= workshopIdBounds.Top + tolerance
+                               && workshopIdBounds.Bottom <= typeBounds.Top + tolerance
                                && typeBounds.Bottom <= processabilityBounds.Top + tolerance;
         var previewRecognitionHeight = Math.Max(0, metadataBounds.Top);
 
         Console.WriteLine(
             $"BROWSE_METADATA width={width:0} hc={highContrast} card={card.ActualWidth:0.###}x{card.ActualHeight:0.###} "
             + $"metadata={metadataBounds.Left:0.###},{metadataBounds.Top:0.###},{metadataBounds.Width:0.###},{metadataBounds.Height:0.###} "
-            + $"preview={previewRecognitionHeight:0.###} title={titleBounds} type={typeBounds} warning={warningBounds} "
+            + $"preview={previewRecognitionHeight:0.###} title={titleBounds} id={workshopIdBounds} "
+            + $"type={typeBounds} warning={warningBounds} "
             + $"process={processabilityBounds}");
         assert(metadataBounds.Left >= -tolerance
                && metadataBounds.Top >= -tolerance
@@ -1456,12 +1884,15 @@ internal static class ProjectBrowserUiRegressionTests
                && metadataBounds.Bottom <= card.ActualHeight + tolerance
                && previewRecognitionHeight >= 8
                && title.ActualHeight >= 18
+               && workshopId.Visibility == Visibility.Visible
+               && workshopId.Text.Contains(project.WorkshopId, StringComparison.Ordinal)
                && allTextInside
                && rowsDoNotOverlap,
             $"Browse metadata exceeded or overlapped its real card bounds at {width:0} DIP "
             + $"(HC={highContrast}). card={card.ActualWidth:0.###}x{card.ActualHeight:0.###}; "
             + $"metadata={metadataBounds}; preview={previewRecognitionHeight:0.###}; "
-            + $"title={titleBounds}; type={typeBounds}; warning={warningBounds}; "
+            + $"title={titleBounds}; id={workshopIdBounds}/{workshopId.Text}; "
+            + $"type={typeBounds}; warning={warningBounds}; "
             + $"process={processabilityBounds}.");
     }
 
