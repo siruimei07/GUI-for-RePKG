@@ -108,6 +108,7 @@ internal static class ProjectBrowserUiRegressionTests
             VerifyCardSemantics(window, fixtureShell, assert);
             VerifySelectionBusyStates(window, fixtureShell, fixtureCoordinator, assert);
             VerifyRovingTabEntryAndResponsiveFocus(window, fixtureShell, assert);
+            VerifyDelayedFocusCancellation(window, fixtureShell, assert);
             VerifyProcessabilityAndToggleVisibility(window, fixtureShell, assert);
             VerifyCompactModalAndFilter(window, fixtureShell, assert);
             VerifyEmptySnapshotFilterRecovery(window, fixtureShell, assert);
@@ -185,6 +186,17 @@ internal static class ProjectBrowserUiRegressionTests
                     $"Browse horizontal card gap was {gap:0.###} instead of 8 DIP at {item.Width:0}.");
             }
 
+            if (item.Width is 1060d or 1190d or 1600d)
+            {
+                var metadataCard = cards.First(card =>
+                    card.DataContext is BrowseProjectViewModel { IsProcessable: false });
+                VerifyCardMetadataGeometry(
+                    metadataCard,
+                    item.Width,
+                    highContrast: false,
+                    assert);
+            }
+
             Console.WriteLine(
                 $"BROWSE_GEOMETRY width={item.Width:0} height={item.Height:0} mode={mode} "
                 + $"columns={columns} grid_width={grid.ActualWidth:0.###} details_width={detailColumn?.ActualWidth:0.###} "
@@ -209,7 +221,10 @@ internal static class ProjectBrowserUiRegressionTests
         PumpLayout(window);
         var viewModel = shell.BrowsePageViewModel;
         var grid = WpfElementFinder.FindByName<ListBox>(window, "BrowseProjectGrid")!;
-        var cards = FindCardButtons(grid).Take(6).ToArray();
+        var cards = FindCardButtons(grid)
+            .Where(card => card.IsLoaded && card.IsVisible)
+            .Take(6)
+            .ToArray();
         assert(cards.Length == 6, "Browse keyboard test did not realize two Compact rows.");
         if (cards.Length < 6)
         {
@@ -234,14 +249,33 @@ internal static class ProjectBrowserUiRegressionTests
                    ToggleButton.IsCheckedProperty) is not null,
             "Browse selection Toggle did not start with its shared OneWay selection binding.");
         var boundToggle = firstToggle!;
-        RaiseClick(boundToggle);
+        var enabledTogglePeer = UIElementAutomationPeer.CreatePeerForElement(boundToggle)
+                                ?? new CheckBoxAutomationPeer(boundToggle);
+        var enabledToggleProvider = (IToggleProvider)enabledTogglePeer.GetPattern(
+            PatternInterface.Toggle)!;
+        enabledToggleProvider.Toggle();
+        PumpLayout(window);
+        assert(first.IsSelected
+               && boundToggle.IsChecked == true
+               && enabledToggleProvider.ToggleState == ToggleState.On
+               && BindingOperations.GetBindingExpression(
+                   boundToggle,
+                   ToggleButton.IsCheckedProperty) is not null,
+            "Enabled UIA Toggle did not select through the shared Browse selection transaction.");
+        enabledToggleProvider.Toggle();
+        PumpLayout(window);
+        assert(!first.IsSelected
+               && boundToggle.IsChecked == false
+               && enabledToggleProvider.ToggleState == ToggleState.Off,
+            "Enabled UIA Toggle did not clear through the shared Browse selection transaction.");
+        enabledToggleProvider.Toggle();
         PumpLayout(window);
         assert(first.IsSelected
                && ReferenceEquals(viewModel.CurrentProject, second)
                && BindingOperations.GetBindingExpression(
                    firstToggle!,
                    ToggleButton.IsCheckedProperty) is not null,
-            "Checkbox click changed current identity or replaced its shared selection binding with a local value.");
+            "A repeated enabled UIA Toggle changed current identity or replaced its shared selection binding.");
         RaiseKey(cards[0], Key.Space);
         PumpLayout(window);
         assert(!first.IsSelected
@@ -390,7 +424,10 @@ internal static class ProjectBrowserUiRegressionTests
                && focusedCard.DataContext is BrowseProjectViewModel focusedProject
                && focusedProject.ProjectKey == deepTarget.ProjectKey
                && scrollViewer.VerticalOffset > 0,
-            "Tab from the Compact toolbar did not enter the single grid seam and realize the exact ProjectKey.");
+            "Tab from the Compact toolbar did not enter the single grid seam and realize the exact ProjectKey. "
+            + $"entered={entered}; focused={Keyboard.FocusedElement?.GetType().Name ?? "<null>"}/"
+            + $"{(Keyboard.FocusedElement as FrameworkElement)?.Name ?? "<unnamed>"}; "
+            + $"grid_focus={grid.IsKeyboardFocusWithin}; offset={scrollViewer.VerticalOffset:0.###}.");
 
         window.Width = 1060;
         PumpLayout(window);
@@ -402,8 +439,42 @@ internal static class ProjectBrowserUiRegressionTests
         var exited = focusedCard!.MoveFocus(
             new TraversalRequest(FocusNavigationDirection.Next));
         PumpLayout(window);
-        assert(exited && !grid.IsKeyboardFocusWithin,
+        var followingElement = Keyboard.FocusedElement as UIElement;
+        assert(exited && followingElement is not null && !grid.IsKeyboardFocusWithin,
             "A second Tab remained inside the roving row grid instead of leaving its single Tab seam.");
+
+        var advancedFilters = WpfElementFinder.FindByName<StackPanel>(window, "BrowseAdvancedFilters")!;
+        followingElement!.Focus();
+        PumpLayout(window);
+        var reverseEntered = followingElement.MoveFocus(
+            new TraversalRequest(FocusNavigationDirection.Previous));
+        PumpLayout(window);
+        focusedCard = Keyboard.FocusedElement as Button;
+        var tabStopCards = FindCardButtons(grid).Where(card => card.IsTabStop).ToArray();
+        assert(reverseEntered
+               && focusedCard?.Name == "BrowseProjectCardButton"
+               && focusedCard.DataContext is BrowseProjectViewModel reverseProject
+               && reverseProject.ProjectKey == deepTarget.ProjectKey
+               && tabStopCards.Length <= 1,
+            "Shift+Tab from the following details surface did not enter the single grid seam at the exact ProjectKey. "
+            + $"moved={reverseEntered}; focused={Keyboard.FocusedElement?.GetType().Name ?? "<null>"}/"
+            + $"{(Keyboard.FocusedElement as FrameworkElement)?.Name ?? "<unnamed>"}; "
+            + $"key={(focusedCard?.DataContext as BrowseProjectViewModel)?.ProjectKey ?? "<none>"}; "
+            + $"grid_focus={grid.IsKeyboardFocusWithin}; tabstops={tabStopCards.Length}["
+            + string.Join(",", tabStopCards.Select(card =>
+                (card.DataContext as BrowseProjectViewModel)?.ProjectKey ?? "<null>"))
+            + "].");
+        var reverseExited = focusedCard!.MoveFocus(
+            new TraversalRequest(FocusNavigationDirection.Previous));
+        PumpLayout(window);
+        assert(!grid.IsKeyboardFocusWithin
+               && IsVisualDescendantOf(
+                    Keyboard.FocusedElement as DependencyObject,
+                    advancedFilters),
+            "A second Shift+Tab was redirected back into the row grid instead of leaving through the preceding toolbar. "
+            + $"moved={reverseExited}; focused={Keyboard.FocusedElement?.GetType().Name ?? "<null>"}/"
+            + $"{(Keyboard.FocusedElement as FrameworkElement)?.Name ?? "<unnamed>"}; "
+            + $"grid_focus={grid.IsKeyboardFocusWithin}; advanced_focus={advancedFilters.IsKeyboardFocusWithin}.");
 
         var search = WpfElementFinder.FindByName<TextBox>(window, "BrowseSearchTextBox")!;
         var searchFocused = search.Focus();
@@ -436,6 +507,164 @@ internal static class ProjectBrowserUiRegressionTests
             + $"->{resizedAnchor.ProjectKey}@{resizedAnchor.NormalizedPosition:0.###}.");
     }
 
+    private static void VerifyDelayedFocusCancellation(
+        WallpaperField.MainWindow window,
+        ShellViewModel shell,
+        Action<bool, string> assert)
+    {
+        window.Width = 920;
+        window.Height = 680;
+        shell.NavigateTo("BROWSE");
+        PumpLayout(window);
+        var browseView = FindVisualDescendants<WallpaperField.Views.BrowsePageView>(window).Single();
+        var viewModel = shell.BrowsePageViewModel;
+        var grid = WpfElementFinder.FindByName<ListBox>(window, "BrowseProjectGrid")!;
+        var scrollViewer = FindVisualDescendants<ScrollViewer>(grid).First();
+        var search = WpfElementFinder.FindByName<TextBox>(window, "BrowseSearchTextBox")!;
+        scrollViewer.ScrollToHome();
+        PumpLayout(window);
+        var originCard = FindCardButtons(grid).First(card => card.IsLoaded && card.IsVisible);
+        assert(originCard.Focus(), "The delayed-focus fixture could not establish grid ownership.");
+        PumpLayout(window);
+        var deepKey = viewModel.VisibleProjects[900].ProjectKey;
+        var offsetBefore = scrollViewer.VerticalOffset;
+        var focusMethod = typeof(WallpaperField.Views.BrowsePageView).GetMethod(
+            "FocusProjectAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var pending = (Task<bool>)focusMethod.Invoke(browseView, [deepKey])!;
+        _ = window.Dispatcher.BeginInvoke(
+            () => search.Focus(),
+            DispatcherPriority.Input);
+        WaitForDispatcherTask(window, pending);
+        assert(!pending.Result
+               && search.IsKeyboardFocusWithin
+               && Math.Abs(scrollViewer.VerticalOffset - offsetBefore) < 0.5,
+            "Input-priority external focus did not cancel the pending exact-key lease before scroll/focus. "
+            + $"result={pending.Result}; search={search.IsKeyboardFocusWithin}; "
+            + $"offset={offsetBefore:0.###}->{scrollViewer.VerticalOffset:0.###}; "
+            + $"focused={Keyboard.FocusedElement?.GetType().Name ?? "<null>"}.");
+
+        window.Width = 1060;
+        PumpLayout(window);
+        PumpLayout(window);
+        var fullFilter = WpfElementFinder.FindByName<ComboBox>(window, "BrowseKindFilterComboBox")!;
+        pending = StartPendingProjectFocus(
+            window, browseView, viewModel, grid, scrollViewer, focusMethod, 901, out offsetBefore);
+        _ = window.Dispatcher.BeginInvoke(
+            () => fullFilter.Focus(),
+            DispatcherPriority.Input);
+        WaitForDispatcherTask(window, pending);
+        assert(!pending.Result
+               && fullFilter.IsKeyboardFocusWithin
+               && Math.Abs(scrollViewer.VerticalOffset - offsetBefore) < 0.5,
+            "Full-filter focus did not cancel the pending exact-key lease before scroll/focus.");
+
+        var details = WpfElementFinder.FindByName<FrameworkElement>(
+            window, "BrowsePersistentDetails")!;
+        pending = StartPendingProjectFocus(
+            window, browseView, viewModel, grid, scrollViewer, focusMethod, 902, out offsetBefore);
+        _ = window.Dispatcher.BeginInvoke(
+            () => details.Focus(),
+            DispatcherPriority.Input);
+        WaitForDispatcherTask(window, pending);
+        assert(!pending.Result
+               && details.IsKeyboardFocusWithin
+               && Math.Abs(scrollViewer.VerticalOffset - offsetBefore) < 0.5,
+            "Persistent-details focus did not cancel the pending exact-key lease before scroll/focus.");
+        search.Focus();
+        window.Width = 920;
+        window.Height = 680;
+        PumpLayout(window);
+
+        scrollViewer.ScrollToHome();
+        PumpLayout(window);
+        var currentCard = FindCardButtons(grid).First(card => card.IsLoaded && card.IsVisible);
+        RaiseClick(currentCard);
+        PumpLayout(window);
+        var currentKey = ((BrowseProjectViewModel)currentCard.DataContext).ProjectKey;
+        var detailsAction = WpfElementFinder.FindByName<Button>(
+            window, "BrowseCompactDetailsButton")!;
+        pending = StartPendingProjectFocus(
+            window, browseView, viewModel, grid, scrollViewer, focusMethod, 903, out offsetBefore);
+        _ = window.Dispatcher.BeginInvoke(
+            () => RaiseClick(detailsAction),
+            DispatcherPriority.Input);
+        WaitForDispatcherTask(window, pending);
+        var close = WpfElementFinder.FindByName<Button>(window, "BrowseDetailCloseButton")!;
+        assert(!pending.Result
+               && viewModel.IsDetailsOpen
+               && close.IsKeyboardFocusWithin
+               && Math.Abs(scrollViewer.VerticalOffset - offsetBefore) < 0.5,
+            "Opening the Compact details modal did not cancel the pending exact-key lease.");
+
+        offsetBefore = scrollViewer.VerticalOffset;
+        pending = (Task<bool>)focusMethod.Invoke(
+            browseView,
+            [viewModel.VisibleProjects[904].ProjectKey])!;
+        _ = window.Dispatcher.BeginInvoke(
+            () => RaiseClick(close),
+            DispatcherPriority.Input);
+        WaitForDispatcherTask(window, pending);
+        assert(!pending.Result
+               && !viewModel.IsDetailsOpen
+               && viewModel.CurrentProject?.ProjectKey == currentKey
+               && Math.Abs(scrollViewer.VerticalOffset - offsetBefore) < 0.5,
+            "Closing the Compact details modal did not cancel the older exact-key lease.");
+
+        pending = StartPendingProjectFocus(
+            window, browseView, viewModel, grid, scrollViewer, focusMethod, 905, out offsetBefore);
+        _ = window.Dispatcher.BeginInvoke(
+            () => shell.NavigateTo("SCAN"),
+            DispatcherPriority.Input);
+        WaitForDispatcherTask(window, pending);
+        var browseSurface = WpfElementFinder.FindByName<FrameworkElement>(window, "BrowseView")!;
+        assert(!pending.Result
+               && !browseSurface.IsVisible
+               && !grid.IsKeyboardFocusWithin
+               && Math.Abs(scrollViewer.VerticalOffset - offsetBefore) < 0.5,
+            "Leaving Browse did not cancel the pending exact-key lease before scroll/focus.");
+        shell.NavigateTo("BROWSE");
+        PumpLayout(window);
+
+        pending = StartPendingProjectFocus(
+            window, browseView, viewModel, grid, scrollViewer, focusMethod, 906, out _);
+        var foreignDataContext = new object();
+        _ = window.Dispatcher.BeginInvoke(
+            () => window.DataContext = foreignDataContext,
+            DispatcherPriority.Input);
+        WaitForDispatcherTask(window, pending);
+        assert(!pending.Result
+               && ReferenceEquals(window.DataContext, foreignDataContext)
+               && !grid.IsKeyboardFocusWithin,
+            "Changing Browse DataContext did not cancel the pending exact-key lease.");
+        window.DataContext = shell;
+        shell.NavigateTo("BROWSE");
+        PumpLayout(window);
+    }
+
+    private static Task<bool> StartPendingProjectFocus(
+        WallpaperField.MainWindow window,
+        WallpaperField.Views.BrowsePageView browseView,
+        BrowsePageViewModel viewModel,
+        ListBox grid,
+        ScrollViewer scrollViewer,
+        MethodInfo focusMethod,
+        int projectIndex,
+        out double offsetBefore)
+    {
+        scrollViewer.ScrollToHome();
+        PumpLayout(window);
+        var originCard = FindCardButtons(grid).First(card => card.IsLoaded && card.IsVisible);
+        if (!originCard.Focus())
+        {
+            throw new InvalidOperationException("The focus-lease fixture could not establish grid ownership.");
+        }
+
+        PumpLayout(window);
+        offsetBefore = scrollViewer.VerticalOffset;
+        var projectKey = viewModel.VisibleProjects[projectIndex].ProjectKey;
+        return (Task<bool>)focusMethod.Invoke(browseView, [projectKey])!;
+    }
+
     private static void VerifyProcessabilityAndToggleVisibility(
         WallpaperField.MainWindow window,
         ShellViewModel shell,
@@ -448,9 +677,14 @@ internal static class ProjectBrowserUiRegressionTests
         viewModel.SearchText = string.Empty;
         viewModel.TryClearSelection();
         var grid = WpfElementFinder.FindByName<ListBox>(window, "BrowseProjectGrid")!;
+        var search = WpfElementFinder.FindByName<TextBox>(window, "BrowseSearchTextBox")!;
+        search.Focus();
         FindVisualDescendants<ScrollViewer>(grid).First().ScrollToHome();
         PumpLayout(window);
-        var cards = FindCardButtons(grid).Take(6).ToArray();
+        var cards = FindCardButtons(grid)
+            .Where(card => card.IsLoaded && card.IsVisible)
+            .Take(6)
+            .ToArray();
         var websiteCard = cards.First(card =>
             ((BrowseProjectViewModel)card.DataContext).ProjectKind == WallpaperProjectKind.Website);
         var otherCard = cards.First(card =>
@@ -470,16 +704,20 @@ internal static class ProjectBrowserUiRegressionTests
         var processableCard = cards.First(card =>
             ((BrowseProjectViewModel)card.DataContext).IsProcessable);
         var processableProject = (BrowseProjectViewModel)processableCard.DataContext;
-        var processableToggle = FindToggleForProject(grid, processableProject.ProjectKey)!;
-        var search = WpfElementFinder.FindByName<TextBox>(window, "BrowseSearchTextBox")!;
-        search.Focus();
-        PumpLayout(window);
+        var processableCardRoot = FindVisualAncestor<Grid>(processableCard)!;
+        var processableToggle = FindVisualDescendants<CheckBox>(processableCardRoot).Single();
         assert(processableToggle.Visibility == Visibility.Collapsed,
             "An idle processable unselected card exposed its pointer toggle without hover/focus.");
-        processableCard.Focus();
+        var processableFocused = processableCard.Focus();
         PumpLayout(window);
         assert(processableToggle.Visibility == Visibility.Visible,
-            "A keyboard-focused processable card did not reveal its selection toggle.");
+            "A keyboard-focused processable card did not reveal its selection toggle. "
+            + $"focus_result={processableFocused}; card_focus={processableCard.IsKeyboardFocusWithin}; "
+            + $"focusable={processableCard.Focusable}; enabled={processableCard.IsEnabled}; visible={processableCard.IsVisible}; "
+            + $"loaded={processableCard.IsLoaded}; tabstop={processableCard.IsTabStop}; "
+            + $"focused={Keyboard.FocusedElement?.GetType().Name ?? "<null>"}/"
+            + $"{(Keyboard.FocusedElement as FrameworkElement)?.Name ?? "<unnamed>"}; "
+            + $"toggle={processableToggle.Visibility}.");
         RaiseKey(processableCard, Key.Space);
         search.Focus();
         PumpLayout(window);
@@ -565,6 +803,27 @@ internal static class ProjectBrowserUiRegressionTests
                 + $"toggle={pointerToggle.Visibility}; local={toggleLocalCenter.X:0},{toggleLocalCenter.Y:0}; "
                 + $"mouse_local={toggleActualLocal.X:0},{toggleActualLocal.Y:0}; "
                 + $"ancestry={DescribeVisualAncestry(toggleDirectlyOver)}.");
+            var pointerBinding = BindingOperations.GetBindingExpression(
+                pointerToggle,
+                ToggleButton.IsCheckedProperty);
+            var pointerPeer = UIElementAutomationPeer.CreatePeerForElement(pointerToggle)
+                              ?? new CheckBoxAutomationPeer(pointerToggle);
+            ClickPointer(pointerToggle);
+            assert(pointerProject.IsSelected
+                   && pointerToggle.IsChecked == true
+                   && GetToggleState(pointerToggle) == ToggleState.On
+                   && ReferenceEquals(
+                       pointerBinding,
+                       BindingOperations.GetBindingExpression(
+                           pointerToggle,
+                           ToggleButton.IsCheckedProperty)),
+                "A real pointer click did not select exactly once through the bound selection transaction.");
+            ClickPointer(pointerToggle);
+            assert(!pointerProject.IsSelected
+                   && pointerToggle.IsChecked == false
+                   && ((IToggleProvider)pointerPeer.GetPattern(PatternInterface.Toggle)!).ToggleState
+                   == ToggleState.Off,
+                "A second real pointer click did not clear exactly once through the bound selection transaction.");
         }
         finally
         {
@@ -644,6 +903,56 @@ internal static class ProjectBrowserUiRegressionTests
         assert(IsVisualDescendantOf(Keyboard.FocusedElement as DependencyObject, overlay),
             "Compact details Tab traversal escaped its local cycle.");
         var gridScrollViewer = FindVisualDescendants<ScrollViewer>(grid).First();
+        var persistentDetails = WpfElementFinder.FindByName<FrameworkElement>(
+            window, "BrowsePersistentDetails")!;
+        var transferDetailsKey = viewModel.CurrentProject!.ProjectKey;
+        var transferDetailsAnchor = CaptureVisibleRowAnchor(grid, gridScrollViewer);
+        var transferDetailsPosition = CaptureProjectViewportPosition(
+            grid, gridScrollViewer, transferDetailsAnchor.ProjectKey);
+        close.Focus();
+        window.Width = 1060;
+        PumpLayout(window);
+        PumpLayout(window);
+        var regularDetailsAnchor = CaptureVisibleRowAnchor(grid, gridScrollViewer);
+        var regularDetailsPosition = CaptureProjectViewportPosition(
+            grid, gridScrollViewer, transferDetailsAnchor.ProjectKey);
+        var reverseDetailsPosition = CaptureProjectViewportPosition(
+            grid, gridScrollViewer, regularDetailsAnchor.ProjectKey);
+        assert(window.LayoutMode == WallpaperField.ShellLayoutMode.Regular
+               && persistentDetails.Visibility == Visibility.Visible
+               && persistentDetails.IsKeyboardFocusWithin
+               && !viewModel.IsDetailsOpen
+               && !viewModel.IsFilterLayerOpen
+               && viewModel.CurrentProject?.ProjectKey == transferDetailsKey
+               && transferDetailsPosition is not null
+               && regularDetailsPosition is not null
+               && Math.Abs(regularDetailsPosition.Value - transferDetailsPosition.Value) < 0.08,
+            "Compact details focus did not transfer to persistent details across 1059→1060. "
+            + $"persistent_focus={persistentDetails.IsKeyboardFocusWithin}; focused={Keyboard.FocusedElement?.GetType().Name ?? "<null>"}; "
+            + $"details_open={viewModel.IsDetailsOpen}; filter_open={viewModel.IsFilterLayerOpen}; "
+            + $"key={viewModel.CurrentProject?.ProjectKey ?? "<null>"}; anchor={transferDetailsAnchor}->{regularDetailsAnchor}.");
+        window.Width = 1059;
+        PumpLayout(window);
+        PumpLayout(window);
+        var compactDetailsAnchor = CaptureVisibleRowAnchor(grid, gridScrollViewer);
+        var compactDetailsPosition = CaptureProjectViewportPosition(
+            grid, gridScrollViewer, regularDetailsAnchor.ProjectKey);
+        assert(window.LayoutMode == WallpaperField.ShellLayoutMode.Compact
+               && viewModel.IsDetailsOpen
+               && !viewModel.IsFilterLayerOpen
+               && overlay.Visibility == Visibility.Visible
+               && overlay.IsKeyboardFocusWithin
+               && viewModel.CurrentProject?.ProjectKey == transferDetailsKey
+               && reverseDetailsPosition is not null
+               && compactDetailsPosition is not null
+               && Math.Abs(compactDetailsPosition.Value - reverseDetailsPosition.Value) < 0.08,
+            "Persistent details focus did not transfer back to Compact details across 1060→1059. "
+            + $"details_open={viewModel.IsDetailsOpen}; filter_open={viewModel.IsFilterLayerOpen}; "
+            + $"overlay={overlay.Visibility}/{overlay.IsKeyboardFocusWithin}; "
+            + $"focused={Keyboard.FocusedElement?.GetType().Name ?? "<null>"}/"
+            + $"{(Keyboard.FocusedElement as FrameworkElement)?.Name ?? "<unnamed>"}; "
+            + $"key={viewModel.CurrentProject?.ProjectKey ?? "<null>"}; "
+            + $"position={reverseDetailsPosition}->{compactDetailsPosition}.");
         var detailsAnchor = CaptureVisibleRowAnchor(grid, gridScrollViewer);
         window.Width = 1059;
         PumpLayout(window);
@@ -676,6 +985,49 @@ internal static class ProjectBrowserUiRegressionTests
                && !toolbar.IsEnabled && !grid.IsEnabled
                && KeyboardNavigation.GetTabNavigation(filterLayer) == KeyboardNavigationMode.Cycle,
             "Compact filter layer did not trap focus and make its page background inert.");
+        var compactKindFilter = WpfElementFinder.FindByName<ComboBox>(
+            window, "BrowseCompactKindFilterComboBox")!;
+        var fullKindFilter = WpfElementFinder.FindByName<ComboBox>(
+            window, "BrowseKindFilterComboBox")!;
+        var transferFilterKey = viewModel.CurrentProject!.ProjectKey;
+        var transferFilterAnchor = CaptureVisibleRowAnchor(grid, gridScrollViewer);
+        var transferFilterPosition = CaptureProjectViewportPosition(
+            grid, gridScrollViewer, transferFilterAnchor.ProjectKey);
+        compactKindFilter.Focus();
+        window.Width = 1060;
+        PumpLayout(window);
+        PumpLayout(window);
+        var regularFilterAnchor = CaptureVisibleRowAnchor(grid, gridScrollViewer);
+        var regularFilterPosition = CaptureProjectViewportPosition(
+            grid, gridScrollViewer, transferFilterAnchor.ProjectKey);
+        var reverseFilterPosition = CaptureProjectViewportPosition(
+            grid, gridScrollViewer, regularFilterAnchor.ProjectKey);
+        assert(window.LayoutMode == WallpaperField.ShellLayoutMode.Regular
+               && !viewModel.IsFilterLayerOpen
+               && !viewModel.IsDetailsOpen
+               && fullKindFilter.IsVisible
+               && fullKindFilter.IsKeyboardFocusWithin
+               && viewModel.CurrentProject?.ProjectKey == transferFilterKey
+               && transferFilterPosition is not null
+               && regularFilterPosition is not null
+               && Math.Abs(regularFilterPosition.Value - transferFilterPosition.Value) < 0.08,
+            "Compact filter focus did not transfer to the full filter controls across 1059→1060.");
+        window.Width = 1059;
+        PumpLayout(window);
+        PumpLayout(window);
+        var compactFilterAnchor = CaptureVisibleRowAnchor(grid, gridScrollViewer);
+        var compactFilterPosition = CaptureProjectViewportPosition(
+            grid, gridScrollViewer, regularFilterAnchor.ProjectKey);
+        assert(window.LayoutMode == WallpaperField.ShellLayoutMode.Compact
+               && viewModel.IsFilterLayerOpen
+               && !viewModel.IsDetailsOpen
+               && filterLayer.Visibility == Visibility.Visible
+               && compactKindFilter.IsKeyboardFocusWithin
+               && viewModel.CurrentProject?.ProjectKey == transferFilterKey
+               && reverseFilterPosition is not null
+               && compactFilterPosition is not null
+               && Math.Abs(compactFilterPosition.Value - reverseFilterPosition.Value) < 0.08,
+            "Full filter focus did not transfer back to the Compact filter layer across 1060→1059.");
         var filterAnchor = CaptureVisibleRowAnchor(grid, gridScrollViewer);
         window.Width = 1059;
         PumpLayout(window);
@@ -985,6 +1337,57 @@ internal static class ProjectBrowserUiRegressionTests
                    && modalBackdrop is not null
                    && ReferenceEquals(modalBackdrop.Background, SystemColors.WindowTextBrush),
                 "Browse High Contrast tokens or its live modal backdrop did not resolve through SystemColors.");
+
+            foreach (var width in new[] { 1060d, 1190d, 1600d })
+            {
+                if (Math.Abs(focusWindow.Width - width) > 0.5)
+                {
+                    palette.Invoke(focusWindow, [false]);
+                    focusWindow.DataContext = null;
+                    focusWindow.Close();
+                    PumpLayout(window);
+                    focusWindow = new WallpaperField.MainWindow
+                    {
+                        DataContext = window.DataContext,
+                        Width = width,
+                        Height = width == 1190d ? 800 : 1000,
+                        Left = SystemParameters.VirtualScreenLeft + 80,
+                        Top = SystemParameters.VirtualScreenTop + 80,
+                        ShowInTaskbar = false,
+                        ShowActivated = true,
+                        Topmost = true
+                    };
+                    focusWindow.Show();
+                    focusWindow.Activate();
+                    SetForegroundWindow(new WindowInteropHelper(focusWindow).Handle);
+                    PumpLayout(focusWindow);
+                    palette.Invoke(focusWindow, [true]);
+                    PumpLayout(focusWindow);
+                }
+
+                grid = WpfElementFinder.FindByName<ListBox>(focusWindow, "BrowseProjectGrid")!;
+                FindVisualDescendants<ScrollViewer>(grid).First().ScrollToHome();
+                if (grid.Items.Count > 0)
+                {
+                    grid.ScrollIntoView(grid.Items[0]);
+                }
+                PumpLayout(focusWindow);
+                PumpLayout(focusWindow);
+                var realizedCards = FindCardButtons(grid).ToArray();
+                var metadataCard = realizedCards.FirstOrDefault(candidate =>
+                    candidate.IsLoaded && candidate.IsVisible);
+                assert(metadataCard is not null,
+                    $"High Contrast metadata fixture did not realize a live card at {width:0} DIP. "
+                    + $"cards={realizedCards.Length}; loaded={realizedCards.Count(card => card.IsLoaded)}; "
+                    + $"visible={realizedCards.Count(card => card.IsVisible)}; rows={grid.Items.Count}; "
+                    + $"grid={grid.ActualWidth:0.###}x{grid.ActualHeight:0.###}/{grid.Visibility}/{grid.IsVisible}; "
+                    + $"mode={focusWindow.LayoutMode}; columns={((ShellViewModel)focusWindow.DataContext).BrowsePageViewModel.ColumnCount}.");
+                if (metadataCard is null)
+                {
+                    continue;
+                }
+                VerifyCardMetadataGeometry(metadataCard, width, highContrast: true, assert);
+            }
         }
         finally
         {
@@ -998,6 +1401,73 @@ internal static class ProjectBrowserUiRegressionTests
             }
         }
     }
+
+    private static void VerifyCardMetadataGeometry(
+        Button card,
+        double width,
+        bool highContrast,
+        Action<bool, string> assert)
+    {
+        var textBlocks = FindVisualDescendants<TextBlock>(card).ToArray();
+        var title = textBlocks.First(text =>
+            BindingOperations.GetBindingExpression(text, TextBlock.TextProperty)
+                ?.ParentBinding.Path?.Path == nameof(BrowseProjectViewModel.Title));
+        var type = textBlocks.First(text =>
+            BindingOperations.GetBindingExpression(text, TextBlock.TextProperty)
+                ?.ParentBinding.Path?.Path == nameof(BrowseProjectViewModel.TypeLabel));
+        var warning = textBlocks.First(text =>
+            BindingOperations.GetBindingExpression(text, TextBlock.TextProperty)
+                ?.ParentBinding.Path?.Path == nameof(BrowseProjectViewModel.WarningCount));
+        var processability = textBlocks.First(text =>
+            text.Name == "BrowseProjectProcessabilityText");
+        var metadata = FindVisualAncestor<Border>(processability)
+                       ?? throw new InvalidOperationException("Browse metadata Border was not realized.");
+
+        var metadataBounds = BoundsRelativeTo(metadata, card);
+        var titleBounds = BoundsRelativeTo(title, card);
+        var typeBounds = BoundsRelativeTo(type, card);
+        var warningBounds = BoundsRelativeTo(warning, card);
+        var processabilityBounds = BoundsRelativeTo(processability, card);
+        const double tolerance = 0.75;
+        var textBounds = new[]
+        {
+            titleBounds,
+            typeBounds,
+            warningBounds,
+            processabilityBounds
+        };
+        var allTextInside = textBounds.All(bounds =>
+            bounds.Left >= -tolerance
+            && bounds.Top >= -tolerance
+            && bounds.Right <= card.ActualWidth + tolerance
+            && bounds.Bottom <= card.ActualHeight + tolerance);
+        var rowsDoNotOverlap = titleBounds.Bottom <= typeBounds.Top + tolerance
+                               && typeBounds.Bottom <= processabilityBounds.Top + tolerance;
+        var previewRecognitionHeight = Math.Max(0, metadataBounds.Top);
+
+        Console.WriteLine(
+            $"BROWSE_METADATA width={width:0} hc={highContrast} card={card.ActualWidth:0.###}x{card.ActualHeight:0.###} "
+            + $"metadata={metadataBounds.Left:0.###},{metadataBounds.Top:0.###},{metadataBounds.Width:0.###},{metadataBounds.Height:0.###} "
+            + $"preview={previewRecognitionHeight:0.###} title={titleBounds} type={typeBounds} warning={warningBounds} "
+            + $"process={processabilityBounds}");
+        assert(metadataBounds.Left >= -tolerance
+               && metadataBounds.Top >= -tolerance
+               && metadataBounds.Right <= card.ActualWidth + tolerance
+               && metadataBounds.Bottom <= card.ActualHeight + tolerance
+               && previewRecognitionHeight >= 8
+               && title.ActualHeight >= 18
+               && allTextInside
+               && rowsDoNotOverlap,
+            $"Browse metadata exceeded or overlapped its real card bounds at {width:0} DIP "
+            + $"(HC={highContrast}). card={card.ActualWidth:0.###}x{card.ActualHeight:0.###}; "
+            + $"metadata={metadataBounds}; preview={previewRecognitionHeight:0.###}; "
+            + $"title={titleBounds}; type={typeBounds}; warning={warningBounds}; "
+            + $"process={processabilityBounds}.");
+    }
+
+    private static Rect BoundsRelativeTo(FrameworkElement element, Visual ancestor)
+        => element.TransformToAncestor(ancestor).TransformBounds(
+            new Rect(0, 0, element.ActualWidth, element.ActualHeight));
 
     private static void VerifyBrowseScrollPerformance(
         WallpaperField.MainWindow window,
@@ -1229,6 +1699,24 @@ internal static class ProjectBrowserUiRegressionTests
         return (
             row.Slot0!.ProjectKey,
             Math.Clamp(-anchor.Top / anchor.Container.ActualHeight, 0, 1));
+    }
+
+    private static double? CaptureProjectViewportPosition(
+        ListBox grid,
+        ScrollViewer viewport,
+        string projectKey)
+    {
+        var card = FindCardButtons(grid).FirstOrDefault(candidate =>
+            candidate.IsLoaded
+            && candidate.IsVisible
+            && candidate.DataContext is BrowseProjectViewModel project
+            && string.Equals(project.ProjectKey, projectKey, StringComparison.Ordinal));
+        if (card is null || viewport.ViewportHeight <= 0)
+        {
+            return null;
+        }
+
+        return card.TranslatePoint(new Point(0, 0), viewport).Y / viewport.ViewportHeight;
     }
 
     private static async Task VerifyFocusModelAsync(Action<bool, string> assert)
@@ -1559,15 +2047,23 @@ internal static class ProjectBrowserUiRegressionTests
         return new Point(final.X, final.Y);
     }
 
+    private static void ClickPointer(FrameworkElement element)
+    {
+        var owner = Window.GetWindow(element)
+                    ?? throw new InvalidOperationException("The pointer target has no owning Window.");
+        MovePointerTo(element);
+        mouse_event(MouseEventLeftDown, 0, 0, 0, 0);
+        PumpDispatcher(owner.Dispatcher);
+        mouse_event(MouseEventLeftUp, 0, 0, 0, 0);
+        PumpDispatcher(owner.Dispatcher);
+        Mouse.Synchronize();
+        PumpDispatcher(owner.Dispatcher);
+    }
+
     private static bool EnsureForegroundWindow(Window window)
     {
         var handle = new WindowInteropHelper(window).Handle;
         window.Activate();
-        if (GetForegroundWindow() == handle)
-        {
-            return true;
-        }
-
         var currentThreadId = GetCurrentThreadId();
         var foregroundHandle = GetForegroundWindow();
         var foregroundThreadId = foregroundHandle == nint.Zero
@@ -1893,6 +2389,8 @@ internal static class ProjectBrowserUiRegressionTests
     private static extern nint SetFocus(nint windowHandle);
 
     private const uint WindowMessageMouseMove = 0x0200;
+    private const uint MouseEventLeftDown = 0x0002;
+    private const uint MouseEventLeftUp = 0x0004;
 
     [DllImport("user32.dll")]
     private static extern nint SendMessage(
@@ -1900,6 +2398,14 @@ internal static class ProjectBrowserUiRegressionTests
         uint message,
         nint wordParameter,
         nint longParameter);
+
+    [DllImport("user32.dll")]
+    private static extern void mouse_event(
+        uint flags,
+        uint x,
+        uint y,
+        uint data,
+        nuint extraInfo);
 
     private sealed class EmptyUnpackService : IWallpaperUnpackService
     {

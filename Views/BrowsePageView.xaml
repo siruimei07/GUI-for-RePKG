@@ -6,6 +6,7 @@
              xmlns:viewModels="clr-namespace:WallpaperField.ViewModels"
              AutomationProperties.Name="项目浏览"
              DataContextChanged="BrowsePageView_DataContextChanged"
+             PreviewGotKeyboardFocus="BrowsePageView_PreviewGotKeyboardFocus"
              SizeChanged="BrowsePageView_SizeChanged">
     <UserControl.Resources>
         <DataTemplate x:Key="BrowseProjectDetailsTemplate">
@@ -204,7 +205,8 @@
                 <StackPanel x:Name="BrowseAdvancedFilters"
                             Grid.Column="2"
                             Orientation="Horizontal">
-                    <ComboBox Width="132"
+                    <ComboBox x:Name="BrowseKindFilterComboBox"
+                              Width="132"
                               MinHeight="44"
                               Margin="0,0,8,0"
                               Style="{StaticResource ProblemFilterComboBox}"
@@ -227,7 +229,8 @@
                                   IsChecked="{Binding BrowsePageViewModel.ShowOnlyProblems}"
                                   AutomationProperties.Name="仅显示有问题项目"
                                   Content="有问题" />
-                    <ComboBox Width="126"
+                    <ComboBox x:Name="BrowseSortComboBox"
+                              Width="126"
                               MinHeight="44"
                               Style="{StaticResource ProblemFilterComboBox}"
                               ItemsSource="{Binding BrowsePageViewModel.SortOptions}"
@@ -371,6 +374,7 @@
                              BorderThickness="0"
                              Focusable="True"
                              IsTabStop="True"
+                             KeyboardNavigation.TabNavigation="Continue"
                              GotKeyboardFocus="BrowseProjectGrid_GotKeyboardFocus"
                              ItemsSource="{Binding BrowsePageViewModel.Rows}"
                              ScrollViewer.CanContentScroll="True"
@@ -460,39 +464,53 @@
                                                                 </Grid>
                                                             </Border>
                                                         </Grid>
-                                                        <Border Height="74"
-                                                                Padding="9,6"
+                                                        <Border x:Name="BrowseProjectMetadata"
+                                                                MaxHeight="74"
+                                                                Padding="7,3"
                                                                 VerticalAlignment="Bottom"
-                                                                Background="{DynamicResource OverlayBrush}">
-                                                            <Grid>
+                                                                Background="{DynamicResource OverlayBrush}"
+                                                                ClipToBounds="True">
+                                                            <Grid ClipToBounds="True">
                                                                 <Grid.RowDefinitions>
-                                                                    <RowDefinition Height="*" />
+                                                                    <RowDefinition Height="Auto" />
                                                                     <RowDefinition Height="Auto" />
                                                                     <RowDefinition Height="Auto" />
                                                                 </Grid.RowDefinitions>
-                                                                <TextBlock FontSize="12"
+                                                                <TextBlock Height="24"
+                                                                           FontSize="11"
                                                                            FontWeight="SemiBold"
                                                                            Foreground="{DynamicResource PaperBrush}"
+                                                                           LineHeight="12"
+                                                                           LineStackingStrategy="BlockLineHeight"
                                                                            Text="{Binding Title}"
                                                                            TextTrimming="CharacterEllipsis"
-                                                                           TextWrapping="Wrap"
-                                                                           MaxHeight="32" />
-                                                                <StackPanel Grid.Row="1" Orientation="Horizontal">
-                                                                    <TextBlock FontFamily="Consolas" FontSize="9" Foreground="{DynamicResource SignalBrush}" Text="{Binding TypeLabel}" />
-                                                                    <TextBlock Margin="7,0,0,0" FontFamily="Consolas" FontSize="9" Foreground="{DynamicResource PaperBrush}" Text="{Binding WorkshopId, StringFormat=ID {0}}" />
-                                                                    <TextBlock Margin="7,0,0,0" FontFamily="Consolas" FontSize="9" Foreground="{DynamicResource SignalBrush}" Text="{Binding WarningCount, StringFormat=! {0}}" />
-                                                                </StackPanel>
+                                                                           TextWrapping="Wrap" />
+                                                                <Grid Grid.Row="1" Height="10">
+                                                                    <TextBlock HorizontalAlignment="Left"
+                                                                               FontFamily="Consolas"
+                                                                               FontSize="8"
+                                                                               Foreground="{DynamicResource SignalBrush}"
+                                                                               LineHeight="10"
+                                                                               Text="{Binding TypeLabel}" />
+                                                                    <TextBlock HorizontalAlignment="Right"
+                                                                               FontFamily="Consolas"
+                                                                               FontSize="8"
+                                                                               Foreground="{DynamicResource SignalBrush}"
+                                                                               LineHeight="10"
+                                                                               Text="{Binding WarningCount, StringFormat=! {0}}" />
+                                                                </Grid>
                                                                 <TextBlock x:Name="BrowseProjectProcessabilityText"
                                                                            Grid.Row="2"
-                                                                           Margin="0,2,0,0"
-                                                                           FontSize="9"
+                                                                           Height="10"
+                                                                           FontSize="8"
                                                                            FontWeight="SemiBold"
                                                                            Foreground="{DynamicResource SignalBrush}"
+                                                                           LineHeight="10"
                                                                            Text="{Binding ProcessabilityText}"
                                                                            TextTrimming="CharacterEllipsis">
                                                                     <TextBlock.Style>
                                                                         <Style TargetType="TextBlock">
-                                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                                            <Setter Property="Visibility" Value="Hidden" />
                                                                             <Style.Triggers>
                                                                                 <DataTrigger Binding="{Binding IsProcessable}" Value="False">
                                                                                     <Setter Property="Visibility" Value="Visible" />
@@ -531,7 +549,7 @@
                                                         </Border>
                                                     </Grid>
                                                 </Button>
-                                                <CheckBox x:Name="BrowseProjectSelectionToggle"
+                                                <controls:BrowseSelectionToggle x:Name="BrowseProjectSelectionToggle"
                                                           Width="40"
                                                           Height="40"
                                                           Margin="4"
@@ -541,11 +559,11 @@
                                                           IsTabStop="False"
                                                           Focusable="False"
                                                           IsChecked="{Binding IsSelected, Mode=OneWay}"
-                                                          Click="BrowseProjectSelectionToggle_Click"
+                                                          SelectionRequested="BrowseProjectSelectionToggle_SelectionRequested"
                                                           AutomationProperties.HelpText="{Binding DataContext.BrowsePageViewModel.SelectionAvailabilityText, RelativeSource={RelativeSource AncestorType=Window}}"
                                                           AutomationProperties.Name="{Binding Title, StringFormat=切换处理选择：{0}}">
-                                                    <CheckBox.Style>
-                                                        <Style TargetType="CheckBox">
+                                                    <controls:BrowseSelectionToggle.Style>
+                                                        <Style TargetType="{x:Type controls:BrowseSelectionToggle}">
                                                             <Setter Property="IsEnabled" Value="True" />
                                                             <Setter Property="Visibility" Value="Collapsed" />
                                                             <Style.Triggers>
@@ -578,8 +596,8 @@
                                                                 </DataTrigger>
                                                             </Style.Triggers>
                                                         </Style>
-                                                    </CheckBox.Style>
-                                                </CheckBox>
+                                                    </controls:BrowseSelectionToggle.Style>
+                                                </controls:BrowseSelectionToggle>
                                             </Grid>
                                         </DataTemplate>
                                     </UniformGrid.Resources>
