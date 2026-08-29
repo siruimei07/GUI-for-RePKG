@@ -160,6 +160,7 @@ public partial class MainWindow : Window
     private void ApplyMotionPolicy()
     {
         MotionEnabled = _motionPolicy.MotionEnabled;
+        BrowsePage.RefreshMotionVisuals();
         StartAmbientMotion();
         AnimateCurrentPage();
     }
@@ -460,7 +461,10 @@ public partial class MainWindow : Window
     }
 
     private void UpdateResponsiveLayout(double width)
-        => LayoutMode = ResolveLayoutMode(width);
+    {
+        LayoutMode = ResolveLayoutMode(width);
+        BrowsePage.ApplyLayoutMode(LayoutMode);
+    }
 
     internal static ShellLayoutMode ResolveLayoutMode(double width)
         => width < 1060

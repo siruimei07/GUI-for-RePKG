@@ -132,6 +132,9 @@
     <Thickness x:Key="PagePadding">32,28,36,32</Thickness>
     <sys:Double x:Key="ComfortableCardHeight">154</sys:Double>
     <sys:Double x:Key="CompactCardHeight">112</sys:Double>
+    <sys:Double x:Key="BrowseCardMinimumWidth">104</sys:Double>
+    <sys:Double x:Key="BrowseProcessingTrayHeight">72</sys:Double>
+    <GridLength x:Key="BrowseProcessingTrayGridLength">72</GridLength>
     <GridLength x:Key="ComfortableCardPreviewWidth">236</GridLength>
     <GridLength x:Key="CompactCardPreviewWidth">168</GridLength>
     <Thickness x:Key="ComfortableCardMargin">0,0,8,12</Thickness>

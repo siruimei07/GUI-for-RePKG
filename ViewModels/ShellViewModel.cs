@@ -132,7 +132,9 @@ public sealed class ShellViewModel : ObservableObject, IDisposable
             ProblemCenterSession);
         BrowsePageViewModel = browsePageViewModel ?? new BrowsePageViewModel(
             ScanSession,
-            ProblemCenterSession);
+            ProblemCenterSession,
+            null,
+            new ProjectFolderTargetResolver(_systemFolderService));
         ScanSession.SetClosingPredicate(() => IsClosing);
         UnpackSession.SetClosingPredicate(() => IsClosing);
         LibrarySession.SetClosingPredicate(() => IsClosing);

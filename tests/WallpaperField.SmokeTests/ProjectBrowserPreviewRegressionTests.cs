@@ -1401,7 +1401,11 @@ internal static class ProjectBrowserPreviewRegressionTests
             new PathInputValidator(),
             coordinator,
             problemCenter);
-        browse = new BrowsePageViewModel(scanSession, problemCenter, service);
+        browse = new BrowsePageViewModel(
+            scanSession,
+            problemCenter,
+            service,
+            new ProjectFolderTargetResolver(new SystemFolderService()));
         var lease = service.Acquire(CreateFakeRequest(
             95,
             generation: browse.ThumbnailGeneration));
@@ -1552,7 +1556,11 @@ internal static class ProjectBrowserPreviewRegressionTests
             new PathInputValidator(),
             coordinator,
             problemCenter);
-        browse = new BrowsePageViewModel(scanSession, problemCenter, service);
+        browse = new BrowsePageViewModel(
+            scanSession,
+            problemCenter,
+            service,
+            new ProjectFolderTargetResolver(new SystemFolderService()));
         var secondHandlerCalls = 0;
         browse.PreviewStatusChanged += (_, _) =>
         {

@@ -233,6 +233,7 @@ internal static class UiStructureRegressionTests
                 AccessibilityRegressionTests.VerifyWindow(window, assert);
                 SelectionEfficiencyRegressionTests.VerifyWindowDensity(window, shell, assert);
                 VerifyLayoutMode(window, "Compact", assert);
+                ProjectBrowserUiRegressionTests.VerifyWindow(window, shell, assert);
                 VerifyAlwaysAvailableActions(window, shell, assert);
                 VerifyPage(window, shell, "SCAN", "ScanView", "ScanResultsList", assert);
                 VerifyBrowsePage(window, shell, assert);
@@ -282,7 +283,7 @@ internal static class UiStructureRegressionTests
 
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
-        assert(thread.Join(TimeSpan.FromSeconds(10)),
+        assert(thread.Join(TimeSpan.FromSeconds(60)),
             "The WPF UI structure host did not finish in time.");
         if (failure is not null)
         {

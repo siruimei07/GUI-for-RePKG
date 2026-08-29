@@ -20,8 +20,11 @@ public static class AppComposition
         var unpackService = new RePkgWallpaperUnpackService();
         var pathInputValidator = new PathInputValidator();
         var problemCenterSession = new ProblemCenterSession();
+        var systemFolderService = new SystemFolderService();
         var previewThumbnailService = new PreviewThumbnailService(
             new WpfPreviewThumbnailDecoder());
+        var projectFolderTargetResolver = new ProjectFolderTargetResolver(
+            systemFolderService);
         var scanSession = new ScanSession(
             scanService,
             pathInputValidator,
@@ -39,12 +42,13 @@ public static class AppComposition
         var browsePageViewModel = new BrowsePageViewModel(
             scanSession,
             problemCenterSession,
-            previewThumbnailService);
+            previewThumbnailService,
+            projectFolderTargetResolver);
         var shell = new ShellViewModel(
             scanService,
             libraryService,
             new FolderPickerService(),
-            new SystemFolderService(),
+            systemFolderService,
             unpackService,
             pathInputValidator,
             taskLifecycleCoordinator,

@@ -1063,7 +1063,11 @@ internal static class ProjectBrowserProjectionRegressionTests
                 Problems);
             Scan.SourcePath = SourceRoot;
             Scan.OutputPath = OutputRoot;
-            Browse = new BrowsePageViewModel(Scan, Problems);
+            Browse = new BrowsePageViewModel(
+                Scan,
+                Problems,
+                null,
+                new ProjectFolderTargetResolver(new SystemFolderService()));
         }
 
         internal string Root { get; }

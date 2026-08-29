@@ -133,9 +133,15 @@ internal static class ProjectBrowserNavigationRegressionTests
                && allText.Contains("BrowsePageViewModel.SnapshotSourcePath", StringComparison.Ordinal)
                && allText.Contains("BrowsePageViewModel.SnapshotSourceStatusText", StringComparison.Ordinal),
             "Browse empty route lacks its heading, two-state copy, source status, or Scan CTA.");
-        assert(!document.Descendants().Any(element => element.Name.LocalName == "ListBox")
-               && !allText.Contains("处理", StringComparison.Ordinal),
-            "Task 3 Browse empty state must not contain a fake grid or processing control.");
+        var emptyState = FindNamedElement(document, "BrowseEmptyState");
+        var readyState = FindNamedElement(document, "BrowseReadyState");
+        assert(emptyState is not null
+               && readyState?.Descendants().Any(element =>
+                   element.Name.LocalName == "DataTrigger"
+                   && Attribute(element, "Binding")
+                       == "{Binding BrowsePageViewModel.HasVisibleProjects}"
+                   && Attribute(element, "Value") == "True") == true,
+            "Task 5 must preserve the Task 3 empty route while gating the real browser workspace on visible projects.");
     }
 
     private static XElement? FindNamedElement(XDocument document, string name)

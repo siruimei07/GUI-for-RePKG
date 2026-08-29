@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using WallpaperField.Contracts;
 using WallpaperField.Models;
 using WallpaperField.Services;
 using WallpaperField.ViewModels.Sessions;
@@ -21,11 +22,28 @@ public enum ProjectBrowserSort
     KindThenName
 }
 
+public enum ProjectBrowserFocusDirection
+{
+    Left,
+    Right,
+    Up,
+    Down
+}
+
+public sealed record ProjectBrowserKindFilterOption(
+    ProjectBrowserKindFilter Value,
+    string Label);
+
+public sealed record ProjectBrowserSortOption(
+    ProjectBrowserSort Value,
+    string Label);
+
 public sealed class BrowsePageViewModel : ObservableObject, IDisposable
 {
     private readonly ScanSession _scanSession;
     private readonly ProblemCenterSession _problemCenterSession;
     private readonly PreviewThumbnailService _thumbnailService;
+    private readonly IProjectFolderTargetResolver _folderTargetResolver;
     private readonly ReentrantCallbackGate<PreviewThumbnailSignalEventArgs>
         _previewCallbacks = new();
     private readonly TaskCompletionSource<bool> _disposeCompletion = new(
@@ -35,6 +53,11 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
     private readonly List<BrowseProjectViewModel> _allProjects = [];
     private ScanProjectSnapshot? _snapshot;
     private BrowseProjectViewModel? _currentProject;
+    private ProjectFolderTarget? _currentFolderTarget;
+    private CancellationTokenSource? _folderResolutionCancellation;
+    private long _folderResolutionVersion;
+    private bool _isFolderTargetResolving;
+    private string _folderActionStatusText = string.Empty;
     private string _searchText = string.Empty;
     private ProjectBrowserKindFilter _kindFilter;
     private bool _showOnlyProcessable;
@@ -42,6 +65,9 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
     private ProjectBrowserSort _sort;
     private int _columnCount = 4;
     private string? _focusedProjectKey;
+    private bool _isCompactLayout;
+    private bool _isDetailsOpen;
+    private bool _isFilterLayerOpen;
     private volatile bool _disposed;
     private int _disposeStarted;
     private int _disposeOwnerThreadId;
@@ -53,7 +79,8 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
     public BrowsePageViewModel(
         ScanSession scanSession,
         ProblemCenterSession problemCenterSession,
-        PreviewThumbnailService? thumbnailService = null)
+        PreviewThumbnailService? thumbnailService,
+        IProjectFolderTargetResolver folderTargetResolver)
     {
         ArgumentNullException.ThrowIfNull(scanSession);
         ArgumentNullException.ThrowIfNull(problemCenterSession);
@@ -64,9 +91,16 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
         _ownerThreadId = Environment.CurrentManagedThreadId;
         _thumbnailService = thumbnailService
             ?? new PreviewThumbnailService(new WpfPreviewThumbnailDecoder());
+        _folderTargetResolver = folderTargetResolver
+            ?? throw new ArgumentNullException(nameof(folderTargetResolver));
         _scanSession.PropertyChanged += OnScanSessionPropertyChanged;
         _problemCenterSession.Changed += OnProblemsChanged;
         _thumbnailService.StatusChanged += OnThumbnailStatusChanged;
+        OpenCurrentFolderCommand = new AsyncRelayCommand(
+            OpenCurrentFolderAsync,
+            () => CurrentFolderTarget is not null && !IsFolderTargetResolving);
+        SelectVisibleProjectsCommand = new RelayCommand(() => TrySelectVisibleProjects());
+        ClearSelectionCommand = new RelayCommand(() => TryClearSelection());
         ApplySnapshot(_scanSession.ProjectSnapshot);
     }
 
@@ -76,9 +110,35 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
         remove => _previewCallbacks.Remove(value);
     }
 
+    public event EventHandler<ProjectFolderOpenFailedEventArgs>? FolderOpenFailed;
+
     public RangeObservableCollection<BrowseRowViewModel> Rows { get; } = [];
 
     public PreviewThumbnailService ThumbnailService => _thumbnailService;
+
+    public AsyncRelayCommand OpenCurrentFolderCommand { get; }
+
+    public RelayCommand SelectVisibleProjectsCommand { get; }
+
+    public RelayCommand ClearSelectionCommand { get; }
+
+    public IReadOnlyList<ProjectBrowserKindFilterOption> KindFilterOptions { get; }
+        = Array.AsReadOnly(new[]
+        {
+            new ProjectBrowserKindFilterOption(ProjectBrowserKindFilter.All, "全部类型"),
+            new ProjectBrowserKindFilterOption(ProjectBrowserKindFilter.Package, "图片（PKG）"),
+            new ProjectBrowserKindFilterOption(ProjectBrowserKindFilter.Video, "视频"),
+            new ProjectBrowserKindFilterOption(ProjectBrowserKindFilter.Website, "网站"),
+            new ProjectBrowserKindFilterOption(ProjectBrowserKindFilter.Other, "其他")
+        });
+
+    public IReadOnlyList<ProjectBrowserSortOption> SortOptions { get; }
+        = Array.AsReadOnly(new[]
+        {
+            new ProjectBrowserSortOption(ProjectBrowserSort.Name, "名称"),
+            new ProjectBrowserSortOption(ProjectBrowserSort.WorkshopId, "Workshop ID"),
+            new ProjectBrowserSortOption(ProjectBrowserSort.KindThenName, "类型后名称")
+        });
 
     public long ThumbnailGeneration => _snapshot?.Revision ?? 0;
 
@@ -96,7 +156,26 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
                 return;
             }
 
-            SetProperty(ref _currentProject, value);
+            var previous = _currentProject;
+            if (!SetProperty(ref _currentProject, value))
+            {
+                return;
+            }
+
+            if (previous is not null)
+            {
+                previous.IsCurrent = false;
+            }
+
+            if (value is not null)
+            {
+                value.IsCurrent = true;
+            }
+
+            OnPropertiesChanged(
+                nameof(HasCurrentProject),
+                nameof(CurrentProjectActionText));
+            ScheduleFolderTargetResolution();
         }
     }
 
@@ -165,8 +244,88 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
     public string? FocusedProjectKey
     {
         get => _focusedProjectKey;
-        set => SetProperty(ref _focusedProjectKey, value);
+        set
+        {
+            if (!SetProperty(ref _focusedProjectKey, value))
+            {
+                return;
+            }
+
+            foreach (var project in _allProjects)
+            {
+                project.IsRovingTabStop = value is not null
+                    && string.Equals(project.ProjectKey, value, StringComparison.Ordinal);
+            }
+        }
     }
+
+    public bool HasCurrentProject => CurrentProject is not null;
+
+    public bool IsCompactLayout
+    {
+        get => _isCompactLayout;
+        private set => SetProperty(ref _isCompactLayout, value);
+    }
+
+    public bool IsDetailsOpen
+    {
+        get => _isDetailsOpen;
+        private set => SetProperty(ref _isDetailsOpen, value);
+    }
+
+    public bool IsFilterLayerOpen
+    {
+        get => _isFilterLayerOpen;
+        private set => SetProperty(ref _isFilterLayerOpen, value);
+    }
+
+    public ProjectFolderTarget? CurrentFolderTarget
+    {
+        get => _currentFolderTarget;
+        private set
+        {
+            if (SetProperty(ref _currentFolderTarget, value))
+            {
+                OnPropertiesChanged(
+                    nameof(CurrentFolderDisplayPath),
+                    nameof(CurrentFolderTargetLabel));
+                OpenCurrentFolderCommand.NotifyCanExecuteChanged();
+            }
+        }
+    }
+
+    public string CurrentFolderDisplayPath
+        => CurrentFolderTarget?.Path ?? "正在解析目录目标…";
+
+    public string CurrentFolderTargetLabel
+        => CurrentFolderTarget?.KindLabel ?? "目录目标";
+
+    public bool IsFolderTargetResolving
+    {
+        get => _isFolderTargetResolving;
+        private set
+        {
+            if (SetProperty(ref _isFolderTargetResolving, value))
+            {
+                OnPropertyChanged(nameof(CurrentFolderDisplayPath));
+                OpenCurrentFolderCommand.NotifyCanExecuteChanged();
+            }
+        }
+    }
+
+    public string FolderActionStatusText
+    {
+        get => _folderActionStatusText;
+        private set => SetProperty(ref _folderActionStatusText, value);
+    }
+
+    public string CurrentProjectActionText => CurrentProject?.ProjectKind switch
+    {
+        WallpaperProjectKind.Package => "解包当前项目",
+        WallpaperProjectKind.Video => "复制当前视频",
+        WallpaperProjectKind.Website => "网站项目不可处理",
+        _ => "当前项目不可处理"
+    };
 
     public int TotalProjectCount => _allProjects.Count;
 
@@ -243,6 +402,69 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
         }
     }
 
+    public void SetCompactLayout(bool compact)
+    {
+        IsCompactLayout = compact;
+        if (!compact)
+        {
+            CloseDetails();
+            CloseFilterLayer();
+        }
+    }
+
+    public void OpenDetails()
+    {
+        if (IsCompactLayout && CurrentProject is not null)
+        {
+            IsFilterLayerOpen = false;
+            IsDetailsOpen = true;
+        }
+    }
+
+    public void CloseDetails() => IsDetailsOpen = false;
+
+    public void OpenFilterLayer()
+    {
+        if (IsCompactLayout)
+        {
+            IsDetailsOpen = false;
+            IsFilterLayerOpen = true;
+        }
+    }
+
+    public void CloseFilterLayer() => IsFilterLayerOpen = false;
+
+    public BrowseProjectViewModel? MoveFocus(
+        BrowseProjectViewModel project,
+        ProjectBrowserFocusDirection direction)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+        var index = FindVisibleProjectIndex(project);
+        if (index < 0 || VisibleProjects.Count == 0)
+        {
+            return null;
+        }
+
+        var column = index % ColumnCount;
+        var targetIndex = direction switch
+        {
+            ProjectBrowserFocusDirection.Left when column > 0 => index - 1,
+            ProjectBrowserFocusDirection.Right
+                when column < ColumnCount - 1 && index + 1 < VisibleProjects.Count => index + 1,
+            ProjectBrowserFocusDirection.Up when index >= ColumnCount => index - ColumnCount,
+            ProjectBrowserFocusDirection.Down when index + ColumnCount < VisibleProjects.Count
+                => index + ColumnCount,
+            ProjectBrowserFocusDirection.Down
+                when index / ColumnCount < (VisibleProjects.Count - 1) / ColumnCount
+                => VisibleProjects.Count - 1,
+            _ => index
+        };
+
+        var target = VisibleProjects[targetIndex];
+        FocusedProjectKey = target.ProjectKey;
+        return target;
+    }
+
     public bool RevealProject(string projectKey, bool clearBlockingFilters)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(projectKey);
@@ -311,6 +533,119 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
     public bool TryClearSelection()
         => RunSelectionBatch(_scanSession.TryClearUnpackSelection);
 
+    private void ScheduleFolderTargetResolution()
+    {
+        _folderResolutionCancellation?.Cancel();
+        _folderResolutionCancellation?.Dispose();
+        _folderResolutionCancellation = null;
+        CurrentFolderTarget = null;
+        FolderActionStatusText = string.Empty;
+
+        var project = CurrentProject;
+        if (project is null || _disposed)
+        {
+            IsFolderTargetResolving = false;
+            return;
+        }
+
+        var cancellation = new CancellationTokenSource();
+        _folderResolutionCancellation = cancellation;
+        var version = Interlocked.Increment(ref _folderResolutionVersion);
+        IsFolderTargetResolving = true;
+        _ = ResolveFolderTargetAsync(project, version, cancellation.Token);
+    }
+
+    private async Task ResolveFolderTargetAsync(
+        BrowseProjectViewModel project,
+        long version,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var target = await _folderTargetResolver
+                .ResolveAsync(project.Record, cancellationToken)
+                .ConfigureAwait(true);
+            if (!_disposed
+                && version == _folderResolutionVersion
+                && ReferenceEquals(CurrentProject, project))
+            {
+                CurrentFolderTarget = target;
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            if (!_disposed && version == _folderResolutionVersion)
+            {
+                IsFolderTargetResolving = false;
+            }
+        }
+    }
+
+    private async Task OpenCurrentFolderAsync()
+    {
+        var target = CurrentFolderTarget;
+        if (target is null)
+        {
+            return;
+        }
+
+        var result = await _folderTargetResolver
+            .OpenAsync(target)
+            .ConfigureAwait(true);
+        if (!ReferenceEquals(target, CurrentFolderTarget))
+        {
+            return;
+        }
+
+        if (result.Succeeded)
+        {
+            FolderActionStatusText = "已打开此前显示的目录。";
+            ResolveFolderOpenIssues(target.ProjectKey);
+            return;
+        }
+
+        FolderActionStatusText = result.FailureSummary ?? "无法打开此前显示的目录。";
+        var failureCode = result.FailureCode ?? "BROWSE_FOLDER_OPEN_FAILED";
+        _problemCenterSession.Publish(
+        [
+            AppIssue.Create(
+                failureCode,
+                AppIssueSeverity.Warning,
+                AppIssueSource.Diagnostics,
+                FolderActionStatusText,
+                "打开目录前已重新验证此前显示的精确目标；未切换到其他目录。",
+                AppDiskFact.NotModified,
+                AppIssueAction.ReviewInput,
+                CreateFolderIssueContextKey(target.ProjectKey, failureCode),
+                pathContext: target.Path)
+        ]);
+        FolderOpenFailed?.Invoke(this, new ProjectFolderOpenFailedEventArgs(result));
+    }
+
+    private void ResolveFolderOpenIssues(string projectKey)
+    {
+        foreach (var code in new[]
+                 {
+                     "BROWSE_FOLDER_TARGET_MISSING",
+                     "BROWSE_FOLDER_OPEN_FAILED"
+                 })
+        {
+            _problemCenterSession.Resolve(
+                AppIssueSource.Diagnostics,
+                code,
+                CreateFolderIssueContextKey(projectKey, code),
+                DateTimeOffset.UtcNow);
+        }
+    }
+
+    private static string CreateFolderIssueContextKey(
+        string projectKey,
+        string code)
+        => $"BROWSE_FOLDER:{projectKey}:{code}";
+
     public void Dispose()
     {
         if (Interlocked.CompareExchange(ref _disposeStarted, 1, 0) != 0)
@@ -338,6 +673,9 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
         _disposed = true;
         try
         {
+            _folderResolutionCancellation?.Cancel();
+            _folderResolutionCancellation?.Dispose();
+            _folderResolutionCancellation = null;
             _scanSession.PropertyChanged -= OnScanSessionPropertyChanged;
             _problemCenterSession.Changed -= OnProblemsChanged;
             _thumbnailService.StatusChanged -= OnThumbnailStatusChanged;
@@ -592,6 +930,11 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
 
     private void OnCardPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
+        var wrapper = sender is WallpaperCardViewModel card
+            ? _allProjects.FirstOrDefault(project => ReferenceEquals(project.Card, card))
+            : null;
+        wrapper?.NotifyCardStateChanged();
+
         if (e.PropertyName == nameof(WallpaperCardViewModel.IsSelectedForUnpack))
         {
             if (_suppressSelectionNotifications)
@@ -639,5 +982,18 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
         {
             project.Card.PropertyChanged -= OnCardPropertyChanged;
         }
+    }
+
+    private int FindVisibleProjectIndex(BrowseProjectViewModel project)
+    {
+        for (var index = 0; index < VisibleProjects.Count; index++)
+        {
+            if (ReferenceEquals(VisibleProjects[index], project))
+            {
+                return index;
+            }
+        }
+
+        return -1;
     }
 }

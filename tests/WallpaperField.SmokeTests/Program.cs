@@ -29,6 +29,14 @@ if (args.Length == 1
     return;
 }
 
+if (args.Length == 1
+    && string.Equals(args[0], "--project-browser-ui-only", StringComparison.Ordinal))
+{
+    UiStructureRegressionTests.VerifyWpfWindow(Assert);
+    Console.WriteLine(metrics.CreateSuccessSummary());
+    return;
+}
+
 var testRoot = Path.Combine(
     Path.GetTempPath(),
     $"WallpaperField-Smoke-{Guid.NewGuid():N}");
@@ -47,6 +55,7 @@ try
     await ProjectBrowserProjectionRegressionTests.RunAsync(Assert);
     ProjectBrowserNavigationRegressionTests.Run(Assert);
     await ProjectBrowserPreviewRegressionTests.RunAsync(Assert);
+    await ProjectBrowserUiRegressionTests.RunAsync(Assert);
     await TaskLifecycleRegressionTests.RunAsync(Assert);
     await ScanLifecycleRegressionTests.RunAsync(Assert);
     await LibraryLifecycleRegressionTests.RunAsync(Assert);

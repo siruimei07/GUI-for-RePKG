@@ -1,19 +1,544 @@
+using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Threading;
+using WallpaperField.ViewModels;
 
 namespace WallpaperField.Views;
 
 public sealed partial class BrowsePageView : UserControl
 {
+    private const double CardAspectRatioHeight = 10d / 16d;
+    private const double RegularDetailsWidth = 300;
+    private const double WideDetailsWidth = 340;
+    private const double DetailColumnGap = 16;
+    private const double WideSixColumnThreshold = 780;
+    private const double MinimumCardCellWidth = 112;
+    private string? _detailReturnProjectKey;
+    private bool _layoutRefreshPending;
+
     public BrowsePageView()
     {
         InitializeComponent();
     }
 
-    internal Task<bool> PositionSnapshotAsync(
+    private BrowsePageViewModel? BrowseViewModel
+        => (DataContext as ShellViewModel)?.BrowsePageViewModel;
+
+    internal async Task<bool> PositionSnapshotAsync(
         int requestedIndex,
         Func<bool> isBusy)
     {
         ArgumentNullException.ThrowIfNull(isBusy);
-        return Task.FromResult(requestedIndex >= 0);
+        if (requestedIndex < 0)
+        {
+            return false;
+        }
+
+        var deadline = DateTime.UtcNow.AddSeconds(12);
+        while (BrowseViewModel?.VisibleProjects.Count is 0
+               && isBusy()
+               && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(100).ConfigureAwait(true);
+        }
+
+        var viewModel = BrowseViewModel;
+        if (viewModel is null || viewModel.VisibleProjects.Count == 0)
+        {
+            // Empty-state snapshots are valid and intentionally have no scroll target.
+            return true;
+        }
+
+        var projectIndex = Math.Clamp(requestedIndex, 0, viewModel.VisibleProjects.Count - 1);
+        var project = viewModel.VisibleProjects[projectIndex];
+        var rowIndex = projectIndex / Math.Max(1, viewModel.ColumnCount);
+        var positioned = await SnapshotListPositioner.PositionAsync(
+            BrowseProjectGrid,
+            rowIndex,
+            isBusy,
+            verifyPreview: false).ConfigureAwait(true);
+        if (!positioned)
+        {
+            return false;
+        }
+
+        viewModel.CurrentProject = project;
+        viewModel.FocusedProjectKey = project.ProjectKey;
+        await FocusProjectAsync(project.ProjectKey).ConfigureAwait(true);
+        return true;
+    }
+
+    internal void ApplyLayoutMode(ShellLayoutMode mode)
+    {
+        var viewModel = BrowseViewModel;
+        if (viewModel is null)
+        {
+            return;
+        }
+
+        var wasCompact = viewModel.IsCompactLayout;
+        var focusedKey = viewModel.FocusedProjectKey;
+        viewModel.SetCompactLayout(mode == ShellLayoutMode.Compact);
+
+        var detailsVisibility = mode == ShellLayoutMode.Compact
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+        if (BrowsePersistentDetails.Visibility != detailsVisibility)
+        {
+            BrowsePersistentDetails.Visibility = detailsVisibility;
+        }
+
+        SetColumnWidth(
+            BrowseDetailGapColumn,
+            mode == ShellLayoutMode.Compact
+            ? new GridLength(0)
+            : new GridLength(DetailColumnGap));
+        SetColumnWidth(BrowseDetailColumn, mode switch
+        {
+            ShellLayoutMode.Compact => new GridLength(0),
+            ShellLayoutMode.Regular => new GridLength(RegularDetailsWidth),
+            _ => new GridLength(WideDetailsWidth)
+        });
+
+        var previousColumns = viewModel.ColumnCount;
+        var columns = ResolveColumnCount(mode, BrowseGridHost.ActualWidth);
+        viewModel.SetColumnCount(columns);
+        UpdateModalBackgroundState();
+
+        if (focusedKey is not null
+            && (previousColumns != columns || wasCompact != viewModel.IsCompactLayout))
+        {
+            _ = FocusProjectAsync(focusedKey);
+        }
+    }
+
+    internal void RefreshMotionVisuals()
+    {
+        foreach (var button in FindVisualDescendants<Button>(BrowseProjectGrid)
+                     .Where(candidate => candidate.Name == "BrowseProjectCardButton"))
+        {
+            UpdateCardVisualState(button);
+        }
+    }
+
+    private static int ResolveColumnCount(ShellLayoutMode mode, double gridWidth)
+    {
+        var target = mode switch
+        {
+            ShellLayoutMode.Compact => 3,
+            ShellLayoutMode.Regular => 4,
+            _ when gridWidth >= WideSixColumnThreshold => 6,
+            _ => 5
+        };
+        if (!double.IsFinite(gridWidth) || gridWidth <= 0)
+        {
+            return target;
+        }
+
+        var fitting = Math.Max(3, (int)Math.Floor(gridWidth / MinimumCardCellWidth));
+        return Math.Min(target, fitting);
+    }
+
+    private void BrowsePageView_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (Window.GetWindow(this) is MainWindow window)
+        {
+            ApplyLayoutMode(window.LayoutMode);
+            QueueLayoutRefresh(window.LayoutMode);
+        }
+    }
+
+    private void QueueLayoutRefresh(ShellLayoutMode mode)
+    {
+        if (_layoutRefreshPending)
+        {
+            return;
+        }
+
+        _layoutRefreshPending = true;
+        _ = Dispatcher.BeginInvoke(
+            () =>
+            {
+                _layoutRefreshPending = false;
+                ApplyLayoutMode(mode);
+            },
+            DispatcherPriority.Loaded);
+    }
+
+    private static void SetColumnWidth(ColumnDefinition column, GridLength width)
+    {
+        if (column.Width != width)
+        {
+            column.Width = width;
+        }
+    }
+
+    private void BrowsePageView_DataContextChanged(
+        object sender,
+        DependencyPropertyChangedEventArgs e)
+    {
+        if (Window.GetWindow(this) is MainWindow window)
+        {
+            ApplyLayoutMode(window.LayoutMode);
+        }
+    }
+
+    private void BrowsePageView_IsVisibleChanged(
+        object sender,
+        DependencyPropertyChangedEventArgs e)
+    {
+        if (sender is not FrameworkElement routeSurface
+            || BrowseViewModel is not { } viewModel)
+        {
+            return;
+        }
+
+        if (!routeSurface.IsVisible)
+        {
+            viewModel.CloseDetails();
+            viewModel.CloseFilterLayer();
+            UpdateModalBackgroundState();
+            return;
+        }
+
+        if (Window.GetWindow(this) is MainWindow window)
+        {
+            ApplyLayoutMode(window.LayoutMode);
+        }
+    }
+
+    private void BrowseProjectCardButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { DataContext: BrowseProjectViewModel project } button
+            || BrowseViewModel is not { } viewModel)
+        {
+            return;
+        }
+
+        viewModel.CurrentProject = project;
+        viewModel.FocusedProjectKey = project.ProjectKey;
+        _detailReturnProjectKey = project.ProjectKey;
+        button.Focus();
+    }
+
+    private async void BrowseProjectCardButton_PreviewKeyDown(
+        object sender,
+        KeyEventArgs e)
+    {
+        if (sender is not Button { DataContext: BrowseProjectViewModel project } button
+            || BrowseViewModel is not { } viewModel)
+        {
+            return;
+        }
+
+        viewModel.FocusedProjectKey = project.ProjectKey;
+        switch (e.Key)
+        {
+            case Key.Space:
+                e.Handled = true;
+                viewModel.TryToggleSelection(project);
+                return;
+            case Key.Enter:
+                e.Handled = true;
+                viewModel.CurrentProject = project;
+                _detailReturnProjectKey = project.ProjectKey;
+                if (viewModel.IsCompactLayout)
+                {
+                    viewModel.OpenDetails();
+                    UpdateModalBackgroundState();
+                    await Dispatcher.InvokeAsync(
+                        () => FocusElement(BrowseDetailCloseButton),
+                        DispatcherPriority.Input);
+                }
+                else
+                {
+                    await Dispatcher.InvokeAsync(
+                        () => FocusElement(BrowseOpenFolderButton),
+                        DispatcherPriority.Input);
+                }
+
+                return;
+            case Key.Left:
+                e.Handled = true;
+                await MoveCardFocusAsync(project, ProjectBrowserFocusDirection.Left);
+                return;
+            case Key.Right:
+                e.Handled = true;
+                await MoveCardFocusAsync(project, ProjectBrowserFocusDirection.Right);
+                return;
+            case Key.Up:
+                e.Handled = true;
+                await MoveCardFocusAsync(project, ProjectBrowserFocusDirection.Up);
+                return;
+            case Key.Down:
+                e.Handled = true;
+                await MoveCardFocusAsync(project, ProjectBrowserFocusDirection.Down);
+                return;
+            case Key.Escape:
+                e.Handled = true;
+                button.Focus();
+                return;
+        }
+    }
+
+    private async Task MoveCardFocusAsync(
+        BrowseProjectViewModel project,
+        ProjectBrowserFocusDirection direction)
+    {
+        if (BrowseViewModel?.MoveFocus(project, direction) is { } target)
+        {
+            await FocusProjectAsync(target.ProjectKey).ConfigureAwait(true);
+        }
+    }
+
+    private Task<bool> FocusProjectAsync(string projectKey)
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            return Dispatcher.InvokeAsync(
+                () => FocusProjectCore(projectKey),
+                DispatcherPriority.Render).Task;
+        }
+
+        return Task.FromResult(FocusProjectCore(projectKey));
+    }
+
+    private bool FocusProjectCore(string projectKey)
+    {
+        var viewModel = BrowseViewModel;
+        if (viewModel is null)
+        {
+            return false;
+        }
+
+        var index = -1;
+        for (var candidateIndex = 0;
+             candidateIndex < viewModel.VisibleProjects.Count;
+             candidateIndex++)
+        {
+            if (string.Equals(
+                    viewModel.VisibleProjects[candidateIndex].ProjectKey,
+                    projectKey,
+                    StringComparison.Ordinal))
+            {
+                index = candidateIndex;
+                break;
+            }
+        }
+
+        if (index < 0)
+        {
+            return false;
+        }
+
+        var rowIndex = index / Math.Max(1, viewModel.ColumnCount);
+        if (rowIndex >= BrowseProjectGrid.Items.Count)
+        {
+            return false;
+        }
+
+        BrowseProjectGrid.ScrollIntoView(BrowseProjectGrid.Items[rowIndex]);
+        BrowseProjectGrid.UpdateLayout();
+        var button = FindVisualDescendants<Button>(BrowseProjectGrid)
+            .FirstOrDefault(candidate => candidate.DataContext is BrowseProjectViewModel project
+                                         && string.Equals(
+                                             project.ProjectKey,
+                                             projectKey,
+                                             StringComparison.Ordinal));
+        if (button is null)
+        {
+            return false;
+        }
+
+        viewModel.FocusedProjectKey = projectKey;
+        return FocusElement(button);
+    }
+
+    private void BrowseProjectSelectionToggle_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is CheckBox { DataContext: BrowseProjectViewModel project } checkBox
+            && BrowseViewModel is { } viewModel)
+        {
+            viewModel.TryToggleSelection(project);
+            checkBox.IsChecked = project.IsSelected;
+            e.Handled = true;
+        }
+    }
+
+    private void BrowseProjectCardButton_SizeChanged(
+        object sender,
+        SizeChangedEventArgs e)
+    {
+        if (sender is Button button
+            && double.IsFinite(e.NewSize.Width)
+            && e.NewSize.Width > 0)
+        {
+            var expectedHeight = e.NewSize.Width * CardAspectRatioHeight;
+            if (double.IsNaN(button.Height)
+                || Math.Abs(button.Height - expectedHeight) > 0.25)
+            {
+                button.Height = expectedHeight;
+            }
+        }
+    }
+
+    private void BrowseDetailPreviewFrame_SizeChanged(
+        object sender,
+        SizeChangedEventArgs e)
+    {
+        if (sender is Border border
+            && double.IsFinite(e.NewSize.Width)
+            && e.NewSize.Width > 0)
+        {
+            var expectedHeight = e.NewSize.Width * CardAspectRatioHeight;
+            if (Math.Abs(border.Height - expectedHeight) > 0.25)
+            {
+                border.Height = expectedHeight;
+            }
+        }
+    }
+
+    private void BrowseProjectCardButton_VisualStateChanged(
+        object sender,
+        RoutedEventArgs e)
+    {
+        if (sender is Button button)
+        {
+            UpdateCardVisualState(button);
+        }
+    }
+
+    private static void UpdateCardVisualState(Button button)
+    {
+        var motionEnabled = Window.GetWindow(button) is MainWindow { MotionEnabled: true };
+        var scale = motionEnabled && (button.IsMouseOver || button.IsKeyboardFocusWithin)
+            ? 1.02
+            : 1.0;
+        var previewLayer = FindVisualDescendants<Grid>(button)
+            .FirstOrDefault(candidate => candidate.Name == "BrowsePreviewLayer");
+        if (previewLayer is not null
+            && (previewLayer.RenderTransform is not ScaleTransform transform
+                || Math.Abs(transform.ScaleX - scale) > 0.001
+                || Math.Abs(transform.ScaleY - scale) > 0.001))
+        {
+            // Template Freezables may be shared and frozen; assign a local transform
+            // so hover/focus never mutates a shared resource.
+            previewLayer.RenderTransform = new ScaleTransform(scale, scale);
+        }
+    }
+
+    private async void BrowseFilterButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (BrowseViewModel is not { } viewModel)
+        {
+            return;
+        }
+
+        viewModel.OpenFilterLayer();
+        UpdateModalBackgroundState();
+        await Dispatcher.InvokeAsync(
+            () => FocusElement(BrowseCompactKindFilterComboBox),
+            DispatcherPriority.Input);
+    }
+
+    private async void BrowseDetailCloseButton_Click(object sender, RoutedEventArgs e)
+        => await CloseDetailsAndRestoreFocusAsync();
+
+    private async void BrowseFilterCloseButton_Click(object sender, RoutedEventArgs e)
+        => await CloseFilterAndRestoreFocusAsync();
+
+    private async void BrowseCompactLayer_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Escape)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        if (BrowseViewModel?.IsDetailsOpen == true)
+        {
+            await CloseDetailsAndRestoreFocusAsync();
+        }
+        else if (BrowseViewModel?.IsFilterLayerOpen == true)
+        {
+            await CloseFilterAndRestoreFocusAsync();
+        }
+    }
+
+    private async Task CloseDetailsAndRestoreFocusAsync()
+    {
+        var viewModel = BrowseViewModel;
+        if (viewModel is null)
+        {
+            return;
+        }
+
+        var key = _detailReturnProjectKey
+                  ?? viewModel.CurrentProject?.ProjectKey
+                  ?? viewModel.FocusedProjectKey;
+        viewModel.CloseDetails();
+        UpdateModalBackgroundState();
+        if (key is not null)
+        {
+            await FocusProjectAsync(key).ConfigureAwait(true);
+        }
+    }
+
+    private async Task CloseFilterAndRestoreFocusAsync()
+    {
+        if (BrowseViewModel is not { } viewModel)
+        {
+            return;
+        }
+
+        viewModel.CloseFilterLayer();
+        UpdateModalBackgroundState();
+        await Dispatcher.InvokeAsync(
+            () => FocusElement(BrowseFilterButton),
+            DispatcherPriority.Input);
+    }
+
+    private static bool FocusElement(Control control)
+    {
+        var scope = FocusManager.GetFocusScope(control);
+        FocusManager.SetFocusedElement(scope, control);
+        return control.Focus();
+    }
+
+    private void UpdateModalBackgroundState()
+    {
+        var modalOpen = BrowseViewModel is
+        {
+            IsCompactLayout: true,
+            IsDetailsOpen: true
+        } or
+        {
+            IsCompactLayout: true,
+            IsFilterLayerOpen: true
+        };
+        BrowseToolbar.IsEnabled = !modalOpen;
+        BrowseProjectGrid.IsEnabled = !modalOpen;
+        BrowsePersistentDetails.IsEnabled = !modalOpen;
+        BrowseEmptyState.IsEnabled = !modalOpen;
+    }
+
+    private static IEnumerable<T> FindVisualDescendants<T>(DependencyObject root)
+        where T : DependencyObject
+    {
+        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(root); index++)
+        {
+            var child = VisualTreeHelper.GetChild(root, index);
+            if (child is T match)
+            {
+                yield return match;
+            }
+
+            foreach (var descendant in FindVisualDescendants<T>(child))
+            {
+                yield return descendant;
+            }
+        }
     }
 }
