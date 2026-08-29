@@ -305,6 +305,7 @@ public sealed class PreviewThumbnailService : IDisposable
             if (_disposeOwnerThreadId == Environment.CurrentManagedThreadId
                 && !_disposeCompletion.Task.IsCompleted)
             {
+                _statusCallbacks.Close();
                 return;
             }
 
@@ -1037,6 +1038,15 @@ internal sealed class ReentrantCallbackGate<TEventArgs> : IDisposable
         lock (_sync)
         {
             _handlers -= handler;
+        }
+    }
+
+    internal void Close()
+    {
+        lock (_sync)
+        {
+            _disposed = true;
+            _handlers = null;
         }
     }
 

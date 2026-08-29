@@ -319,6 +319,7 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
                     == Environment.CurrentManagedThreadId
                 && !_disposeCompletion.Task.IsCompleted)
             {
+                _previewCallbacks.Close();
                 return;
             }
 

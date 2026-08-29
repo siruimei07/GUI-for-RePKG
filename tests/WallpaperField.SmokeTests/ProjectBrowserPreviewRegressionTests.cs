@@ -1300,6 +1300,8 @@ internal static class ProjectBrowserPreviewRegressionTests
     {
         var serviceResult = await RunServiceCancellationDisposeScenarioAsync();
         var browseResult = await RunBrowseCancellationDisposeScenarioAsync();
+        var combinedServiceResult = await RunCombinedServiceDisposeScenarioAsync();
+        var combinedBrowseResult = await RunCombinedBrowseDisposeScenarioAsync();
 
         assert(serviceResult.ReentrantReturned,
             "A cancellation callback re-entering Service Dispose deadlocked its owning Dispose.");
@@ -1307,6 +1309,15 @@ internal static class ProjectBrowserPreviewRegressionTests
             "A cancellation callback re-entering Browse Dispose deadlocked its owning Dispose.");
         assert(serviceResult.ConcurrentWaited && browseResult.ConcurrentWaited,
             "An unrelated concurrent Dispose returned before cancellation callback cleanup completed.");
+        assert(combinedServiceResult.LaterHandlerSuppressed,
+            "A same-owner Service Dispose returned before closing captured StatusChanged handlers.");
+        assert(combinedBrowseResult.LaterHandlerSuppressed,
+            "A same-owner Browse Dispose returned before closing captured PreviewStatusChanged handlers.");
+        assert(combinedServiceResult.ReentrantReturned
+               && combinedBrowseResult.ReentrantReturned
+               && combinedServiceResult.ConcurrentWaited
+               && combinedBrowseResult.ConcurrentWaited,
+            "The combined cancellation/callback Dispose barrier lost reentrancy or concurrent waiting.");
     }
 
     private static async Task<DisposeReentrancyResult>
@@ -1418,6 +1429,173 @@ internal static class ProjectBrowserPreviewRegressionTests
         return new DisposeReentrancyResult(
             callbackWasEntered && recursiveReturnedInTime,
             callbackWasEntered && !unrelatedReturnedEarly);
+    }
+
+    private static async Task<CombinedDisposeResult>
+        RunCombinedServiceDisposeScenarioAsync()
+    {
+        var activeStarted = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        using var cancellationEntered = new ManualResetEventSlim(false);
+        using var reentrantReturned = new ManualResetEventSlim(false);
+        using var allowCancellationReturn = new ManualResetEventSlim(false);
+        using var firstHandlerEntered = new ManualResetEventSlim(false);
+        using var allowFirstHandlerReturn = new ManualResetEventSlim(false);
+        using var firstHandlerReturned = new ManualResetEventSlim(false);
+        PreviewThumbnailService? service = null;
+        var decoder = new ControlledDecoder(async (request, token) =>
+        {
+            if (request.SizeBucket == 256)
+            {
+                await Task.Yield();
+                return PreviewThumbnailResult.Failure(
+                    PreviewThumbnailStatus.Corrupt,
+                    "PREVIEW_COMBINED_SERVICE",
+                    "组合回调失败。");
+            }
+
+            using var registration = token.Register(() =>
+            {
+                cancellationEntered.Set();
+                service!.Dispose();
+                reentrantReturned.Set();
+                allowCancellationReturn.Wait(TimeSpan.FromSeconds(5));
+            });
+            activeStarted.TrySetResult(true);
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            return PreviewThumbnailResult.Ready(CreateFrozenBitmap(4, 4));
+        });
+        service = new PreviewThumbnailService(decoder);
+        service.SetGeneration(96);
+        var secondHandlerCalls = 0;
+        service.StatusChanged += (_, _) =>
+        {
+            firstHandlerEntered.Set();
+            allowFirstHandlerReturn.Wait(TimeSpan.FromSeconds(5));
+            firstHandlerReturned.Set();
+        };
+        service.StatusChanged += (_, _) => Interlocked.Increment(
+            ref secondHandlerCalls);
+        var signalRequest = CreateFakeRequest(96, generation: 96);
+        var activeRequest = WithRequestedWidth(signalRequest, 321);
+        var activeLease = service.Acquire(activeRequest);
+        await activeStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var signalLease = service.Acquire(signalRequest);
+        _ = await signalLease.Completion;
+        var firstEntered = firstHandlerEntered.Wait(TimeSpan.FromSeconds(2));
+        var owningDispose = Task.Run(service.Dispose);
+        var cancellationWasEntered = cancellationEntered.Wait(TimeSpan.FromSeconds(2));
+        var nestedReturned = reentrantReturned.Wait(TimeSpan.FromSeconds(2));
+
+        allowFirstHandlerReturn.Set();
+        var firstReturned = firstHandlerReturned.Wait(TimeSpan.FromSeconds(2));
+        await Task.Delay(100);
+        var laterHandlerSuppressed = Volatile.Read(ref secondHandlerCalls) == 0;
+
+        var unrelatedDispose = Task.Run(service.Dispose);
+        var unrelatedReturnedEarly = await Task.WhenAny(
+                                         unrelatedDispose,
+                                         Task.Delay(TimeSpan.FromMilliseconds(250)))
+                                     == unrelatedDispose;
+        allowCancellationReturn.Set();
+        await owningDispose.WaitAsync(TimeSpan.FromSeconds(2));
+        await unrelatedDispose.WaitAsync(TimeSpan.FromSeconds(2));
+        _ = await activeLease.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+        activeLease.Dispose();
+        signalLease.Dispose();
+
+        return new CombinedDisposeResult(
+            firstEntered && cancellationWasEntered && nestedReturned,
+            firstReturned && laterHandlerSuppressed,
+            !unrelatedReturnedEarly);
+    }
+
+    private static async Task<CombinedDisposeResult>
+        RunCombinedBrowseDisposeScenarioAsync()
+    {
+        var activeStarted = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        using var cancellationEntered = new ManualResetEventSlim(false);
+        using var reentrantReturned = new ManualResetEventSlim(false);
+        using var allowCancellationReturn = new ManualResetEventSlim(false);
+        using var firstHandlerEntered = new ManualResetEventSlim(false);
+        using var allowFirstHandlerReturn = new ManualResetEventSlim(false);
+        using var firstHandlerReturned = new ManualResetEventSlim(false);
+        BrowsePageViewModel? browse = null;
+        var decoder = new ControlledDecoder(async (request, token) =>
+        {
+            if (request.SizeBucket == 256)
+            {
+                await Task.Yield();
+                return PreviewThumbnailResult.Failure(
+                    PreviewThumbnailStatus.Corrupt,
+                    "PREVIEW_COMBINED_BROWSE",
+                    "组合浏览回调失败。");
+            }
+
+            using var registration = token.Register(() =>
+            {
+                cancellationEntered.Set();
+                browse!.Dispose();
+                reentrantReturned.Set();
+                allowCancellationReturn.Wait(TimeSpan.FromSeconds(5));
+            });
+            activeStarted.TrySetResult(true);
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            return PreviewThumbnailResult.Ready(CreateFrozenBitmap(4, 4));
+        });
+        var service = new PreviewThumbnailService(decoder);
+        var problemCenter = new ProblemCenterSession();
+        var coordinator = new TaskLifecycleCoordinator();
+        var scanSession = new ScanSession(
+            new WallpaperScanService(),
+            new PathInputValidator(),
+            coordinator,
+            problemCenter);
+        browse = new BrowsePageViewModel(scanSession, problemCenter, service);
+        var secondHandlerCalls = 0;
+        browse.PreviewStatusChanged += (_, _) =>
+        {
+            firstHandlerEntered.Set();
+            allowFirstHandlerReturn.Wait(TimeSpan.FromSeconds(5));
+            firstHandlerReturned.Set();
+        };
+        browse.PreviewStatusChanged += (_, _) => Interlocked.Increment(
+            ref secondHandlerCalls);
+        var signalRequest = CreateFakeRequest(
+            97,
+            generation: browse.ThumbnailGeneration);
+        var activeRequest = WithRequestedWidth(signalRequest, 321);
+        var activeLease = service.Acquire(activeRequest);
+        await activeStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var signalLease = service.Acquire(signalRequest);
+        _ = await signalLease.Completion;
+        var firstEntered = firstHandlerEntered.Wait(TimeSpan.FromSeconds(2));
+        var owningDispose = Task.Run(browse.Dispose);
+        var cancellationWasEntered = cancellationEntered.Wait(TimeSpan.FromSeconds(2));
+        var nestedReturned = reentrantReturned.Wait(TimeSpan.FromSeconds(2));
+
+        allowFirstHandlerReturn.Set();
+        var firstReturned = firstHandlerReturned.Wait(TimeSpan.FromSeconds(2));
+        await Task.Delay(100);
+        var laterHandlerSuppressed = Volatile.Read(ref secondHandlerCalls) == 0;
+
+        var unrelatedDispose = Task.Run(browse.Dispose);
+        var unrelatedReturnedEarly = await Task.WhenAny(
+                                         unrelatedDispose,
+                                         Task.Delay(TimeSpan.FromMilliseconds(250)))
+                                     == unrelatedDispose;
+        allowCancellationReturn.Set();
+        await owningDispose.WaitAsync(TimeSpan.FromSeconds(2));
+        await unrelatedDispose.WaitAsync(TimeSpan.FromSeconds(2));
+        _ = await activeLease.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+        activeLease.Dispose();
+        signalLease.Dispose();
+
+        return new CombinedDisposeResult(
+            firstEntered && cancellationWasEntered && nestedReturned,
+            firstReturned && laterHandlerSuppressed,
+            !unrelatedReturnedEarly);
     }
 
     private static async Task VerifyOrderedSignalLifecycleAsync(
@@ -2401,6 +2579,11 @@ internal static class ProjectBrowserPreviewRegressionTests
 
     private readonly record struct DisposeReentrancyResult(
         bool ReentrantReturned,
+        bool ConcurrentWaited);
+
+    private readonly record struct CombinedDisposeResult(
+        bool ReentrantReturned,
+        bool LaterHandlerSuppressed,
         bool ConcurrentWaited);
 
     private sealed class PreviewFixture : IDisposable
