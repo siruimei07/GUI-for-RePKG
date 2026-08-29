@@ -585,16 +585,6 @@ public sealed class ScanSession : ObservableObject
                 .ScanAsync(request, progress, cancellationToken)
                 .ConfigureAwait(true);
 
-            _problemCenter.ResolveMatching(
-                AppIssueSource.Scan,
-                "SCAN_OPERATION_FAILED",
-                NormalizeIssueContext(request.SourceDirectory));
-
-            var cards = result.Items
-                .Select(record => new WallpaperCardViewModel(record, OnSelectionChanged))
-                .ToArray();
-            var revision = checked(_snapshotRevision + 1);
-            ReplaceItems(cards);
             var identity = new ScanSnapshotIdentity(
                 OutputPathPolicy.NormalizeDirectoryPath(
                     request.SourceDirectory,
@@ -603,6 +593,16 @@ public sealed class ScanSession : ObservableObject
                     request.OutputDirectory,
                     "输出目录"),
                 result.CompletedAtUtc);
+            var revision = checked(_snapshotRevision + 1);
+            var cards = result.Items
+                .Select(record => new WallpaperCardViewModel(record, OnSelectionChanged))
+                .ToArray();
+
+            _problemCenter.ResolveMatching(
+                AppIssueSource.Scan,
+                "SCAN_OPERATION_FAILED",
+                NormalizeIssueContext(request.SourceDirectory));
+            ReplaceItems(cards);
             ScanIdentity = identity;
             _snapshotRevision = revision;
             ProjectSnapshot = new ScanProjectSnapshot(

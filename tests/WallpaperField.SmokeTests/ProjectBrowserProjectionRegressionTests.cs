@@ -1,7 +1,9 @@
 using System.Diagnostics;
 using System.IO;
+using System.IO.MemoryMappedFiles;
 using System.Reflection;
 using System.Reflection.Emit;
+using System.Runtime.CompilerServices;
 using WallpaperField.Application;
 using WallpaperField.Contracts;
 using WallpaperField.Models;
@@ -100,7 +102,72 @@ internal static class ProjectBrowserProjectionRegressionTests
         await VerifyProjectionFilteringSortingAndRowsAsync(assert);
         await VerifyCurrentAndSharedSelectionAsync(assert);
         await VerifySnapshotRecoveryAndDisposalAsync(assert);
+        await VerifyIdentityCommitFailureIsAtomicAsync(assert);
         await VerifyThousandItemProjectionPerformanceAsync(assert);
+    }
+
+    private static async Task VerifyIdentityCommitFailureIsAtomicAsync(
+        Action<bool, string> assert)
+    {
+        using var fixture = new ProjectionFixture();
+        await fixture.ScanAsync(
+        [
+            CreateRecord(
+                fixture.SourceRoot,
+                fixture.OutputRoot,
+                "a",
+                "Alpha",
+                WallpaperProjectKind.Package),
+            CreateRecord(
+                fixture.SourceRoot,
+                fixture.OutputRoot,
+                "b",
+                "Beta",
+                WallpaperProjectKind.Video)
+        ]);
+
+        var selectedHidden = fixture.Browse.VisibleProjects.Single(project =>
+            project.WorkshopId == "b");
+        assert(fixture.Scan.TrySetUnpackSelection(selectedHidden.Card, true),
+            "The identity atomicity fixture could not establish shared selection.");
+        fixture.Browse.KindFilter = ProjectBrowserKindFilter.Package;
+
+        var stableSnapshot = fixture.Scan.ProjectSnapshot;
+        var stableCards = fixture.Scan.ScannedWallpapers.ToArray();
+        var stableVisible = fixture.Browse.VisibleProjects;
+        var stableCurrent = fixture.Browse.CurrentProject;
+        var stableFocus = fixture.Browse.FocusedProjectKey;
+
+        fixture.Scan.OutputPath = Path.Combine(
+            fixture.Root,
+            "invalid-output",
+            "CON",
+            "target");
+        fixture.Service.EnqueueSuccess(
+        [
+            CreateRecord(
+                fixture.SourceRoot,
+                fixture.OutputRoot,
+                "replacement",
+                "Replacement",
+                WallpaperProjectKind.Package)
+        ]);
+        await fixture.Scan.ScanAsync();
+
+        assert(ReferenceEquals(fixture.Scan.ProjectSnapshot, stableSnapshot)
+               && fixture.Scan.ScannedWallpapers.Count == stableCards.Length
+               && fixture.Scan.ScannedWallpapers
+                   .Zip(stableCards)
+                   .All(pair => ReferenceEquals(pair.First, pair.Second))
+               && selectedHidden.Card.IsSelectedForUnpack
+               && fixture.Scan.SelectedUnpackCount == 1
+               && ReferenceEquals(fixture.Browse.VisibleProjects, stableVisible)
+               && ReferenceEquals(fixture.Browse.CurrentProject, stableCurrent)
+               && fixture.Browse.FocusedProjectKey == stableFocus
+               && fixture.Browse.SelectedCount == 1
+               && fixture.Browse.SelectedVideoCount == 1
+               && fixture.Browse.HiddenSelectedCount == 1,
+            "A canonical identity failure partially replaced the shared snapshot state.");
     }
 
     private static void VerifyProjectionHasNoFileSystemCalls(Action<bool, string> assert)
@@ -111,6 +178,42 @@ internal static class ProjectBrowserProjectionRegressionTests
         var probeCalls = FindForbiddenFileSystemCalls([probe]);
         assert(probeCalls.Any(call => call.Contains("System.IO.File.Exists", StringComparison.Ordinal)),
             "The Browse filesystem-call guard did not detect its controlled File.Exists probe.");
+
+        foreach (var probeName in new[]
+                 {
+                     nameof(ForbiddenStreamReaderProbe),
+                     nameof(ForbiddenMemoryMappedFileProbe),
+                     nameof(ForbiddenAsyncFileProbe),
+                     nameof(ForbiddenIteratorFileProbe),
+                     nameof(ForbiddenAsyncIteratorFileProbe)
+                 })
+        {
+            var systemIoProbe = typeof(ProjectBrowserProjectionRegressionTests).GetMethod(
+                probeName,
+                BindingFlags.NonPublic | BindingFlags.Static)!;
+            assert(FindForbiddenFileSystemCalls([systemIoProbe]).Count > 0,
+                $"The Browse filesystem-call guard did not reject controlled System.IO probe {probeName}.");
+        }
+
+        var resolverFailedClosed = false;
+        try
+        {
+            ResolveMethodToken(
+                probe,
+                0x0600ffff,
+                static (_, _, _, _) => throw new ArgumentException("controlled invalid token"));
+        }
+        catch (InvalidOperationException exception)
+        {
+            resolverFailedClosed = exception.Message.Contains(
+                    nameof(ForbiddenFileSystemProbe),
+                    StringComparison.Ordinal)
+                && exception.Message.Contains("0x0600FFFF", StringComparison.Ordinal)
+                && exception.InnerException is ArgumentException;
+        }
+
+        assert(resolverFailedClosed,
+            "The Browse filesystem-call guard did not fail closed with caller/token context.");
 
         var projectionRoots = new[]
             {
@@ -153,6 +256,7 @@ internal static class ProjectBrowserProjectionRegressionTests
                 continue;
             }
 
+            EnqueueStateMachineMoveNext(caller, pending);
             foreach (var called in ReadCalledMethods(caller))
             {
                 if (IsForbiddenFileSystemType(called.DeclaringType))
@@ -199,27 +303,59 @@ internal static class ProjectBrowserProjectionRegressionTests
             if (opCode.OperandType == OperandType.InlineMethod)
             {
                 var token = BitConverter.ToInt32(bytes, position);
-                MethodBase? called = null;
-                try
-                {
-                    called = caller.Module.ResolveMethod(
-                        token,
-                        caller.DeclaringType?.GetGenericArguments(),
-                        (caller as MethodInfo)?.GetGenericArguments());
-                }
-                catch (ArgumentException)
-                {
-                    // Invalid metadata is not expected in the product assembly; keep parsing
-                    // so the guard still covers the remaining reachable calls.
-                }
-
-                if (called is not null)
-                {
-                    yield return called;
-                }
+                yield return ResolveMethodToken(caller, token);
             }
 
             position += GetOperandSize(opCode.OperandType, bytes, position);
+        }
+    }
+
+    private static void EnqueueStateMachineMoveNext(
+        MethodBase method,
+        Queue<MethodBase> pending)
+    {
+        if (method is not MethodInfo methodInfo)
+        {
+            return;
+        }
+
+        foreach (var attribute in methodInfo.GetCustomAttributes<StateMachineAttribute>())
+        {
+            var moveNext = attribute.StateMachineType.GetMethod(
+                "MoveNext",
+                BindingFlags.Instance
+                | BindingFlags.Public
+                | BindingFlags.NonPublic
+                | BindingFlags.DeclaredOnly);
+            if (moveNext is not null)
+            {
+                pending.Enqueue(moveNext);
+            }
+        }
+    }
+
+    private static MethodBase ResolveMethodToken(
+        MethodBase caller,
+        int token,
+        MethodTokenResolver? resolver = null)
+    {
+        resolver ??= static (module, methodToken, typeArguments, methodArguments) =>
+            module.ResolveMethod(methodToken, typeArguments, methodArguments);
+        try
+        {
+            return resolver(
+                       caller.Module,
+                       token,
+                       caller.DeclaringType?.GetGenericArguments(),
+                       (caller as MethodInfo)?.GetGenericArguments())
+                   ?? throw new InvalidOperationException("Resolver returned no method.");
+        }
+        catch (Exception exception)
+        {
+            throw new InvalidOperationException(
+                $"Unable to resolve IL method token 0x{token:X8} for "
+                + $"{caller.DeclaringType?.FullName}.{caller.Name}.",
+                exception);
         }
     }
 
@@ -263,26 +399,51 @@ internal static class ProjectBrowserProjectionRegressionTests
     }
 
     private static bool IsForbiddenFileSystemType(Type? type)
-        => type?.FullName is { } name
-           && (name is "System.IO.File"
-               or "System.IO.Directory"
-               or "System.IO.FileInfo"
-               or "System.IO.DirectoryInfo"
-               or "System.IO.FileStream"
-               or "System.IO.FileSystemInfo"
-               or "System.IO.FileSystemWatcher"
-               or "System.IO.DriveInfo"
-               or "System.IO.RandomAccess"
-               or "System.IO.FileSystemAclExtensions"
-               || typeof(FileSystemInfo).IsAssignableFrom(type));
+        => type?.Namespace?.StartsWith("System.IO", StringComparison.Ordinal) == true
+           && type != typeof(Path);
 
     private static bool ForbiddenFileSystemProbe(string path) => File.Exists(path);
+
+    private static int ForbiddenStreamReaderProbe(string path)
+    {
+        using var reader = new StreamReader(path);
+        return reader.Peek();
+    }
+
+    private static long ForbiddenMemoryMappedFileProbe(string path)
+    {
+        using var mapped = MemoryMappedFile.CreateFromFile(path);
+        return mapped.SafeMemoryMappedFileHandle.DangerousGetHandle().ToInt64();
+    }
+
+    private static async Task<bool> ForbiddenAsyncFileProbe(string path)
+    {
+        await Task.Yield();
+        return File.Exists(path);
+    }
+
+    private static IEnumerable<bool> ForbiddenIteratorFileProbe(string path)
+    {
+        yield return File.Exists(path);
+    }
+
+    private static async IAsyncEnumerable<bool> ForbiddenAsyncIteratorFileProbe(string path)
+    {
+        await Task.Yield();
+        yield return File.Exists(path);
+    }
 
     private static readonly IReadOnlyDictionary<int, OpCode> IlOpCodes = typeof(OpCodes)
         .GetFields(BindingFlags.Public | BindingFlags.Static)
         .Where(field => field.FieldType == typeof(OpCode))
         .Select(field => (OpCode)field.GetValue(null)!)
         .ToDictionary(opCode => (int)(ushort)opCode.Value);
+
+    private delegate MethodBase? MethodTokenResolver(
+        Module module,
+        int token,
+        Type[]? typeArguments,
+        Type[]? methodArguments);
 
     private static async Task VerifyProjectionFilteringSortingAndRowsAsync(
         Action<bool, string> assert)
