@@ -7,9 +7,12 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using WallpaperField.Application;
 using WallpaperField.Controls;
 using WallpaperField.Models;
 using WallpaperField.Services;
+using WallpaperField.ViewModels;
+using WallpaperField.ViewModels.Sessions;
 
 internal static class ProjectBrowserPreviewRegressionTests
 {
@@ -23,9 +26,12 @@ internal static class ProjectBrowserPreviewRegressionTests
         await VerifyHandleIdentityAgainstAncestorSwapAsync(assert);
         await VerifyInFlightAndConcurrencyAsync(assert);
         await VerifyHealthyCrossBucketConcurrencyAsync(assert);
+        await VerifySharedFailureRecoveryAsync(assert);
+        await VerifyReadyReplayRecoveryEpochAsync(assert);
         await VerifyCacheAndLeaseLifecycleAsync(assert);
         await VerifyMaliciousResultNormalizationAsync(assert);
         await VerifyFatalDecoderCompletionAsync(assert);
+        await VerifyCancellationDisposeReentrancyAsync(assert);
         await VerifyOrderedSignalLifecycleAsync(assert);
         await VerifyFailureRetryAndGenerationAsync(assert);
         await VerifyViewportControlAsync(assert);
@@ -544,6 +550,214 @@ internal static class ProjectBrowserPreviewRegressionTests
             "A healthy faster size bucket incorrectly retired a slower healthy decode as Stale.");
     }
 
+    private static async Task VerifySharedFailureRecoveryAsync(
+        Action<bool, string> assert)
+    {
+        var completedStateRecovered = await RunSharedFailureRecoveryScenarioAsync(
+            releaseFailureLeasesBeforeRetry: false);
+        var releasedCacheRecovered = await RunSharedFailureRecoveryScenarioAsync(
+            releaseFailureLeasesBeforeRetry: true);
+
+        assert(completedStateRecovered,
+            "A completed shared failure retry did not resolve every ProjectKey identity exactly once.");
+        assert(releasedCacheRecovered,
+            "A cached shared failure retry did not resolve every ProjectKey identity exactly once.");
+    }
+
+    private static async Task<bool> RunSharedFailureRecoveryScenarioAsync(
+        bool releaseFailureLeasesBeforeRetry)
+    {
+        var releaseInitialFailure = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var attempts = 0;
+        var decoder = new ControlledDecoder(async (_, _) =>
+        {
+            var attempt = Interlocked.Increment(ref attempts);
+            if (attempt == 1)
+            {
+                await releaseInitialFailure.Task;
+                return PreviewThumbnailResult.Failure(
+                    PreviewThumbnailStatus.Corrupt,
+                    "PREVIEW_SHARED_FAILURE",
+                    "共享预览图损坏。");
+            }
+
+            return attempt == 2
+                ? PreviewThumbnailResult.Ready(CreateFrozenBitmap(8, 6))
+                : PreviewThumbnailResult.Failure(
+                    PreviewThumbnailStatus.Corrupt,
+                    "PREVIEW_FUTURE_FAILURE",
+                    "恢复后的新解码失败。");
+        });
+        using var service = new PreviewThumbnailService(decoder);
+        service.SetGeneration(92);
+        var signals = new ConcurrentQueue<PreviewThumbnailSignalEventArgs>();
+        service.StatusChanged += (_, args) => signals.Enqueue(args);
+        var requestA = CreateFakeRequest(92, generation: 92);
+        var requestB = WithProjectKey(requestA, "project-shared-b");
+        var leaseA = service.Acquire(requestA);
+        var leaseB = service.Acquire(requestB);
+        await WaitUntilAsync(() => decoder.CallCount == 1);
+        releaseInitialFailure.TrySetResult(true);
+        var initialResults = await Task.WhenAll(
+            leaseA.Completion,
+            leaseB.Completion).WaitAsync(TimeSpan.FromSeconds(2));
+        await WaitUntilAsync(() => signals.Count(signal =>
+            signal.Kind == PreviewThumbnailSignalKind.Failed) == 2);
+
+        if (releaseFailureLeasesBeforeRetry)
+        {
+            leaseA.Dispose();
+            leaseB.Dispose();
+        }
+
+        using (var retry = service.Acquire(requestA, retryFailed: true))
+        {
+            _ = await retry.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+
+        await WaitUntilAsync(() => signals.Any(signal =>
+            signal.Kind == PreviewThumbnailSignalKind.Resolved));
+        await Task.Delay(50);
+        var immediatelyAfterRetry = signals.ToArray();
+        var bothResolvedImmediately = new[] { requestA.ProjectKey, requestB.ProjectKey }
+            .All(projectKey => immediatelyAfterRetry.Count(signal =>
+                signal.Kind == PreviewThumbnailSignalKind.Resolved
+                && signal.ProjectKey == projectKey) == 1);
+
+        using (var replayB = service.Acquire(requestB))
+        {
+            _ = await replayB.Completion;
+        }
+
+        await Task.Delay(50);
+        var afterReplay = signals.ToArray();
+        var replayDidNotFinishRecovery = afterReplay.Length == immediatelyAfterRetry.Length;
+
+        var futureRequestB = new PreviewThumbnailRequest(
+            requestB.ProjectKey,
+            requestB.CanonicalPath,
+            requestB.ScanFileLength,
+            requestB.ScanLastWriteTimeUtc,
+            requestB.PreviewFormat,
+            500,
+            requestB.Generation);
+        PreviewThumbnailResult futureFailure;
+        using (var future = service.Acquire(futureRequestB))
+        {
+            futureFailure = await future.Completion;
+        }
+
+        await WaitUntilAsync(() => signals.Count(signal =>
+            signal.Kind == PreviewThumbnailSignalKind.Failed
+            && signal.ProjectKey == requestB.ProjectKey) == 2);
+        var beforeOldReadyReplay = signals.Count;
+        using (var oldReadyReplay = service.Acquire(requestA))
+        {
+            _ = await oldReadyReplay.Completion;
+        }
+
+        await Task.Delay(50);
+        var finalSignals = signals.ToArray();
+        if (!releaseFailureLeasesBeforeRetry)
+        {
+            leaseA.Dispose();
+            leaseB.Dispose();
+        }
+
+        return initialResults.All(result => result.IsStableFailure)
+               && bothResolvedImmediately
+               && replayDidNotFinishRecovery
+               && futureFailure.IsStableFailure
+               && finalSignals.Length == beforeOldReadyReplay
+               && finalSignals.Count(signal =>
+                   signal.Kind == PreviewThumbnailSignalKind.Failed
+                   && signal.ProjectKey == requestA.ProjectKey) == 1
+               && finalSignals.Count(signal =>
+                   signal.Kind == PreviewThumbnailSignalKind.Failed
+                   && signal.ProjectKey == requestB.ProjectKey) == 2
+               && finalSignals.Count(signal =>
+                   signal.Kind == PreviewThumbnailSignalKind.Resolved) == 2;
+    }
+
+    private static async Task VerifyReadyReplayRecoveryEpochAsync(
+        Action<bool, string> assert)
+    {
+        var completedReplayPreservedFailure = await RunReadyReplayScenarioAsync(
+            releaseReadyLeaseToCache: false);
+        var cacheReplayPreservedFailure = await RunReadyReplayScenarioAsync(
+            releaseReadyLeaseToCache: true);
+
+        assert(completedReplayPreservedFailure && cacheReplayPreservedFailure,
+            "A completed/cache Ready replay incorrectly advanced recovery and suppressed a later real failure.");
+    }
+
+    private static async Task<bool> RunReadyReplayScenarioAsync(
+        bool releaseReadyLeaseToCache)
+    {
+        var failureStarted = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFailure = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var decoder = new ControlledDecoder(async (request, _) =>
+        {
+            if (request.SizeBucket == 256)
+            {
+                return PreviewThumbnailResult.Ready(CreateFrozenBitmap(8, 6));
+            }
+
+            failureStarted.TrySetResult(true);
+            await releaseFailure.Task;
+            return PreviewThumbnailResult.Failure(
+                PreviewThumbnailStatus.Corrupt,
+                "PREVIEW_REAL_LATE_FAILURE",
+                "后续尺寸解码失败。");
+        });
+        using var service = new PreviewThumbnailService(decoder);
+        service.SetGeneration(93);
+        var signals = new ConcurrentQueue<PreviewThumbnailSignalEventArgs>();
+        service.StatusChanged += (_, args) => signals.Enqueue(args);
+        var requestA256 = CreateFakeRequest(93, generation: 93);
+        var requestB256 = WithProjectKey(requestA256, "project-replay-b");
+        var requestA384 = WithRequestedWidth(requestA256, 321);
+        var requestB384 = WithProjectKey(requestA384, requestB256.ProjectKey);
+        var readyLease = service.Acquire(requestA256);
+        _ = await readyLease.Completion;
+        var failureLeaseA = service.Acquire(requestA384);
+        var failureLeaseB = service.Acquire(requestB384);
+        await failureStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        if (releaseReadyLeaseToCache)
+        {
+            readyLease.Dispose();
+        }
+
+        using (var replay = service.Acquire(
+                   releaseReadyLeaseToCache ? requestA256 : requestB256))
+        {
+            _ = await replay.Completion;
+        }
+
+        releaseFailure.TrySetResult(true);
+        var results = await Task.WhenAll(
+            failureLeaseA.Completion,
+            failureLeaseB.Completion).WaitAsync(TimeSpan.FromSeconds(2));
+        await Task.Delay(50);
+        failureLeaseA.Dispose();
+        failureLeaseB.Dispose();
+        if (!releaseReadyLeaseToCache)
+        {
+            readyLease.Dispose();
+        }
+
+        var published = signals.ToArray();
+        return results.All(result => result.Status == PreviewThumbnailStatus.Corrupt)
+               && published.Count(signal =>
+                   signal.Kind == PreviewThumbnailSignalKind.Failed) == 2
+               && published.Select(signal => signal.ProjectKey).ToHashSet()
+                   .SetEquals([requestA256.ProjectKey, requestB256.ProjectKey]);
+    }
+
     private static async Task VerifyHandleIdentityAgainstAncestorSwapAsync(
         Action<bool, string> assert)
     {
@@ -856,36 +1070,48 @@ internal static class ProjectBrowserPreviewRegressionTests
                 request256.PreviewFormat,
                 321,
                 request256.Generation);
-            var oldLease = service.Acquire(request256);
+            var request256B = WithProjectKey(request256, "project-concurrent-b");
+            var request384B = WithProjectKey(request384, request256B.ProjectKey);
+            var oldLeaseA = service.Acquire(request256);
+            var oldLeaseB = service.Acquire(request256B);
             var oldRemainedPendingUntilDecode = false;
-            PreviewThumbnailResult oldResult;
+            PreviewThumbnailResult[] oldResults;
             try
             {
                 await oldStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
-                using (var failure384 = service.Acquire(request384))
+                using (var failure384A = service.Acquire(request384))
+                using (var failure384B = service.Acquire(request384B))
                 {
-                    _ = await failure384.Completion;
+                    _ = await Task.WhenAll(
+                        failure384A.Completion,
+                        failure384B.Completion);
                 }
 
-                await WaitUntilAsync(() => signals.Any(signal =>
-                    signal.Kind == PreviewThumbnailSignalKind.Failed));
+                await WaitUntilAsync(() => signals.Count(signal =>
+                    signal.Kind == PreviewThumbnailSignalKind.Failed) == 2);
                 using (var retry384 = service.Acquire(request384, retryFailed: true))
                 {
                     assert((await retry384.Completion).IsSuccess,
                         "The concurrent cross-bucket retry fixture did not recover.");
                 }
+                await WaitUntilAsync(() => signals.Count(signal =>
+                    signal.Kind == PreviewThumbnailSignalKind.Resolved) == 2);
 
+                var oldCompletion = Task.WhenAll(
+                    oldLeaseA.Completion,
+                    oldLeaseB.Completion);
                 oldRemainedPendingUntilDecode = await Task.WhenAny(
-                                                    oldLease.Completion,
+                                                    oldCompletion,
                                                     Task.Delay(TimeSpan.FromSeconds(1)))
-                                                != oldLease.Completion;
+                                                != oldCompletion;
                 releaseOld.TrySetResult(true);
-                oldResult = await oldLease.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+                oldResults = await oldCompletion.WaitAsync(TimeSpan.FromSeconds(2));
             }
             finally
             {
                 releaseOld.TrySetResult(true);
-                oldLease.Dispose();
+                oldLeaseA.Dispose();
+                oldLeaseB.Dispose();
             }
 
             using var recovered256 = service.Acquire(request256);
@@ -893,10 +1119,16 @@ internal static class ProjectBrowserPreviewRegressionTests
             await WaitUntilAsync(() => service.GetMetrics().ActiveDecodes == 0);
             var published = signals.ToArray();
             assert(oldRemainedPendingUntilDecode
-                   && oldResult.Status == PreviewThumbnailStatus.Stale
+                   && oldResults.All(result =>
+                       result.Status == PreviewThumbnailStatus.Stale)
                    && recoveredResult.IsSuccess
                    && published.Select(signal => signal.Kind).SequenceEqual(
-                       [PreviewThumbnailSignalKind.Failed, PreviewThumbnailSignalKind.Resolved]),
+                   [
+                       PreviewThumbnailSignalKind.Failed,
+                       PreviewThumbnailSignalKind.Failed,
+                       PreviewThumbnailSignalKind.Resolved,
+                       PreviewThumbnailSignalKind.Resolved
+                   ]),
                 "A concurrent old-bucket completion survived recovery and reopened Failed.");
         }
 
@@ -1061,6 +1293,131 @@ internal static class ProjectBrowserPreviewRegressionTests
                && metrics.PendingDecodes == 0
                && metrics.ObserverCount == 0,
             "A fatal thumbnail decoder fault left active, pending, or observed operation state behind.");
+    }
+
+    private static async Task VerifyCancellationDisposeReentrancyAsync(
+        Action<bool, string> assert)
+    {
+        var serviceResult = await RunServiceCancellationDisposeScenarioAsync();
+        var browseResult = await RunBrowseCancellationDisposeScenarioAsync();
+
+        assert(serviceResult.ReentrantReturned,
+            "A cancellation callback re-entering Service Dispose deadlocked its owning Dispose.");
+        assert(browseResult.ReentrantReturned,
+            "A cancellation callback re-entering Browse Dispose deadlocked its owning Dispose.");
+        assert(serviceResult.ConcurrentWaited && browseResult.ConcurrentWaited,
+            "An unrelated concurrent Dispose returned before cancellation callback cleanup completed.");
+    }
+
+    private static async Task<DisposeReentrancyResult>
+        RunServiceCancellationDisposeScenarioAsync()
+    {
+        var decodeStarted = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var callbackEntered = new ManualResetEventSlim(false);
+        var reentrantReturned = new ManualResetEventSlim(false);
+        var allowCallbackReturn = new ManualResetEventSlim(false);
+        PreviewThumbnailService? service = null;
+        var decoder = new ControlledDecoder(async (_, token) =>
+        {
+            using var registration = token.Register(() =>
+            {
+                callbackEntered.Set();
+                service!.Dispose();
+                reentrantReturned.Set();
+                allowCallbackReturn.Wait(TimeSpan.FromSeconds(5));
+            });
+            decodeStarted.TrySetResult(true);
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            return PreviewThumbnailResult.Ready(CreateFrozenBitmap(4, 4));
+        });
+        service = new PreviewThumbnailService(decoder);
+        service.SetGeneration(94);
+        var lease = service.Acquire(CreateFakeRequest(94, generation: 94));
+        await decodeStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var owningDispose = Task.Run(service.Dispose);
+        var callbackWasEntered = callbackEntered.Wait(TimeSpan.FromSeconds(2));
+        var unrelatedDispose = Task.Run(service.Dispose);
+        var recursiveReturnedInTime = reentrantReturned.Wait(TimeSpan.FromMilliseconds(750));
+        var unrelatedReturnedEarly = await Task.WhenAny(
+                                         unrelatedDispose,
+                                         Task.Delay(TimeSpan.FromMilliseconds(250)))
+                                     == unrelatedDispose;
+        if (recursiveReturnedInTime)
+        {
+            allowCallbackReturn.Set();
+            await owningDispose.WaitAsync(TimeSpan.FromSeconds(2));
+            await unrelatedDispose.WaitAsync(TimeSpan.FromSeconds(2));
+            _ = await lease.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+            lease.Dispose();
+            callbackEntered.Dispose();
+            reentrantReturned.Dispose();
+            allowCallbackReturn.Dispose();
+        }
+
+        return new DisposeReentrancyResult(
+            callbackWasEntered && recursiveReturnedInTime,
+            callbackWasEntered && !unrelatedReturnedEarly);
+    }
+
+    private static async Task<DisposeReentrancyResult>
+        RunBrowseCancellationDisposeScenarioAsync()
+    {
+        var decodeStarted = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var callbackEntered = new ManualResetEventSlim(false);
+        var reentrantReturned = new ManualResetEventSlim(false);
+        var allowCallbackReturn = new ManualResetEventSlim(false);
+        BrowsePageViewModel? browse = null;
+        var decoder = new ControlledDecoder(async (_, token) =>
+        {
+            using var registration = token.Register(() =>
+            {
+                callbackEntered.Set();
+                browse!.Dispose();
+                reentrantReturned.Set();
+                allowCallbackReturn.Wait(TimeSpan.FromSeconds(5));
+            });
+            decodeStarted.TrySetResult(true);
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            return PreviewThumbnailResult.Ready(CreateFrozenBitmap(4, 4));
+        });
+        var service = new PreviewThumbnailService(decoder);
+        var problemCenter = new ProblemCenterSession();
+        var coordinator = new TaskLifecycleCoordinator();
+        var scanSession = new ScanSession(
+            new WallpaperScanService(),
+            new PathInputValidator(),
+            coordinator,
+            problemCenter);
+        browse = new BrowsePageViewModel(scanSession, problemCenter, service);
+        var lease = service.Acquire(CreateFakeRequest(
+            95,
+            generation: browse.ThumbnailGeneration));
+        await decodeStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var owningDispose = Task.Run(browse.Dispose);
+        var callbackWasEntered = callbackEntered.Wait(TimeSpan.FromSeconds(2));
+        var unrelatedDispose = Task.Run(browse.Dispose);
+        var recursiveReturnedInTime = reentrantReturned.Wait(TimeSpan.FromMilliseconds(750));
+        var unrelatedReturnedEarly = await Task.WhenAny(
+                                         unrelatedDispose,
+                                         Task.Delay(TimeSpan.FromMilliseconds(250)))
+                                     == unrelatedDispose;
+        if (recursiveReturnedInTime)
+        {
+            allowCallbackReturn.Set();
+            await owningDispose.WaitAsync(TimeSpan.FromSeconds(2));
+            await unrelatedDispose.WaitAsync(TimeSpan.FromSeconds(2));
+            _ = await lease.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+            lease.Dispose();
+            callbackEntered.Dispose();
+            reentrantReturned.Dispose();
+            allowCallbackReturn.Dispose();
+        }
+
+        return new DisposeReentrancyResult(
+            callbackWasEntered && recursiveReturnedInTime,
+            callbackWasEntered && !unrelatedReturnedEarly);
     }
 
     private static async Task VerifyOrderedSignalLifecycleAsync(
@@ -1718,6 +2075,30 @@ internal static class ProjectBrowserPreviewRegressionTests
             193,
             generation);
 
+    private static PreviewThumbnailRequest WithProjectKey(
+        PreviewThumbnailRequest request,
+        string projectKey)
+        => new(
+            projectKey,
+            request.CanonicalPath,
+            request.ScanFileLength,
+            request.ScanLastWriteTimeUtc,
+            request.PreviewFormat,
+            request.SizeBucket,
+            request.Generation);
+
+    private static PreviewThumbnailRequest WithRequestedWidth(
+        PreviewThumbnailRequest request,
+        int requestedPixelWidth)
+        => new(
+            request.ProjectKey,
+            request.CanonicalPath,
+            request.ScanFileLength,
+            request.ScanLastWriteTimeUtc,
+            request.PreviewFormat,
+            requestedPixelWidth,
+            request.Generation);
+
     private static PreviewThumbnailRequest CreateMissingRequest(
         string projectKey,
         long generation)
@@ -2017,6 +2398,10 @@ internal static class ProjectBrowserPreviewRegressionTests
             }
         }
     }
+
+    private readonly record struct DisposeReentrancyResult(
+        bool ReentrantReturned,
+        bool ConcurrentWaited);
 
     private sealed class PreviewFixture : IDisposable
     {

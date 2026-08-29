@@ -44,6 +44,7 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
     private string? _focusedProjectKey;
     private volatile bool _disposed;
     private int _disposeStarted;
+    private int _disposeOwnerThreadId;
     private long _lastPreviewSignalSequence;
     private bool _suppressSelectionNotifications;
     private bool _selectionChangedWhileSuppressed;
@@ -314,6 +315,13 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
     {
         if (Interlocked.CompareExchange(ref _disposeStarted, 1, 0) != 0)
         {
+            if (Volatile.Read(ref _disposeOwnerThreadId)
+                    == Environment.CurrentManagedThreadId
+                && !_disposeCompletion.Task.IsCompleted)
+            {
+                return;
+            }
+
             _previewCallbacks.Dispose();
             if (!_previewCallbacks.IsActiveOnCurrentThread)
             {
@@ -323,6 +331,9 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
             return;
         }
 
+        Volatile.Write(
+            ref _disposeOwnerThreadId,
+            Environment.CurrentManagedThreadId);
         _disposed = true;
         try
         {

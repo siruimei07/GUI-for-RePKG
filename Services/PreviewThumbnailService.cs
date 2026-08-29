@@ -12,7 +12,8 @@ public sealed class PreviewThumbnailService : IDisposable
     private readonly Dictionary<PreviewThumbnailCacheKey, DecodeOperation> _operations = [];
     private readonly Dictionary<PreviewThumbnailCacheKey, CacheEntry> _cache = [];
     private readonly Dictionary<FailureIdentity, FailureDetails> _openFailures = [];
-    private readonly Dictionary<FailureIdentity, long> _recoveryEpochs = [];
+    private readonly Dictionary<string, long> _recoveryEpochs = new(
+        StringComparer.Ordinal);
     private readonly Queue<PreviewThumbnailSignalEventArgs> _pendingSignals = [];
     private readonly ReentrantCallbackGate<PreviewThumbnailSignalEventArgs>
         _statusCallbacks = new();
@@ -20,6 +21,7 @@ public sealed class PreviewThumbnailService : IDisposable
         TaskCreationOptions.RunContinuationsAsynchronously);
 
     private bool _disposed;
+    private int _disposeOwnerThreadId;
     private bool _signalPublisherActive;
     private long _generation;
     private long _signalSequence;
@@ -115,6 +117,7 @@ public sealed class PreviewThumbnailService : IDisposable
         ArgumentNullException.ThrowIfNull(request);
 
         DecodeOperation? operationToStart = null;
+        HashSet<FailureIdentity>? retryIdentities = null;
         List<PreviewThumbnailSignalEventArgs>? signals = null;
         PreviewThumbnailLease lease;
 
@@ -138,29 +141,24 @@ public sealed class PreviewThumbnailService : IDisposable
                     && existing.Completed
                     && existing.Result?.IsStableFailure == true)
                 {
+                    retryIdentities = existing.FailureIdentities.ToHashSet();
                     existing.Retired = true;
                     _operations.Remove(key);
                 }
                 else
                 {
                     existing.ObserverCount++;
-                    var addedIdentity = existing.AddFailureIdentity(
-                        identity,
-                        GetRecoveryEpochLocked(identity));
+                    var addedIdentity = existing.AddFailureIdentity(identity);
                     _inFlightShareCount++;
                     if (addedIdentity && existing.Completed && existing.Result is not null)
                     {
-                        if (existing.Result.IsSuccess)
+                        if (existing.Result.IsStableFailure)
                         {
-                            RecoverFailureStateLocked(
+                            CollectFailureSignalsLocked(
+                                existing.Result,
                                 [identity],
-                                existing);
+                                ref signals);
                         }
-
-                        CollectSignalsLocked(
-                            existing.Result,
-                            [identity],
-                            ref signals);
                     }
 
                     lease = CreateLease(request, existing);
@@ -184,34 +182,53 @@ public sealed class PreviewThumbnailService : IDisposable
                         key,
                         request,
                         identity,
-                        GetRecoveryEpochLocked(identity),
+                        GetRecoveryEpochLocked(identity.PreviewVersion),
                         cached.Result,
-                        cached.FailureIdentities.Select(cachedIdentity =>
-                            new KeyValuePair<FailureIdentity, long>(
-                                cachedIdentity,
-                                GetRecoveryEpochLocked(cachedIdentity))));
+                        cached.FailureIdentities);
                     _operations.Add(key, completed);
-                    if (cached.Result.IsSuccess)
+                    if (cached.Result.IsStableFailure)
                     {
-                        RecoverFailureStateLocked(
+                        CollectFailureSignalsLocked(
+                            cached.Result,
                             completed.FailureIdentities,
-                            completed);
+                            ref signals);
                     }
-
-                    CollectSignalsLocked(
-                        cached.Result,
-                        completed.FailureIdentities,
-                        ref signals);
                     lease = CreateLease(request, completed);
                     goto CompleteAcquire;
                 }
+
+                (retryIdentities ??= []).UnionWith(cached.FailureIdentities);
             }
 
             operationToStart = new DecodeOperation(
                 key,
                 request,
                 identity,
-                GetRecoveryEpochLocked(identity));
+                GetRecoveryEpochLocked(identity.PreviewVersion));
+            if (retryIdentities is not null)
+            {
+                foreach (var retryIdentity in retryIdentities.Where(candidate =>
+                             string.Equals(
+                                 candidate.PreviewVersion,
+                                 identity.PreviewVersion,
+                                 StringComparison.Ordinal)))
+                {
+                    operationToStart.AddFailureIdentity(retryIdentity);
+                }
+            }
+
+            if (retryFailed)
+            {
+                foreach (var openIdentity in _openFailures.Keys.Where(candidate =>
+                             string.Equals(
+                                 candidate.PreviewVersion,
+                                 identity.PreviewVersion,
+                                 StringComparison.Ordinal)))
+                {
+                    operationToStart.AddFailureIdentity(openIdentity);
+                }
+            }
+
             _operations.Add(key, operationToStart);
             _decodeRequestCount++;
             lease = CreateLease(request, operationToStart);
@@ -264,6 +281,7 @@ public sealed class PreviewThumbnailService : IDisposable
             else
             {
                 _disposed = true;
+                _disposeOwnerThreadId = Environment.CurrentManagedThreadId;
                 foreach (var operation in _operations.Values)
                 {
                     operation.Retired = true;
@@ -284,6 +302,12 @@ public sealed class PreviewThumbnailService : IDisposable
 
         if (alreadyDisposed)
         {
+            if (_disposeOwnerThreadId == Environment.CurrentManagedThreadId
+                && !_disposeCompletion.Task.IsCompleted)
+            {
+                return;
+            }
+
             _statusCallbacks.Dispose();
             if (!_statusCallbacks.IsActiveOnCurrentThread)
             {
@@ -485,12 +509,18 @@ public sealed class PreviewThumbnailService : IDisposable
             operation.Result = result;
             if (result.IsSuccess)
             {
-                RecoverFailureStateLocked(
-                    operation.FailureIdentities,
-                    operation);
+                RecoverPreviewVersionLocked(
+                    operation.Request.PreviewVersion,
+                    operation,
+                    ref signals);
             }
-
-            CollectSignalsLocked(result, operation.FailureIdentities, ref signals);
+            else
+            {
+                CollectFailureSignalsLocked(
+                    result,
+                    operation.FailureIdentities,
+                    ref signals);
+            }
             operation.Completion.TrySetResult(result);
 
             if (operation.ObserverCount == 0)
@@ -512,31 +542,25 @@ public sealed class PreviewThumbnailService : IDisposable
         DrainSignals();
     }
 
-    private void CollectSignalsLocked(
+    private void CollectFailureSignalsLocked(
         PreviewThumbnailResult result,
         IEnumerable<FailureIdentity> identities,
         ref List<PreviewThumbnailSignalEventArgs>? signals)
     {
+        if (!result.IsStableFailure)
+        {
+            return;
+        }
+
+        var details = new FailureDetails(
+            result.FailureCode ?? "PREVIEW_DECODE_FAILED",
+            result.FailureSummary ?? "预览图无法安全解码。");
         foreach (var identity in identities)
         {
-            if (result.IsStableFailure)
-            {
-                var details = new FailureDetails(
-                    result.FailureCode ?? "PREVIEW_DECODE_FAILED",
-                    result.FailureSummary ?? "预览图无法安全解码。");
-                if (_openFailures.TryAdd(identity, details))
-                {
-                    (signals ??= []).Add(CreateSignal(
-                        PreviewThumbnailSignalKind.Failed,
-                        identity,
-                        details));
-                }
-            }
-            else if (result.IsSuccess
-                     && _openFailures.Remove(identity, out var details))
+            if (_openFailures.TryAdd(identity, details))
             {
                 (signals ??= []).Add(CreateSignal(
-                    PreviewThumbnailSignalKind.Resolved,
+                    PreviewThumbnailSignalKind.Failed,
                     identity,
                     details));
             }
@@ -589,25 +613,40 @@ public sealed class PreviewThumbnailService : IDisposable
         }
     }
 
-    private void RecoverFailureStateLocked(
-        IEnumerable<FailureIdentity> recoveredIdentities,
-        DecodeOperation except)
+    private void RecoverPreviewVersionLocked(
+        string previewVersion,
+        DecodeOperation except,
+        ref List<PreviewThumbnailSignalEventArgs>? signals)
     {
-        var recovered = recoveredIdentities.ToHashSet();
-        if (recovered.Count == 0)
-        {
-            return;
-        }
+        // PreviewVersion binds canonical path and scan facts. Only a fresh decoder
+        // success reaches this method; cache/completed Ready replay is not recovery.
+        _recoveryEpochs[previewVersion] = checked(
+            GetRecoveryEpochLocked(previewVersion) + 1);
 
-        foreach (var identity in recovered)
+        foreach (var (identity, details) in _openFailures.ToArray())
         {
-            _recoveryEpochs[identity] = checked(GetRecoveryEpochLocked(identity) + 1);
+            if (!string.Equals(
+                    identity.PreviewVersion,
+                    previewVersion,
+                    StringComparison.Ordinal)
+                || !_openFailures.Remove(identity))
+            {
+                continue;
+            }
+
+            (signals ??= []).Add(CreateSignal(
+                PreviewThumbnailSignalKind.Resolved,
+                identity,
+                details));
         }
 
         foreach (var (key, entry) in _cache.ToArray())
         {
             if (!entry.Result.IsStableFailure
-                || !entry.FailureIdentities.Any(recovered.Contains)
+                || !entry.FailureIdentities.Any(identity => string.Equals(
+                    identity.PreviewVersion,
+                    previewVersion,
+                    StringComparison.Ordinal))
                 || !_cache.Remove(key, out var removed))
             {
                 continue;
@@ -620,7 +659,10 @@ public sealed class PreviewThumbnailService : IDisposable
         foreach (var (key, operation) in _operations.ToArray())
         {
             if (ReferenceEquals(operation, except)
-                || !operation.FailureIdentities.Any(recovered.Contains)
+                || !string.Equals(
+                    operation.Request.PreviewVersion,
+                    previewVersion,
+                    StringComparison.Ordinal)
                 || !operation.Completed
                 || operation.Result?.IsStableFailure != true)
             {
@@ -638,11 +680,11 @@ public sealed class PreviewThumbnailService : IDisposable
     }
 
     private bool RecoveredSinceStartLocked(DecodeOperation operation)
-        => operation.FailureEpochs.Any(pair =>
-            GetRecoveryEpochLocked(pair.Key) > pair.Value);
+        => GetRecoveryEpochLocked(operation.Request.PreviewVersion)
+           > operation.RecoveryEpoch;
 
-    private long GetRecoveryEpochLocked(FailureIdentity identity)
-        => _recoveryEpochs.GetValueOrDefault(identity);
+    private long GetRecoveryEpochLocked(string previewVersion)
+        => _recoveryEpochs.GetValueOrDefault(previewVersion);
 
     private void ClearCacheLocked()
     {
@@ -849,10 +891,7 @@ public sealed class PreviewThumbnailService : IDisposable
             Key = key;
             Request = request;
             FailureIdentities = [identity];
-            FailureEpochs = new Dictionary<FailureIdentity, long>
-            {
-                [identity] = recoveryEpoch
-            };
+            RecoveryEpoch = recoveryEpoch;
         }
 
         internal PreviewThumbnailCacheKey Key { get; }
@@ -866,17 +905,11 @@ public sealed class PreviewThumbnailService : IDisposable
 
         internal HashSet<FailureIdentity> FailureIdentities { get; }
 
-        internal Dictionary<FailureIdentity, long> FailureEpochs { get; }
+        internal long RecoveryEpoch { get; }
 
-        internal bool AddFailureIdentity(FailureIdentity identity, long recoveryEpoch)
+        internal bool AddFailureIdentity(FailureIdentity identity)
         {
-            if (!FailureIdentities.Add(identity))
-            {
-                return false;
-            }
-
-            FailureEpochs.Add(identity, recoveryEpoch);
-            return true;
+            return FailureIdentities.Add(identity);
         }
 
         internal int ObserverCount { get; set; } = 1;
@@ -893,7 +926,7 @@ public sealed class PreviewThumbnailService : IDisposable
             FailureIdentity identity,
             long recoveryEpoch,
             PreviewThumbnailResult result,
-            IEnumerable<KeyValuePair<FailureIdentity, long>> cachedFailureEpochs)
+            IEnumerable<FailureIdentity> cachedFailureIdentities)
         {
             var operation = new DecodeOperation(
                 key,
@@ -904,9 +937,9 @@ public sealed class PreviewThumbnailService : IDisposable
                 Completed = true,
                 Result = result
             };
-            foreach (var cached in cachedFailureEpochs)
+            foreach (var cachedIdentity in cachedFailureIdentities)
             {
-                operation.AddFailureIdentity(cached.Key, cached.Value);
+                operation.AddFailureIdentity(cachedIdentity);
             }
 
             operation.Completion.TrySetResult(result);
