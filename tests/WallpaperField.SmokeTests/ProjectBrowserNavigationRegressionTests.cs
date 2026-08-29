@@ -129,7 +129,9 @@ internal static class ProjectBrowserNavigationRegressionTests
                && allText.Contains("前往扫描中心", StringComparison.Ordinal)
                && allText.Contains("BrowsePageViewModel.EmptyTitle", StringComparison.Ordinal)
                && allText.Contains("BrowsePageViewModel.EmptyDescription", StringComparison.Ordinal)
-               && allText.Contains("ScanSession.SourcePath", StringComparison.Ordinal),
+               && allText.Contains("BrowsePageViewModel.CurrentSourcePath", StringComparison.Ordinal)
+               && allText.Contains("BrowsePageViewModel.SnapshotSourcePath", StringComparison.Ordinal)
+               && allText.Contains("BrowsePageViewModel.SnapshotSourceStatusText", StringComparison.Ordinal),
             "Browse empty route lacks its heading, two-state copy, source status, or Scan CTA.");
         assert(!document.Descendants().Any(element => element.Name.LocalName == "ListBox")
                && !allText.Contains("处理", StringComparison.Ordinal),

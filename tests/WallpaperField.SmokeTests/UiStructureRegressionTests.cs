@@ -236,6 +236,7 @@ internal static class UiStructureRegressionTests
                 VerifyAlwaysAvailableActions(window, shell, assert);
                 VerifyPage(window, shell, "SCAN", "ScanView", "ScanResultsList", assert);
                 VerifyBrowsePage(window, shell, assert);
+                VerifyBrowseSnapshotSourceRetention(window, shell, assert);
                 VerifyPage(window, shell, "LIBRARY", "LibraryView", "LibraryResultsList", assert);
                 VerifyPage(window, shell, "PROBLEMS", "ProblemsView", "ProblemResultsList", assert);
                 VerifyProblemExpansionFollowsIssueIdentity(window, shell, assert);
@@ -643,6 +644,183 @@ internal static class UiStructureRegressionTests
         }
     }
 
+    private static void VerifyBrowseSnapshotSourceRetention(
+        WallpaperField.MainWindow window,
+        ShellViewModel originalShell,
+        Action<bool, string> assert)
+    {
+        var testRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"WallpaperField-BrowseSource-{Guid.NewGuid():N}");
+        var sourceA = Path.Combine(testRoot, "source-a");
+        var sourceB = Path.Combine(testRoot, "source-b");
+        var output = Path.Combine(testRoot, "output");
+        var scanService = new SourceRetentionScanService();
+        var previousContext = SynchronizationContext.Current;
+        var shell = new ShellViewModel(
+            scanService,
+            new EmptyLibraryService(),
+            new NullFolderPickerService(),
+            new NullSystemFolderService(),
+            new EmptyUnpackService());
+
+        try
+        {
+            SynchronizationContext.SetSynchronizationContext(
+                new DispatcherSynchronizationContext(window.Dispatcher));
+            Directory.CreateDirectory(sourceA);
+            Directory.CreateDirectory(sourceB);
+            shell.SourcePath = sourceA;
+            shell.OutputPath = output;
+            WaitForDispatcherTask(window, shell.ScanCommand.ExecuteAsync());
+            shell.NavigateTo("BROWSE");
+            window.DataContext = shell;
+            RefreshBindings(window);
+
+            var currentSource = WpfElementFinder.FindByName<TextBlock>(
+                window,
+                "BrowseCurrentSourcePathText");
+            var snapshotSource = WpfElementFinder.FindByName<TextBlock>(
+                window,
+                "BrowseSnapshotSourcePathText");
+            var snapshotStatus = WpfElementFinder.FindByName<TextBlock>(
+                window,
+                "BrowseSnapshotSourceStatusText");
+            var emptyTitle = WpfElementFinder.FindByName<TextBlock>(
+                window,
+                "BrowseEmptyTitle");
+
+            assert(currentSource is not null
+                   && snapshotSource is not null
+                   && snapshotStatus is not null
+                   && emptyTitle is not null,
+                "Browse source identity text surfaces are missing from the live WPF page.");
+            if (currentSource is null
+                || snapshotSource is null
+                || snapshotStatus is null
+                || emptyTitle is null)
+            {
+                return;
+            }
+
+            assert(PathsEqual(snapshotSource.Text, sourceA)
+                   && PathsEqual(currentSource.Text, sourceA)
+                   && !snapshotStatus.Text.Contains("上一次成功扫描", StringComparison.Ordinal),
+                "Browse did not label the initial successful snapshot with source A.");
+
+            shell.SourcePath = sourceB;
+            RefreshBindings(window);
+            AssertPreviousSnapshotSource(
+                shell,
+                currentSource,
+                snapshotSource,
+                snapshotStatus,
+                sourceA,
+                sourceB,
+                "input drift",
+                assert);
+
+            WaitForDispatcherTask(window, shell.ScanCommand.ExecuteAsync());
+            RefreshBindings(window);
+            AssertPreviousSnapshotSource(
+                shell,
+                currentSource,
+                snapshotSource,
+                snapshotStatus,
+                sourceA,
+                sourceB,
+                "failed replacement scan",
+                assert);
+
+            var canceledScan = shell.ScanCommand.ExecuteAsync();
+            WaitForDispatcherTask(window, scanService.CancelScanStarted);
+            shell.CancelScanCommand.Execute(null);
+            WaitForDispatcherTask(window, canceledScan);
+            RefreshBindings(window);
+            AssertPreviousSnapshotSource(
+                shell,
+                currentSource,
+                snapshotSource,
+                snapshotStatus,
+                sourceA,
+                sourceB,
+                "canceled replacement scan",
+                assert);
+
+            WaitForDispatcherTask(window, shell.ScanCommand.ExecuteAsync());
+            RefreshBindings(window);
+            assert(shell.BrowsePageViewModel.HasSnapshot
+                   && shell.BrowsePageViewModel.TotalProjectCount == 0
+                   && PathsEqual(snapshotSource.Text, sourceB)
+                   && PathsEqual(currentSource.Text, sourceB)
+                   && emptyTitle.Text == "扫描结果为空"
+                   && !snapshotStatus.Text.Contains("上一次成功扫描", StringComparison.Ordinal),
+                "An empty successful snapshot did not replace source A with source B truthfully.");
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(previousContext);
+            window.DataContext = originalShell;
+            RefreshBindings(window);
+            shell.Dispose();
+            if (Directory.Exists(testRoot))
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+        }
+    }
+
+    private static void AssertPreviousSnapshotSource(
+        ShellViewModel shell,
+        TextBlock currentSource,
+        TextBlock snapshotSource,
+        TextBlock snapshotStatus,
+        string sourceA,
+        string sourceB,
+        string scenario,
+        Action<bool, string> assert)
+        => assert(shell.BrowsePageViewModel.HasSnapshot
+                  && shell.BrowsePageViewModel.TotalProjectCount == 1
+                  && PathsEqual(snapshotSource.Text, sourceA)
+                  && PathsEqual(currentSource.Text, sourceB)
+                  && snapshotStatus.Text.Contains("上一次成功扫描", StringComparison.Ordinal),
+            $"Browse mislabeled source A after {scenario} while current input was source B.");
+
+    private static void WaitForDispatcherTask(
+        Window window,
+        Task task)
+    {
+        if (!task.IsCompleted)
+        {
+            var frame = new DispatcherFrame();
+            _ = task.ContinueWith(
+                _ => window.Dispatcher.BeginInvoke(
+                    DispatcherPriority.Send,
+                    new Action(() => frame.Continue = false)),
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            Dispatcher.PushFrame(frame);
+        }
+
+        task.GetAwaiter().GetResult();
+    }
+
+    private static void RefreshBindings(Window window)
+    {
+        window.UpdateLayout();
+        window.Dispatcher.Invoke(() => { }, DispatcherPriority.DataBind);
+        window.UpdateLayout();
+    }
+
+    private static bool PathsEqual(string? left, string? right)
+        => !string.IsNullOrWhiteSpace(left)
+           && !string.IsNullOrWhiteSpace(right)
+           && string.Equals(
+               Path.GetFullPath(left),
+               Path.GetFullPath(right),
+               StringComparison.OrdinalIgnoreCase);
+
     private static void VerifyAlwaysAvailableActions(
         WallpaperField.MainWindow window,
         ShellViewModel shell,
@@ -909,6 +1087,64 @@ internal static class UiStructureRegressionTests
             IProgress<ScanProgress>? progress = null,
             CancellationToken cancellationToken = default)
             => Task.FromResult(new ScanResult());
+    }
+
+    private sealed class SourceRetentionScanService : IWallpaperScanService
+    {
+        private readonly TaskCompletionSource _cancelScanStarted = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _callCount;
+
+        internal Task CancelScanStarted => _cancelScanStarted.Task;
+
+        public async Task<ScanResult> ScanAsync(
+            WallpaperScanRequest request,
+            IProgress<ScanProgress>? progress = null,
+            CancellationToken cancellationToken = default)
+        {
+            var call = Interlocked.Increment(ref _callCount);
+            var now = DateTimeOffset.UtcNow;
+            if (call == 1)
+            {
+                return new ScanResult
+                {
+                    Items =
+                    [
+                        new WallpaperRecord
+                        {
+                            WorkshopId = "source-a-item",
+                            Title = "Source A item",
+                            SourceDirectory = Path.Combine(
+                                request.SourceDirectory,
+                                "source-a-item"),
+                            OutputDirectory = Path.Combine(
+                                request.OutputDirectory,
+                                "source-a-item"),
+                            ScannedAtUtc = now
+                        }
+                    ],
+                    StartedAtUtc = now,
+                    CompletedAtUtc = now
+                };
+            }
+
+            if (call == 2)
+            {
+                throw new IOException("Replacement scan failed for the retention fixture.");
+            }
+
+            if (call == 3)
+            {
+                _cancelScanStarted.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            }
+
+            return new ScanResult
+            {
+                StartedAtUtc = now,
+                CompletedAtUtc = now
+            };
+        }
     }
 
     private sealed class EmptyLibraryService : IWallpaperLibraryService

@@ -61,6 +61,10 @@
                 BorderThickness="1"
                 CornerRadius="10">
             <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
@@ -68,33 +72,51 @@
                 </Grid.ColumnDefinitions>
                 <TextBlock Style="{StaticResource TechnicalLabel}"
                            Foreground="{DynamicResource TextMutedBrush}"
-                           Text="CURRENT SOURCE" />
-                <TextBlock Grid.Column="1"
+                           Text="CURRENT INPUT" />
+                <TextBlock x:Name="BrowseCurrentSourcePathText"
+                           Grid.Column="1"
                            Margin="18,0"
                            FontFamily="Consolas"
                            Foreground="{DynamicResource TextPrimaryBrush}"
                            TextTrimming="CharacterEllipsis"
-                           ToolTip="{Binding ScanSession.SourcePath}">
+                           ToolTip="{Binding BrowsePageViewModel.CurrentSourcePath}">
                     <TextBlock.Style>
                         <Style TargetType="TextBlock">
-                            <Setter Property="Text" Value="{Binding ScanSession.SourcePath}" />
+                            <Setter Property="Text" Value="{Binding BrowsePageViewModel.CurrentSourcePath}" />
                             <Style.Triggers>
-                                <DataTrigger Binding="{Binding ScanSession.SourcePath}" Value="">
+                                <DataTrigger Binding="{Binding BrowsePageViewModel.CurrentSourcePath}" Value="">
                                     <Setter Property="Text" Value="尚未选择来源目录" />
                                 </DataTrigger>
                             </Style.Triggers>
                         </Style>
                     </TextBlock.Style>
                 </TextBlock>
-                <TextBlock Grid.Column="2" FontWeight="SemiBold">
+                <TextBlock Grid.Row="1"
+                           Margin="0,9,0,0"
+                           Style="{StaticResource TechnicalLabel}"
+                           Foreground="{DynamicResource TextMutedBrush}"
+                           Text="SNAPSHOT SOURCE" />
+                <TextBlock x:Name="BrowseSnapshotSourcePathText"
+                           Grid.Row="1"
+                           Grid.Column="1"
+                           Margin="18,9,18,0"
+                           FontFamily="Consolas"
+                           Foreground="{DynamicResource TextPrimaryBrush}"
+                           Text="{Binding BrowsePageViewModel.SnapshotSourcePath}"
+                           TextTrimming="CharacterEllipsis"
+                           ToolTip="{Binding BrowsePageViewModel.SnapshotSourcePath}" />
+                <TextBlock x:Name="BrowseSnapshotSourceStatusText"
+                           Grid.Row="1"
+                           Grid.Column="2"
+                           Margin="0,9,0,0"
+                           FontWeight="SemiBold"
+                           Text="{Binding BrowsePageViewModel.SnapshotSourceStatusText}">
                     <TextBlock.Style>
                         <Style TargetType="TextBlock">
                             <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
-                            <Setter Property="Text" Value="尚无成功快照" />
                             <Style.Triggers>
-                                <DataTrigger Binding="{Binding BrowsePageViewModel.HasSnapshot}" Value="True">
+                                <DataTrigger Binding="{Binding BrowsePageViewModel.IsSnapshotSourceCurrent}" Value="True">
                                     <Setter Property="Foreground" Value="{DynamicResource SuccessInkBrush}" />
-                                    <Setter Property="Text" Value="成功快照已载入" />
                                 </DataTrigger>
                             </Style.Triggers>
                         </Style>
@@ -126,7 +148,8 @@
                            FontSize="32"
                            Foreground="{DynamicResource SignalPressedBrush}"
                            Text="&#xE8B7;" />
-                <TextBlock Margin="0,18,0,0"
+                <TextBlock x:Name="BrowseEmptyTitle"
+                           Margin="0,18,0,0"
                            HorizontalAlignment="Center"
                            FontSize="21"
                            FontWeight="Bold"

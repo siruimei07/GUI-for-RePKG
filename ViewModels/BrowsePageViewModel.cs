@@ -160,6 +160,35 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
 
     public bool HasSnapshot => _snapshot is not null;
 
+    public string CurrentSourcePath => _scanSession.SourcePath;
+
+    public string SnapshotSourcePath => _snapshot?.Identity.SourceDirectory ?? string.Empty;
+
+    public bool IsSnapshotSourceCurrent
+    {
+        get
+        {
+            var normalizedCurrentSource = _scanSession.SourcePathValidation.NormalizedPath;
+            if (!HasSnapshot
+                || string.IsNullOrWhiteSpace(normalizedCurrentSource)
+                || string.IsNullOrWhiteSpace(SnapshotSourcePath))
+            {
+                return false;
+            }
+
+            return string.Equals(
+                normalizedCurrentSource,
+                SnapshotSourcePath,
+                StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    public string SnapshotSourceStatusText => !HasSnapshot
+        ? "尚无成功扫描快照"
+        : IsSnapshotSourceCurrent
+            ? "正在显示当前来源的成功快照"
+            : "当前输入已变更 · 正在显示上一次成功扫描的快照";
+
     public bool HasVisibleProjects => VisibleProjects.Count > 0;
 
     public string EmptyTitle => !HasSnapshot
@@ -274,6 +303,14 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
         {
             ApplySnapshot(_scanSession.ProjectSnapshot);
         }
+        else if (e.PropertyName is nameof(ScanSession.SourcePath)
+                 or nameof(ScanSession.SourcePathValidation))
+        {
+            OnPropertiesChanged(
+                nameof(CurrentSourcePath),
+                nameof(IsSnapshotSourceCurrent),
+                nameof(SnapshotSourceStatusText));
+        }
     }
 
     private void ApplySnapshot(ScanProjectSnapshot? snapshot)
@@ -319,6 +356,9 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
         OnPropertiesChanged(
             nameof(TotalProjectCount),
             nameof(HasSnapshot),
+            nameof(SnapshotSourcePath),
+            nameof(IsSnapshotSourceCurrent),
+            nameof(SnapshotSourceStatusText),
             nameof(EmptyTitle),
             nameof(EmptyDescription));
         NotifySelectionChanged();
