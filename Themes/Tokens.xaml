@@ -43,6 +43,7 @@
     <SolidColorBrush x:Key="Ink12Brush" Color="#1F191919" />
     <SolidColorBrush x:Key="Ink18Brush" Color="#2E191919" />
     <SolidColorBrush x:Key="Ink42Brush" Color="#6B191919" />
+    <SolidColorBrush x:Key="ModalBackdropBrush" Color="#6B191919" />
     <SolidColorBrush x:Key="Paper08Brush" Color="#14F2F2F0" />
     <SolidColorBrush x:Key="Paper14Brush" Color="#24F2F2F0" />
     <SolidColorBrush x:Key="Paper24Brush" Color="#3DF2F2F0" />

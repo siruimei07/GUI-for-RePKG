@@ -60,6 +60,7 @@ public partial class MainWindow : Window
         "SuccessInkBrush",
         "SuccessSoftBrush",
         "DisabledBrush",
+        "ModalBackdropBrush",
         "OverlayBrush",
         "ShadowBrush"
     ];
@@ -462,6 +463,7 @@ public partial class MainWindow : Window
 
     private void UpdateResponsiveLayout(double width)
     {
+        BrowsePage.CaptureResponsiveViewportAnchor();
         LayoutMode = ResolveLayoutMode(width);
         BrowsePage.ApplyLayoutMode(LayoutMode);
     }
@@ -565,6 +567,7 @@ public partial class MainWindow : Window
             "SignalTextBrush",
             "SuccessInkBrush");
         resources["DisabledBrush"] = SystemColors.GrayTextBrush;
+        resources["ModalBackdropBrush"] = SystemColors.WindowTextBrush;
         resources["OverlayBrush"] = SystemColors.WindowTextBrush;
         resources["ShadowBrush"] = SystemColors.WindowTextBrush;
     }

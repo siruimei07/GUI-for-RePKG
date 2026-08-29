@@ -108,6 +108,9 @@ public sealed class ScanSession : ObservableObject
 
     public RelayCommand ClearUnpackSelectionCommand { get; }
 
+    internal TaskLifecycleCoordinator TaskLifecycleCoordinator
+        => _taskLifecycleCoordinator;
+
     public string SourcePath
     {
         get => _sourcePath;
@@ -292,6 +295,8 @@ public sealed class ScanSession : ObservableObject
     public int PackageReadyCount => ScannedWallpapers.Count(item => item.HasUnpackableContent);
 
     public int SelectedUnpackCount => ScannedWallpapers.Count(item => item.IsSelectedForUnpack);
+
+    public bool IsSelectionWritable => !HasActiveForegroundOperation();
 
     public string SelectionSummaryText
         => $"已选 {SelectedUnpackCount:N0} · 当前匹配 {FilteredScanCount:N0}";
@@ -1053,7 +1058,10 @@ public sealed class ScanSession : ObservableObject
         object? sender,
         TaskLifecycleSnapshot snapshot)
     {
-        OnPropertiesChanged(nameof(CanScan), nameof(CanCancelScan));
+        OnPropertiesChanged(
+            nameof(CanScan),
+            nameof(CanCancelScan),
+            nameof(IsSelectionWritable));
         UpdateCommandStates();
     }
 

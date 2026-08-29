@@ -246,25 +246,49 @@
                         </Style>
                     </StackPanel.Style>
                 </StackPanel>
-                <Button x:Name="BrowseFilterButton"
-                        Grid.Column="2"
-                        MinWidth="96"
-                        MinHeight="44"
-                        Click="BrowseFilterButton_Click"
-                        AutomationProperties.Name="打开项目筛选"
-                        Content="筛选">
-                    <Button.Style>
-                        <Style TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
-                            <Setter Property="Visibility" Value="Collapsed" />
-                            <Style.Triggers>
-                                <DataTrigger Binding="{Binding LayoutMode, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                             Value="{x:Static local:ShellLayoutMode.Compact}">
-                                    <Setter Property="Visibility" Value="Visible" />
-                                </DataTrigger>
-                            </Style.Triggers>
-                        </Style>
-                    </Button.Style>
-                </Button>
+                <StackPanel Grid.Column="2" Orientation="Horizontal">
+                    <Button x:Name="BrowseCompactDetailsButton"
+                            MinWidth="104"
+                            MinHeight="44"
+                            Margin="0,0,8,0"
+                            Click="BrowseCompactDetailsButton_Click"
+                            AutomationProperties.Name="查看当前项目详情"
+                            Content="查看详情">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                    <MultiDataTrigger>
+                                        <MultiDataTrigger.Conditions>
+                                            <Condition Binding="{Binding LayoutMode, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                                       Value="{x:Static local:ShellLayoutMode.Compact}" />
+                                            <Condition Binding="{Binding BrowsePageViewModel.HasCurrentProject}" Value="True" />
+                                        </MultiDataTrigger.Conditions>
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </MultiDataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                    <Button x:Name="BrowseFilterButton"
+                            MinWidth="96"
+                            MinHeight="44"
+                            Click="BrowseFilterButton_Click"
+                            AutomationProperties.Name="打开项目筛选"
+                            Content="筛选">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding LayoutMode, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                                 Value="{x:Static local:ShellLayoutMode.Compact}">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                </StackPanel>
             </Grid>
         </Border>
 
@@ -322,6 +346,12 @@
                             <DataTrigger Binding="{Binding BrowsePageViewModel.HasVisibleProjects}" Value="True">
                                 <Setter Property="Visibility" Value="Visible" />
                             </DataTrigger>
+                            <DataTrigger Binding="{Binding BrowsePageViewModel.IsDetailsOpen}" Value="True">
+                                <Setter Property="Visibility" Value="Visible" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding BrowsePageViewModel.IsFilterLayerOpen}" Value="True">
+                                <Setter Property="Visibility" Value="Visible" />
+                            </DataTrigger>
                         </Style.Triggers>
                     </Style>
                 </Grid.Style>
@@ -339,8 +369,9 @@
                     <ListBox x:Name="BrowseProjectGrid"
                              Background="Transparent"
                              BorderThickness="0"
-                             Focusable="False"
-                             IsTabStop="False"
+                             Focusable="True"
+                             IsTabStop="True"
+                             GotKeyboardFocus="BrowseProjectGrid_GotKeyboardFocus"
                              ItemsSource="{Binding BrowsePageViewModel.Rows}"
                              ScrollViewer.CanContentScroll="True"
                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
@@ -378,7 +409,7 @@
                                             </Style.Triggers>
                                         </Style>
                                         <DataTemplate x:Key="BrowseProjectCardTemplate">
-                                            <Grid Margin="4">
+                                            <Grid x:Name="BrowseProjectCardRoot" Margin="4">
                                                 <Grid.Style>
                                                     <Style TargetType="Grid">
                                                         <Style.Triggers>
@@ -429,12 +460,16 @@
                                                                 </Grid>
                                                             </Border>
                                                         </Grid>
-                                                        <Border Height="58"
+                                                        <Border Height="74"
                                                                 Padding="9,6"
                                                                 VerticalAlignment="Bottom"
                                                                 Background="{DynamicResource OverlayBrush}">
                                                             <Grid>
-                                                                <Grid.RowDefinitions><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                                                                <Grid.RowDefinitions>
+                                                                    <RowDefinition Height="*" />
+                                                                    <RowDefinition Height="Auto" />
+                                                                    <RowDefinition Height="Auto" />
+                                                                </Grid.RowDefinitions>
                                                                 <TextBlock FontSize="12"
                                                                            FontWeight="SemiBold"
                                                                            Foreground="{DynamicResource PaperBrush}"
@@ -447,6 +482,25 @@
                                                                     <TextBlock Margin="7,0,0,0" FontFamily="Consolas" FontSize="9" Foreground="{DynamicResource PaperBrush}" Text="{Binding WorkshopId, StringFormat=ID {0}}" />
                                                                     <TextBlock Margin="7,0,0,0" FontFamily="Consolas" FontSize="9" Foreground="{DynamicResource SignalBrush}" Text="{Binding WarningCount, StringFormat=! {0}}" />
                                                                 </StackPanel>
+                                                                <TextBlock x:Name="BrowseProjectProcessabilityText"
+                                                                           Grid.Row="2"
+                                                                           Margin="0,2,0,0"
+                                                                           FontSize="9"
+                                                                           FontWeight="SemiBold"
+                                                                           Foreground="{DynamicResource SignalBrush}"
+                                                                           Text="{Binding ProcessabilityText}"
+                                                                           TextTrimming="CharacterEllipsis">
+                                                                    <TextBlock.Style>
+                                                                        <Style TargetType="TextBlock">
+                                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                                            <Style.Triggers>
+                                                                                <DataTrigger Binding="{Binding IsProcessable}" Value="False">
+                                                                                    <Setter Property="Visibility" Value="Visible" />
+                                                                                </DataTrigger>
+                                                                            </Style.Triggers>
+                                                                        </Style>
+                                                                    </TextBlock.Style>
+                                                                </TextBlock>
                                                             </Grid>
                                                         </Border>
                                                         <Border Margin="5"
@@ -487,9 +541,45 @@
                                                           IsTabStop="False"
                                                           Focusable="False"
                                                           IsChecked="{Binding IsSelected, Mode=OneWay}"
-                                                          IsEnabled="{Binding IsProcessable}"
                                                           Click="BrowseProjectSelectionToggle_Click"
-                                                          AutomationProperties.Name="{Binding Title, StringFormat=切换处理选择：{0}}" />
+                                                          AutomationProperties.HelpText="{Binding DataContext.BrowsePageViewModel.SelectionAvailabilityText, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                          AutomationProperties.Name="{Binding Title, StringFormat=切换处理选择：{0}}">
+                                                    <CheckBox.Style>
+                                                        <Style TargetType="CheckBox">
+                                                            <Setter Property="IsEnabled" Value="True" />
+                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IsProcessable}" Value="False">
+                                                                    <Setter Property="IsEnabled" Value="False" />
+                                                                </DataTrigger>
+                                                                <MultiDataTrigger>
+                                                                    <MultiDataTrigger.Conditions>
+                                                                        <Condition Binding="{Binding IsProcessable}" Value="True" />
+                                                                        <Condition Binding="{Binding IsSelected}" Value="True" />
+                                                                    </MultiDataTrigger.Conditions>
+                                                                    <Setter Property="Visibility" Value="Visible" />
+                                                                </MultiDataTrigger>
+                                                                <MultiDataTrigger>
+                                                                    <MultiDataTrigger.Conditions>
+                                                                        <Condition Binding="{Binding IsProcessable}" Value="True" />
+                                                                        <Condition Binding="{Binding IsMouseOver, ElementName=BrowseProjectCardRoot}" Value="True" />
+                                                                    </MultiDataTrigger.Conditions>
+                                                                    <Setter Property="Visibility" Value="Visible" />
+                                                                </MultiDataTrigger>
+                                                                <MultiDataTrigger>
+                                                                    <MultiDataTrigger.Conditions>
+                                                                        <Condition Binding="{Binding IsProcessable}" Value="True" />
+                                                                        <Condition Binding="{Binding IsKeyboardFocusWithin, ElementName=BrowseProjectCardButton}" Value="True" />
+                                                                    </MultiDataTrigger.Conditions>
+                                                                    <Setter Property="Visibility" Value="Visible" />
+                                                                </MultiDataTrigger>
+                                                                <DataTrigger Binding="{Binding DataContext.BrowsePageViewModel.IsSelectionWritable, RelativeSource={RelativeSource AncestorType=Window}}" Value="False">
+                                                                    <Setter Property="IsEnabled" Value="False" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </CheckBox.Style>
+                                                </CheckBox>
                                             </Grid>
                                         </DataTemplate>
                                     </UniformGrid.Resources>
@@ -507,6 +597,9 @@
 
                 <Border x:Name="BrowsePersistentDetails"
                         Grid.Column="2"
+                        Focusable="True"
+                        KeyboardNavigation.IsTabStop="False"
+                        AutomationProperties.Name="当前项目详情"
                         Background="{DynamicResource InkBrush}"
                         BorderBrush="{DynamicResource InkSoftBrush}"
                         BorderThickness="1"
@@ -539,7 +632,9 @@
                 </Border>
             </Grid>
 
-            <Border Panel.ZIndex="9" Background="{DynamicResource Ink42Brush}">
+            <Border x:Name="BrowseCompactModalBackdrop"
+                    Panel.ZIndex="9"
+                    Background="{DynamicResource ModalBackdropBrush}">
                 <Border.Style>
                     <Style TargetType="Border">
                         <Setter Property="Visibility" Value="Collapsed" />

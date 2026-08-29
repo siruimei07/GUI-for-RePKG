@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -17,6 +18,9 @@ public sealed partial class BrowsePageView : UserControl
     private const double MinimumCardCellWidth = 112;
     private string? _detailReturnProjectKey;
     private bool _layoutRefreshPending;
+    private BrowseViewportAnchor? _pendingViewportAnchor;
+    private bool _viewportAnchorRestorePending;
+    private long _focusRequestVersion;
 
     public BrowsePageView()
     {
@@ -80,6 +84,7 @@ public sealed partial class BrowsePageView : UserControl
 
         var wasCompact = viewModel.IsCompactLayout;
         var focusedKey = viewModel.FocusedProjectKey;
+        var hadGridKeyboardFocus = BrowseProjectGrid.IsKeyboardFocusWithin;
         viewModel.SetCompactLayout(mode == ShellLayoutMode.Compact);
 
         var detailsVisibility = mode == ShellLayoutMode.Compact
@@ -107,11 +112,28 @@ public sealed partial class BrowsePageView : UserControl
         viewModel.SetColumnCount(columns);
         UpdateModalBackgroundState();
 
-        if (focusedKey is not null
-            && (previousColumns != columns || wasCompact != viewModel.IsCompactLayout))
+        var geometryChanged = previousColumns != columns
+                              || wasCompact != viewModel.IsCompactLayout;
+        if (hadGridKeyboardFocus && focusedKey is not null && geometryChanged)
         {
             _ = FocusProjectAsync(focusedKey);
         }
+        else if (!hadGridKeyboardFocus && _pendingViewportAnchor is not null)
+        {
+            QueueViewportAnchorRestore();
+        }
+    }
+
+    internal void CaptureResponsiveViewportAnchor()
+    {
+        if (BrowseProjectGrid.IsKeyboardFocusWithin)
+        {
+            _pendingViewportAnchor = null;
+            _viewportAnchorRestorePending = false;
+            return;
+        }
+
+        _pendingViewportAnchor ??= CaptureViewportAnchor();
     }
 
     internal void RefreshMotionVisuals()
@@ -146,11 +168,11 @@ public sealed partial class BrowsePageView : UserControl
         if (Window.GetWindow(this) is MainWindow window)
         {
             ApplyLayoutMode(window.LayoutMode);
-            QueueLayoutRefresh(window.LayoutMode);
+            QueueLayoutRefresh();
         }
     }
 
-    private void QueueLayoutRefresh(ShellLayoutMode mode)
+    private void QueueLayoutRefresh()
     {
         if (_layoutRefreshPending)
         {
@@ -162,10 +184,143 @@ public sealed partial class BrowsePageView : UserControl
             () =>
             {
                 _layoutRefreshPending = false;
-                ApplyLayoutMode(mode);
+                if (Window.GetWindow(this) is MainWindow window)
+                {
+                    ApplyLayoutMode(window.LayoutMode);
+                }
             },
             DispatcherPriority.Loaded);
     }
+
+    private BrowseViewportAnchor? CaptureViewportAnchor()
+    {
+        var scrollViewer = FindGridScrollViewer();
+        if (scrollViewer is null)
+        {
+            return null;
+        }
+
+        var firstVisibleRow = Enumerable.Range(0, BrowseProjectGrid.Items.Count)
+            .Select(index => BrowseProjectGrid.ItemContainerGenerator.ContainerFromIndex(index))
+            .OfType<ListBoxItem>()
+            .Where(container => container.DataContext is BrowseRowViewModel { Slot0: not null }
+                                && container.ActualHeight > 0)
+            .Select(container => new
+            {
+                Container = container,
+                Top = container.TranslatePoint(new Point(0, 0), scrollViewer).Y
+            })
+            .Where(candidate => candidate.Top + candidate.Container.ActualHeight > 0
+                                && candidate.Top < scrollViewer.ActualHeight)
+            .OrderBy(candidate => candidate.Top)
+            .FirstOrDefault();
+        if (firstVisibleRow?.Container.DataContext is not BrowseRowViewModel { Slot0: { } project })
+        {
+            return null;
+        }
+
+        return new BrowseViewportAnchor(
+            project.ProjectKey,
+            Math.Clamp(
+                -firstVisibleRow.Top / firstVisibleRow.Container.ActualHeight,
+                0,
+                1));
+    }
+
+    private void QueueViewportAnchorRestore()
+    {
+        if (_viewportAnchorRestorePending)
+        {
+            return;
+        }
+
+        _viewportAnchorRestorePending = true;
+        _ = Dispatcher.BeginInvoke(
+            () =>
+            {
+                _viewportAnchorRestorePending = false;
+                var anchor = _pendingViewportAnchor;
+                _pendingViewportAnchor = null;
+                if (anchor is not null && !BrowseProjectGrid.IsKeyboardFocusWithin)
+                {
+                    RestoreViewportAnchor(anchor, 0);
+                }
+            },
+            DispatcherPriority.ContextIdle);
+    }
+
+    private void RestoreViewportAnchor(BrowseViewportAnchor anchor, int attempt)
+    {
+        if (BrowseProjectGrid.IsKeyboardFocusWithin
+            || BrowseViewModel is not { } viewModel
+            || FindGridScrollViewer() is not { } scrollViewer)
+        {
+            return;
+        }
+
+        var projectIndex = -1;
+        for (var index = 0; index < viewModel.VisibleProjects.Count; index++)
+        {
+            if (string.Equals(
+                    viewModel.VisibleProjects[index].ProjectKey,
+                    anchor.ProjectKey,
+                    StringComparison.Ordinal))
+            {
+                projectIndex = index;
+                break;
+            }
+        }
+
+        if (projectIndex < 0)
+        {
+            return;
+        }
+
+        var rowIndex = projectIndex / Math.Max(1, viewModel.ColumnCount);
+        var rowExtent = BrowseProjectGrid.Items.Count > 0
+            ? scrollViewer.ExtentHeight / BrowseProjectGrid.Items.Count
+            : 0;
+        if (!double.IsFinite(rowExtent) || rowExtent <= 0)
+        {
+            QueueViewportAnchorRetry(anchor, attempt);
+            return;
+        }
+
+        var targetOffset = (rowIndex + anchor.NormalizedPosition) * rowExtent;
+        scrollViewer.ScrollToVerticalOffset(targetOffset);
+        BrowseProjectGrid.UpdateLayout();
+        if (BrowseProjectGrid.ItemContainerGenerator.ContainerFromIndex(rowIndex)
+                is not ListBoxItem { IsLoaded: true } targetRow)
+        {
+            QueueViewportAnchorRetry(anchor, attempt);
+            return;
+        }
+
+        var targetTop = targetRow.TranslatePoint(new Point(0, 0), scrollViewer).Y;
+        var correction = targetTop + anchor.NormalizedPosition * targetRow.ActualHeight;
+        if (Math.Abs(correction) > 0.5)
+        {
+            scrollViewer.ScrollToVerticalOffset(scrollViewer.VerticalOffset + correction);
+            BrowseProjectGrid.UpdateLayout();
+        }
+    }
+
+    private void QueueViewportAnchorRetry(BrowseViewportAnchor anchor, int attempt)
+    {
+        if (attempt >= 3)
+        {
+            return;
+        }
+
+        _ = Dispatcher.BeginInvoke(
+            () => RestoreViewportAnchor(anchor, attempt + 1),
+            DispatcherPriority.ContextIdle);
+    }
+
+    private ScrollViewer? FindGridScrollViewer()
+        => FindVisualDescendants<ScrollViewer>(BrowseProjectGrid)
+            .FirstOrDefault(candidate =>
+                ReferenceEquals(candidate.TemplatedParent, BrowseProjectGrid));
 
     private static void SetColumnWidth(ColumnDefinition column, GridLength width)
     {
@@ -255,7 +410,7 @@ public sealed partial class BrowsePageView : UserControl
                 else
                 {
                     await Dispatcher.InvokeAsync(
-                        () => FocusElement(BrowseOpenFolderButton),
+                        () => FocusElement(BrowsePersistentDetails),
                         DispatcherPriority.Input);
                 }
 
@@ -293,24 +448,54 @@ public sealed partial class BrowsePageView : UserControl
         }
     }
 
-    private Task<bool> FocusProjectAsync(string projectKey)
+    private async void BrowseProjectGrid_GotKeyboardFocus(
+        object sender,
+        KeyboardFocusChangedEventArgs e)
     {
-        if (!Dispatcher.CheckAccess())
+        if (!ReferenceEquals(e.OriginalSource, BrowseProjectGrid)
+            || BrowseViewModel is not { } viewModel)
         {
-            return Dispatcher.InvokeAsync(
-                () => FocusProjectCore(projectKey),
-                DispatcherPriority.Render).Task;
+            return;
         }
 
-        return Task.FromResult(FocusProjectCore(projectKey));
+        var projectKey = viewModel.FocusedProjectKey
+                         ?? viewModel.CurrentProject?.ProjectKey
+                         ?? viewModel.VisibleProjects.FirstOrDefault()?.ProjectKey;
+        if (projectKey is not null)
+        {
+            await FocusProjectAsync(projectKey).ConfigureAwait(true);
+        }
     }
 
-    private bool FocusProjectCore(string projectKey)
+    private Task<bool> FocusProjectAsync(string projectKey)
+    {
+        var completion = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var requestVersion = Interlocked.Increment(ref _focusRequestVersion);
+        if (Dispatcher.CheckAccess())
+        {
+            BeginFocusProject(projectKey, requestVersion, completion);
+        }
+        else
+        {
+            _ = Dispatcher.BeginInvoke(
+                () => BeginFocusProject(projectKey, requestVersion, completion),
+                DispatcherPriority.Render);
+        }
+
+        return completion.Task;
+    }
+
+    private void BeginFocusProject(
+        string projectKey,
+        long requestVersion,
+        TaskCompletionSource<bool> completion)
     {
         var viewModel = BrowseViewModel;
         if (viewModel is null)
         {
-            return false;
+            completion.TrySetResult(false);
+            return;
         }
 
         var index = -1;
@@ -330,30 +515,79 @@ public sealed partial class BrowsePageView : UserControl
 
         if (index < 0)
         {
-            return false;
+            completion.TrySetResult(false);
+            return;
         }
 
         var rowIndex = index / Math.Max(1, viewModel.ColumnCount);
         if (rowIndex >= BrowseProjectGrid.Items.Count)
         {
-            return false;
+            completion.TrySetResult(false);
+            return;
         }
 
         BrowseProjectGrid.ScrollIntoView(BrowseProjectGrid.Items[rowIndex]);
-        BrowseProjectGrid.UpdateLayout();
-        var button = FindVisualDescendants<Button>(BrowseProjectGrid)
-            .FirstOrDefault(candidate => candidate.DataContext is BrowseProjectViewModel project
-                                         && string.Equals(
-                                             project.ProjectKey,
-                                             projectKey,
-                                             StringComparison.Ordinal));
-        if (button is null)
+        TryFocusRealizedProject(projectKey, rowIndex, requestVersion, 0, completion);
+    }
+
+    private void TryFocusRealizedProject(
+        string projectKey,
+        int rowIndex,
+        long requestVersion,
+        int attempt,
+        TaskCompletionSource<bool> completion)
+    {
+        if (requestVersion != Volatile.Read(ref _focusRequestVersion))
         {
-            return false;
+            completion.TrySetResult(false);
+            return;
         }
 
-        viewModel.FocusedProjectKey = projectKey;
-        return FocusElement(button);
+        var viewModel = BrowseViewModel;
+        if (viewModel is null)
+        {
+            completion.TrySetResult(false);
+            return;
+        }
+
+        BrowseProjectGrid.UpdateLayout();
+        if (BrowseProjectGrid.ItemContainerGenerator.Status
+                == GeneratorStatus.ContainersGenerated
+            && BrowseProjectGrid.ItemContainerGenerator.ContainerFromIndex(rowIndex)
+                is ListBoxItem { IsLoaded: true } rowContainer)
+        {
+            var button = FindVisualDescendants<Button>(rowContainer)
+                .FirstOrDefault(candidate =>
+                    candidate.DataContext is BrowseProjectViewModel project
+                    && string.Equals(
+                        project.ProjectKey,
+                        projectKey,
+                        StringComparison.Ordinal));
+            if (button is not null)
+            {
+                viewModel.FocusedProjectKey = projectKey;
+                if (FocusElement(button))
+                {
+                    completion.TrySetResult(true);
+                    return;
+                }
+            }
+        }
+
+        if (attempt >= 7)
+        {
+            completion.TrySetResult(false);
+            return;
+        }
+
+        _ = Dispatcher.BeginInvoke(
+            () => TryFocusRealizedProject(
+                projectKey,
+                rowIndex,
+                requestVersion,
+                attempt + 1,
+                completion),
+            DispatcherPriority.ContextIdle);
     }
 
     private void BrowseProjectSelectionToggle_Click(object sender, RoutedEventArgs e)
@@ -362,7 +596,6 @@ public sealed partial class BrowsePageView : UserControl
             && BrowseViewModel is { } viewModel)
         {
             viewModel.TryToggleSelection(project);
-            checkBox.IsChecked = project.IsSelected;
             e.Handled = true;
         }
     }
@@ -443,6 +676,23 @@ public sealed partial class BrowsePageView : UserControl
             DispatcherPriority.Input);
     }
 
+    private async void BrowseCompactDetailsButton_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        if (BrowseViewModel is not { CurrentProject: { } project } viewModel)
+        {
+            return;
+        }
+
+        _detailReturnProjectKey = project.ProjectKey;
+        viewModel.OpenDetails();
+        UpdateModalBackgroundState();
+        await Dispatcher.InvokeAsync(
+            () => FocusElement(BrowseDetailCloseButton),
+            DispatcherPriority.Input);
+    }
+
     private async void BrowseDetailCloseButton_Click(object sender, RoutedEventArgs e)
         => await CloseDetailsAndRestoreFocusAsync();
 
@@ -500,7 +750,7 @@ public sealed partial class BrowsePageView : UserControl
             DispatcherPriority.Input);
     }
 
-    private static bool FocusElement(Control control)
+    private static bool FocusElement(UIElement control)
     {
         var scope = FocusManager.GetFocusScope(control);
         FocusManager.SetFocusedElement(scope, control);
@@ -541,4 +791,9 @@ public sealed partial class BrowsePageView : UserControl
             }
         }
     }
+
+    private sealed record BrowseViewportAnchor(
+        string ProjectKey,
+        double NormalizedPosition);
+
 }

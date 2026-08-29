@@ -1,4 +1,6 @@
 using System.ComponentModel;
+using System.Windows.Threading;
+using WallpaperField.Application;
 using WallpaperField.Contracts;
 using WallpaperField.Models;
 using WallpaperField.Services;
@@ -41,6 +43,7 @@ public sealed record ProjectBrowserSortOption(
 public sealed class BrowsePageViewModel : ObservableObject, IDisposable
 {
     private readonly ScanSession _scanSession;
+    private readonly TaskLifecycleCoordinator _taskLifecycleCoordinator;
     private readonly ProblemCenterSession _problemCenterSession;
     private readonly PreviewThumbnailService _thumbnailService;
     private readonly IProjectFolderTargetResolver _folderTargetResolver;
@@ -49,6 +52,7 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
     private readonly TaskCompletionSource<bool> _disposeCompletion = new(
         TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly SynchronizationContext? _ownerContext;
+    private readonly SynchronizationContext? _selectionOwnerContext;
     private readonly int _ownerThreadId;
     private readonly List<BrowseProjectViewModel> _allProjects = [];
     private ScanProjectSnapshot? _snapshot;
@@ -68,6 +72,7 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
     private bool _isCompactLayout;
     private bool _isDetailsOpen;
     private bool _isFilterLayerOpen;
+    private bool _isSelectionWritable;
     private volatile bool _disposed;
     private int _disposeStarted;
     private int _disposeOwnerThreadId;
@@ -86,21 +91,29 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
         ArgumentNullException.ThrowIfNull(problemCenterSession);
 
         _scanSession = scanSession;
+        _taskLifecycleCoordinator = scanSession.TaskLifecycleCoordinator;
         _problemCenterSession = problemCenterSession;
         _ownerContext = CaptureOwnerContext();
+        _selectionOwnerContext = _ownerContext ?? CaptureDispatcherContext();
         _ownerThreadId = Environment.CurrentManagedThreadId;
         _thumbnailService = thumbnailService
             ?? new PreviewThumbnailService(new WpfPreviewThumbnailDecoder());
         _folderTargetResolver = folderTargetResolver
             ?? throw new ArgumentNullException(nameof(folderTargetResolver));
+        _isSelectionWritable = _scanSession.IsSelectionWritable;
         _scanSession.PropertyChanged += OnScanSessionPropertyChanged;
+        _taskLifecycleCoordinator.Changed += OnTaskLifecycleChanged;
         _problemCenterSession.Changed += OnProblemsChanged;
         _thumbnailService.StatusChanged += OnThumbnailStatusChanged;
         OpenCurrentFolderCommand = new AsyncRelayCommand(
             OpenCurrentFolderAsync,
             () => CurrentFolderTarget is not null && !IsFolderTargetResolving);
-        SelectVisibleProjectsCommand = new RelayCommand(() => TrySelectVisibleProjects());
-        ClearSelectionCommand = new RelayCommand(() => TryClearSelection());
+        SelectVisibleProjectsCommand = new RelayCommand(
+            () => TrySelectVisibleProjects(),
+            () => IsSelectionWritable && VisibleProjects.Any(project => project.IsProcessable));
+        ClearSelectionCommand = new RelayCommand(
+            () => TryClearSelection(),
+            () => IsSelectionWritable && SelectedCount > 0);
         ApplySnapshot(_scanSession.ProjectSnapshot);
     }
 
@@ -260,6 +273,12 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
     }
 
     public bool HasCurrentProject => CurrentProject is not null;
+
+    public bool IsSelectionWritable => _isSelectionWritable;
+
+    public string SelectionAvailabilityText => IsSelectionWritable
+        ? "可修改处理选择"
+        : "前台任务运行中，处理选择只读";
 
     public bool IsCompactLayout
     {
@@ -677,6 +696,7 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
             _folderResolutionCancellation?.Dispose();
             _folderResolutionCancellation = null;
             _scanSession.PropertyChanged -= OnScanSessionPropertyChanged;
+            _taskLifecycleCoordinator.Changed -= OnTaskLifecycleChanged;
             _problemCenterSession.Changed -= OnProblemsChanged;
             _thumbnailService.StatusChanged -= OnThumbnailStatusChanged;
             _thumbnailService.Dispose();
@@ -704,6 +724,39 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
                 nameof(IsSnapshotSourceCurrent),
                 nameof(SnapshotSourceStatusText));
         }
+    }
+
+    private void OnTaskLifecycleChanged(
+        object? sender,
+        TaskLifecycleSnapshot snapshot)
+    {
+        var isWritable = snapshot.State is not (
+            TaskLifecycleState.Running
+            or TaskLifecycleState.CancellationRequested
+            or TaskLifecycleState.CommitCritical);
+        if (_selectionOwnerContext is not null
+            && Environment.CurrentManagedThreadId != _ownerThreadId)
+        {
+            try
+            {
+                _selectionOwnerContext.Post(
+                    static state =>
+                    {
+                        var delivery = (SelectionWritableDelivery)state!;
+                        delivery.Owner.PublishSelectionWritable(delivery.IsWritable);
+                    },
+                    new SelectionWritableDelivery(this, isWritable));
+            }
+            catch (Exception exception) when (exception is
+                       InvalidOperationException or TaskCanceledException)
+            {
+                // The owning dispatcher is shutting down; no UI can consume the update.
+            }
+
+            return;
+        }
+
+        PublishSelectionWritable(isWritable);
     }
 
     private void ApplySnapshot(ScanProjectSnapshot? snapshot)
@@ -806,12 +859,34 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
         _previewCallbacks.Invoke(this, args);
     }
 
+    private void PublishSelectionWritable(bool isWritable)
+    {
+        if (_disposed || _isSelectionWritable == isWritable)
+        {
+            return;
+        }
+
+        _isSelectionWritable = isWritable;
+        OnPropertiesChanged(nameof(IsSelectionWritable), nameof(SelectionAvailabilityText));
+        SelectVisibleProjectsCommand.NotifyCanExecuteChanged();
+        ClearSelectionCommand.NotifyCanExecuteChanged();
+    }
+
     private static SynchronizationContext? CaptureOwnerContext()
         => SynchronizationContext.Current;
+
+    private static SynchronizationContext? CaptureDispatcherContext()
+        => Dispatcher.FromThread(Thread.CurrentThread) is { } dispatcher
+            ? new DispatcherSynchronizationContext(dispatcher)
+            : null;
 
     private sealed record PreviewSignalDelivery(
         BrowsePageViewModel Owner,
         PreviewThumbnailSignalEventArgs Args);
+
+    private sealed record SelectionWritableDelivery(
+        BrowsePageViewModel Owner,
+        bool IsWritable);
 
     private BrowseProjectViewModel? FindRestoredProject(string? projectKey, string? workshopId)
         => _allProjects.FirstOrDefault(project =>
@@ -970,11 +1045,14 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
     }
 
     private void NotifySelectionChanged()
-        => OnPropertiesChanged(
+    {
+        OnPropertiesChanged(
             nameof(SelectedCount),
             nameof(HiddenSelectedCount),
             nameof(SelectedPackageCount),
             nameof(SelectedVideoCount));
+        ClearSelectionCommand.NotifyCanExecuteChanged();
+    }
 
     private void DetachCards()
     {
