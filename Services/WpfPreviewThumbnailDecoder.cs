@@ -1,4 +1,7 @@
+using Microsoft.Win32.SafeHandles;
 using System.Runtime.InteropServices;
+using System.Text;
+using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using WallpaperField.Models;
@@ -8,9 +11,14 @@ namespace WallpaperField.Services;
 public sealed class WpfPreviewThumbnailDecoder : IPreviewThumbnailDecoder
 {
     private const int StreamBufferSize = 64 * 1024;
+    private const int MaximumFinalPathCharacters = 32_768;
 
     private readonly Action<int>? _workerEntered;
     private readonly Action? _envelopeValidated;
+    private readonly Action<WeakReference<byte[]>, WeakReference<BitmapSource>>?
+        _detachedOwnershipObserved;
+    private readonly Action? _beforeSourceOpen;
+    private readonly Action? _afterSourceHandleOpened;
 
     public WpfPreviewThumbnailDecoder()
     {
@@ -24,9 +32,51 @@ public sealed class WpfPreviewThumbnailDecoder : IPreviewThumbnailDecoder
     internal WpfPreviewThumbnailDecoder(
         Action<int> workerEntered,
         Action? envelopeValidated)
+        : this(workerEntered, envelopeValidated, null, null, null)
+    {
+    }
+
+    internal WpfPreviewThumbnailDecoder(
+        Action<int> workerEntered,
+        Action? envelopeValidated,
+        Action<WeakReference<byte[]>, WeakReference<BitmapSource>>?
+            detachedOwnershipObserved)
+        : this(
+            workerEntered,
+            envelopeValidated,
+            detachedOwnershipObserved,
+            null,
+            null)
+    {
+    }
+
+    internal WpfPreviewThumbnailDecoder(
+        Action<int> workerEntered,
+        Action? envelopeValidated,
+        Action? beforeSourceOpen,
+        Action? afterSourceHandleOpened)
+        : this(
+            workerEntered,
+            envelopeValidated,
+            null,
+            beforeSourceOpen,
+            afterSourceHandleOpened)
+    {
+    }
+
+    private WpfPreviewThumbnailDecoder(
+        Action<int> workerEntered,
+        Action? envelopeValidated,
+        Action<WeakReference<byte[]>, WeakReference<BitmapSource>>?
+            detachedOwnershipObserved,
+        Action? beforeSourceOpen,
+        Action? afterSourceHandleOpened)
     {
         _workerEntered = workerEntered ?? throw new ArgumentNullException(nameof(workerEntered));
         _envelopeValidated = envelopeValidated;
+        _detachedOwnershipObserved = detachedOwnershipObserved;
+        _beforeSourceOpen = beforeSourceOpen;
+        _afterSourceHandleOpened = afterSourceHandleOpened;
     }
 
     public Task<PreviewThumbnailResult> DecodeAsync(
@@ -111,6 +161,7 @@ public sealed class WpfPreviewThumbnailDecoder : IPreviewThumbnailDecoder
 
             cancellationToken.ThrowIfCancellationRequested();
             byte[] encodedBytes;
+            _beforeSourceOpen?.Invoke();
             using (var stream = new FileStream(
                        request.CanonicalPath,
                        FileMode.Open,
@@ -120,6 +171,15 @@ public sealed class WpfPreviewThumbnailDecoder : IPreviewThumbnailDecoder
                        FileOptions.SequentialScan))
             {
                 var handle = stream.SafeFileHandle;
+                _afterSourceHandleOpened?.Invoke();
+                if (!HandleMatchesCanonicalPath(handle, request.CanonicalPath))
+                {
+                    return Failure(
+                        PreviewThumbnailStatus.ReparsePoint,
+                        "PREVIEW_PATH_IDENTITY",
+                        "预览图最终文件对象与请求路径不一致。");
+                }
+
                 var handleAttributes = File.GetAttributes(handle);
                 if ((handleAttributes & FileAttributes.ReparsePoint) != 0)
                 {
@@ -232,7 +292,55 @@ public sealed class WpfPreviewThumbnailDecoder : IPreviewThumbnailDecoder
             image.DecodePixelWidth = Math.Min(request.SizeBucket, width);
             image.StreamSource = decodeStream;
             image.EndInit();
-            if (!image.CanFreeze)
+
+            BitmapSource pixelSource;
+            if (image.Format == PixelFormats.Bgra32)
+            {
+                pixelSource = image;
+            }
+            else
+            {
+                pixelSource = new FormatConvertedBitmap(
+                    image,
+                    PixelFormats.Bgra32,
+                    null,
+                    0);
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            var thumbnail = new WriteableBitmap(
+                pixelSource.PixelWidth,
+                pixelSource.PixelHeight,
+                NormalizeDpi(pixelSource.DpiX),
+                NormalizeDpi(pixelSource.DpiY),
+                PixelFormats.Bgra32,
+                null);
+            thumbnail.Lock();
+            try
+            {
+                var bufferSize = checked(
+                    thumbnail.BackBufferStride * thumbnail.PixelHeight);
+                pixelSource.CopyPixels(
+                    new Int32Rect(
+                        0,
+                        0,
+                        thumbnail.PixelWidth,
+                        thumbnail.PixelHeight),
+                    thumbnail.BackBuffer,
+                    bufferSize,
+                    thumbnail.BackBufferStride);
+                thumbnail.AddDirtyRect(new Int32Rect(
+                    0,
+                    0,
+                    thumbnail.PixelWidth,
+                    thumbnail.PixelHeight));
+            }
+            finally
+            {
+                thumbnail.Unlock();
+            }
+
+            if (!thumbnail.CanFreeze)
             {
                 return Failure(
                     PreviewThumbnailStatus.Corrupt,
@@ -240,31 +348,7 @@ public sealed class WpfPreviewThumbnailDecoder : IPreviewThumbnailDecoder
                     "预览图无法创建安全的静态帧。");
             }
 
-            BitmapSource thumbnail;
-            if (image.Format == PixelFormats.Bgra32)
-            {
-                image.Freeze();
-                thumbnail = image;
-            }
-            else
-            {
-                var converted = new FormatConvertedBitmap(
-                    image,
-                    PixelFormats.Bgra32,
-                    null,
-                    0);
-                if (!converted.CanFreeze)
-                {
-                    return Failure(
-                        PreviewThumbnailStatus.Corrupt,
-                        "PREVIEW_NOT_FREEZABLE",
-                        "预览图无法创建安全的静态帧。");
-                }
-
-                converted.Freeze();
-                thumbnail = converted;
-            }
-
+            thumbnail.Freeze();
             cancellationToken.ThrowIfCancellationRequested();
             var decodedBytes = PreviewThumbnailLimits.CalculateDecodedBytes(thumbnail);
             if (decodedBytes <= 0
@@ -276,12 +360,16 @@ public sealed class WpfPreviewThumbnailDecoder : IPreviewThumbnailDecoder
                     "缩略图超过解码缓存预算。");
             }
 
-            return new PreviewThumbnailResult(
+            var result = new PreviewThumbnailResult(
                 PreviewThumbnailStatus.Ready,
                 thumbnail,
                 decodedBytes,
                 null,
                 null);
+            _detachedOwnershipObserved?.Invoke(
+                new WeakReference<byte[]>(encodedBytes),
+                new WeakReference<BitmapSource>(pixelSource));
+            return result;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -327,6 +415,96 @@ public sealed class WpfPreviewThumbnailDecoder : IPreviewThumbnailDecoder
             throw new InvalidDataException("Preview source grew beyond its validated length.");
         }
     }
+
+    private static double NormalizeDpi(double dpi)
+        => double.IsFinite(dpi) && dpi > 0 ? dpi : 96d;
+
+    private static bool HandleMatchesCanonicalPath(
+        SafeFileHandle handle,
+        string canonicalPath)
+    {
+        var finalPath = TryGetFinalHandlePath(handle);
+        if (finalPath is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            var normalizedHandlePath = Path.GetFullPath(
+                RemoveExtendedPathPrefix(finalPath));
+            var normalizedRequestPath = Path.GetFullPath(
+                RemoveExtendedPathPrefix(canonicalPath));
+            return string.Equals(
+                normalizedHandlePath,
+                normalizedRequestPath,
+                StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception exception) when (exception is
+                   ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+    }
+
+    private static string? TryGetFinalHandlePath(SafeFileHandle handle)
+    {
+        var capacity = 512;
+        while (capacity <= MaximumFinalPathCharacters)
+        {
+            var buffer = new StringBuilder(capacity);
+            var written = GetFinalPathNameByHandle(
+                handle,
+                buffer,
+                checked((uint)buffer.Capacity),
+                0);
+            if (written == 0)
+            {
+                return null;
+            }
+
+            if (written < buffer.Capacity)
+            {
+                return buffer.ToString();
+            }
+
+            if (written >= MaximumFinalPathCharacters)
+            {
+                return null;
+            }
+
+            capacity = checked((int)written + 1);
+        }
+
+        return null;
+    }
+
+    private static string RemoveExtendedPathPrefix(string path)
+    {
+        const string uncPrefix = @"\\?\UNC\";
+        const string localPrefix = @"\\?\";
+        if (path.StartsWith(uncPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return @"\\" + path[uncPrefix.Length..];
+        }
+
+        return path.StartsWith(localPrefix, StringComparison.OrdinalIgnoreCase)
+            ? path[localPrefix.Length..]
+            : path;
+    }
+
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [DllImport(
+        "kernel32.dll",
+        EntryPoint = "GetFinalPathNameByHandleW",
+        CharSet = CharSet.Unicode,
+        ExactSpelling = true,
+        SetLastError = true)]
+    private static extern uint GetFinalPathNameByHandle(
+        SafeFileHandle file,
+        StringBuilder path,
+        uint pathCharacterCount,
+        uint flags);
 
     private static string NormalizeFormat(string? format, string path)
     {

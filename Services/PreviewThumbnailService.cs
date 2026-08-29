@@ -12,7 +12,12 @@ public sealed class PreviewThumbnailService : IDisposable
     private readonly Dictionary<PreviewThumbnailCacheKey, DecodeOperation> _operations = [];
     private readonly Dictionary<PreviewThumbnailCacheKey, CacheEntry> _cache = [];
     private readonly Dictionary<FailureIdentity, FailureDetails> _openFailures = [];
+    private readonly Dictionary<FailureIdentity, long> _recoveryEpochs = [];
     private readonly Queue<PreviewThumbnailSignalEventArgs> _pendingSignals = [];
+    private readonly ReentrantCallbackGate<PreviewThumbnailSignalEventArgs>
+        _statusCallbacks = new();
+    private readonly TaskCompletionSource<bool> _disposeCompletion = new(
+        TaskCreationOptions.RunContinuationsAsynchronously);
 
     private bool _disposed;
     private bool _signalPublisherActive;
@@ -35,27 +40,10 @@ public sealed class PreviewThumbnailService : IDisposable
         _decoder = decoder ?? throw new ArgumentNullException(nameof(decoder));
     }
 
-    private EventHandler<PreviewThumbnailSignalEventArgs>? _statusChanged;
-
     public event EventHandler<PreviewThumbnailSignalEventArgs>? StatusChanged
     {
-        add
-        {
-            lock (_sync)
-            {
-                if (!_disposed)
-                {
-                    _statusChanged += value;
-                }
-            }
-        }
-        remove
-        {
-            lock (_sync)
-            {
-                _statusChanged -= value;
-            }
-        }
+        add => _statusCallbacks.Add(value);
+        remove => _statusCallbacks.Remove(value);
     }
 
     public long Generation
@@ -112,6 +100,7 @@ public sealed class PreviewThumbnailService : IDisposable
             }
 
             _openFailures.Clear();
+            _recoveryEpochs.Clear();
             EnqueueSignalsLocked(signals);
         }
 
@@ -126,7 +115,6 @@ public sealed class PreviewThumbnailService : IDisposable
         ArgumentNullException.ThrowIfNull(request);
 
         DecodeOperation? operationToStart = null;
-        List<CancellationTokenSource>? cancellations = null;
         List<PreviewThumbnailSignalEventArgs>? signals = null;
         PreviewThumbnailLease lease;
 
@@ -156,16 +144,17 @@ public sealed class PreviewThumbnailService : IDisposable
                 else
                 {
                     existing.ObserverCount++;
-                    var addedIdentity = existing.FailureIdentities.Add(identity);
+                    var addedIdentity = existing.AddFailureIdentity(
+                        identity,
+                        GetRecoveryEpochLocked(identity));
                     _inFlightShareCount++;
                     if (addedIdentity && existing.Completed && existing.Result is not null)
                     {
                         if (existing.Result.IsSuccess)
                         {
-                            RetireFailureStateLocked(
+                            RecoverFailureStateLocked(
                                 [identity],
-                                existing,
-                                ref cancellations);
+                                existing);
                         }
 
                         CollectSignalsLocked(
@@ -195,15 +184,18 @@ public sealed class PreviewThumbnailService : IDisposable
                         key,
                         request,
                         identity,
+                        GetRecoveryEpochLocked(identity),
                         cached.Result,
-                        cached.FailureIdentities);
+                        cached.FailureIdentities.Select(cachedIdentity =>
+                            new KeyValuePair<FailureIdentity, long>(
+                                cachedIdentity,
+                                GetRecoveryEpochLocked(cachedIdentity))));
                     _operations.Add(key, completed);
                     if (cached.Result.IsSuccess)
                     {
-                        RetireFailureStateLocked(
+                        RecoverFailureStateLocked(
                             completed.FailureIdentities,
-                            completed,
-                            ref cancellations);
+                            completed);
                     }
 
                     CollectSignalsLocked(
@@ -215,7 +207,11 @@ public sealed class PreviewThumbnailService : IDisposable
                 }
             }
 
-            operationToStart = new DecodeOperation(key, request, identity);
+            operationToStart = new DecodeOperation(
+                key,
+                request,
+                identity,
+                GetRecoveryEpochLocked(identity));
             _operations.Add(key, operationToStart);
             _decodeRequestCount++;
             lease = CreateLease(request, operationToStart);
@@ -224,7 +220,6 @@ public sealed class PreviewThumbnailService : IDisposable
             EnqueueSignalsLocked(signals);
         }
 
-        CancelAll(cancellations);
         DrainSignals();
         if (operationToStart is not null)
         {
@@ -258,33 +253,55 @@ public sealed class PreviewThumbnailService : IDisposable
     public void Dispose()
     {
         List<CancellationTokenSource>? cancellations = null;
+        var alreadyDisposed = false;
 
         lock (_sync)
         {
             if (_disposed)
             {
-                return;
+                alreadyDisposed = true;
             }
-
-            _disposed = true;
-            foreach (var operation in _operations.Values)
+            else
             {
-                operation.Retired = true;
-                if (!operation.Completed)
+                _disposed = true;
+                foreach (var operation in _operations.Values)
                 {
-                    operation.Completion.TrySetResult(PreviewThumbnailResult.Cancelled());
-                    (cancellations ??= []).Add(operation.Cancellation);
+                    operation.Retired = true;
+                    if (!operation.Completed)
+                    {
+                        operation.Completion.TrySetResult(PreviewThumbnailResult.Cancelled());
+                        (cancellations ??= []).Add(operation.Cancellation);
+                    }
                 }
-            }
 
-            _operations.Clear();
-            ClearCacheLocked();
-            _openFailures.Clear();
-            _pendingSignals.Clear();
-            _statusChanged = null;
+                _operations.Clear();
+                ClearCacheLocked();
+                _openFailures.Clear();
+                _recoveryEpochs.Clear();
+                _pendingSignals.Clear();
+            }
         }
 
-        CancelAll(cancellations);
+        if (alreadyDisposed)
+        {
+            _statusCallbacks.Dispose();
+            if (!_statusCallbacks.IsActiveOnCurrentThread)
+            {
+                _disposeCompletion.Task.GetAwaiter().GetResult();
+            }
+
+            return;
+        }
+
+        try
+        {
+            CancelAll(cancellations);
+        }
+        finally
+        {
+            _statusCallbacks.Dispose();
+            _disposeCompletion.TrySetResult(true);
+        }
     }
 
     private PreviewThumbnailLease CreateLease(
@@ -438,7 +455,6 @@ public sealed class PreviewThumbnailService : IDisposable
         DecodeOperation operation,
         PreviewThumbnailResult result)
     {
-        List<CancellationTokenSource>? cancellations = null;
         List<PreviewThumbnailSignalEventArgs>? signals = null;
 
         lock (_sync)
@@ -459,14 +475,19 @@ public sealed class PreviewThumbnailService : IDisposable
                 return;
             }
 
+            if (result.IsStableFailure && RecoveredSinceStartLocked(operation))
+            {
+                _staleDiscardCount++;
+                result = PreviewThumbnailResult.Stale();
+            }
+
             operation.Completed = true;
             operation.Result = result;
             if (result.IsSuccess)
             {
-                RetireFailureStateLocked(
+                RecoverFailureStateLocked(
                     operation.FailureIdentities,
-                    operation,
-                    ref cancellations);
+                    operation);
             }
 
             CollectSignalsLocked(result, operation.FailureIdentities, ref signals);
@@ -488,7 +509,6 @@ public sealed class PreviewThumbnailService : IDisposable
             EnqueueSignalsLocked(signals);
         }
 
-        CancelAll(cancellations);
         DrainSignals();
     }
 
@@ -569,15 +589,19 @@ public sealed class PreviewThumbnailService : IDisposable
         }
     }
 
-    private void RetireFailureStateLocked(
+    private void RecoverFailureStateLocked(
         IEnumerable<FailureIdentity> recoveredIdentities,
-        DecodeOperation except,
-        ref List<CancellationTokenSource>? cancellations)
+        DecodeOperation except)
     {
         var recovered = recoveredIdentities.ToHashSet();
         if (recovered.Count == 0)
         {
             return;
+        }
+
+        foreach (var identity in recovered)
+        {
+            _recoveryEpochs[identity] = checked(GetRecoveryEpochLocked(identity) + 1);
         }
 
         foreach (var (key, entry) in _cache.ToArray())
@@ -597,7 +621,8 @@ public sealed class PreviewThumbnailService : IDisposable
         {
             if (ReferenceEquals(operation, except)
                 || !operation.FailureIdentities.Any(recovered.Contains)
-                || (operation.Completed && operation.Result?.IsStableFailure != true))
+                || !operation.Completed
+                || operation.Result?.IsStableFailure != true)
             {
                 continue;
             }
@@ -609,14 +634,15 @@ public sealed class PreviewThumbnailService : IDisposable
                 _operations.Remove(key);
             }
 
-            if (!operation.Completed)
-            {
-                _staleDiscardCount++;
-                operation.Completion.TrySetResult(PreviewThumbnailResult.Stale());
-                (cancellations ??= []).Add(operation.Cancellation);
-            }
         }
     }
+
+    private bool RecoveredSinceStartLocked(DecodeOperation operation)
+        => operation.FailureEpochs.Any(pair =>
+            GetRecoveryEpochLocked(pair.Key) > pair.Value);
+
+    private long GetRecoveryEpochLocked(FailureIdentity identity)
+        => _recoveryEpochs.GetValueOrDefault(identity);
 
     private void ClearCacheLocked()
     {
@@ -737,7 +763,6 @@ public sealed class PreviewThumbnailService : IDisposable
             while (true)
             {
                 PreviewThumbnailSignalEventArgs signal;
-                Delegate[] handlers;
                 lock (_sync)
                 {
                     if (_disposed)
@@ -751,35 +776,12 @@ public sealed class PreviewThumbnailService : IDisposable
                         return;
                     }
 
-                    handlers = _statusChanged?.GetInvocationList() ?? [];
                 }
 
-                foreach (EventHandler<PreviewThumbnailSignalEventArgs> handler in handlers)
-                {
-                    lock (_sync)
-                    {
-                        if (_disposed)
-                        {
-                            _pendingSignals.Clear();
-                            return;
-                        }
-
-                        if (_statusChanged is null
-                            || !_statusChanged.GetInvocationList().Contains(handler))
-                        {
-                            continue;
-                        }
-                    }
-
-                    try
-                    {
-                        handler(this, signal);
-                    }
-                    catch (Exception exception) when (!IsFatal(exception))
-                    {
-                        // A diagnostic observer must not break thumbnail delivery.
-                    }
-                }
+                _statusCallbacks.Invoke(
+                    this,
+                    signal,
+                    static exception => !IsFatal(exception));
             }
         }
         finally
@@ -841,11 +843,16 @@ public sealed class PreviewThumbnailService : IDisposable
         internal DecodeOperation(
             PreviewThumbnailCacheKey key,
             PreviewThumbnailRequest request,
-            FailureIdentity identity)
+            FailureIdentity identity,
+            long recoveryEpoch)
         {
             Key = key;
             Request = request;
             FailureIdentities = [identity];
+            FailureEpochs = new Dictionary<FailureIdentity, long>
+            {
+                [identity] = recoveryEpoch
+            };
         }
 
         internal PreviewThumbnailCacheKey Key { get; }
@@ -859,6 +866,19 @@ public sealed class PreviewThumbnailService : IDisposable
 
         internal HashSet<FailureIdentity> FailureIdentities { get; }
 
+        internal Dictionary<FailureIdentity, long> FailureEpochs { get; }
+
+        internal bool AddFailureIdentity(FailureIdentity identity, long recoveryEpoch)
+        {
+            if (!FailureIdentities.Add(identity))
+            {
+                return false;
+            }
+
+            FailureEpochs.Add(identity, recoveryEpoch);
+            return true;
+        }
+
         internal int ObserverCount { get; set; } = 1;
 
         internal bool Completed { get; set; }
@@ -871,15 +891,24 @@ public sealed class PreviewThumbnailService : IDisposable
             PreviewThumbnailCacheKey key,
             PreviewThumbnailRequest request,
             FailureIdentity identity,
+            long recoveryEpoch,
             PreviewThumbnailResult result,
-            IEnumerable<FailureIdentity> cachedFailureIdentities)
+            IEnumerable<KeyValuePair<FailureIdentity, long>> cachedFailureEpochs)
         {
-            var operation = new DecodeOperation(key, request, identity)
+            var operation = new DecodeOperation(
+                key,
+                request,
+                identity,
+                recoveryEpoch)
             {
                 Completed = true,
                 Result = result
             };
-            operation.FailureIdentities.UnionWith(cachedFailureIdentities);
+            foreach (var cached in cachedFailureEpochs)
+            {
+                operation.AddFailureIdentity(cached.Key, cached.Value);
+            }
+
             operation.Completion.TrySetResult(result);
             operation.Cancellation.Dispose();
             return operation;
@@ -926,4 +955,153 @@ public sealed class PreviewThumbnailLease : IDisposable
         => new(request, Task.FromResult(result), null);
 
     public void Dispose() => Interlocked.Exchange(ref _release, null)?.Invoke();
+}
+
+internal sealed class ReentrantCallbackGate<TEventArgs> : IDisposable
+    where TEventArgs : EventArgs
+{
+    private readonly object _sync = new();
+    private readonly Dictionary<int, int> _activeCallbacksByThread = [];
+    private EventHandler<TEventArgs>? _handlers;
+    private bool _disposed;
+    private int _activeCallbacks;
+
+    internal bool IsActiveOnCurrentThread
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _activeCallbacksByThread.ContainsKey(
+                    Environment.CurrentManagedThreadId);
+            }
+        }
+    }
+
+    internal void Add(EventHandler<TEventArgs>? handler)
+    {
+        if (handler is null)
+        {
+            return;
+        }
+
+        lock (_sync)
+        {
+            if (!_disposed)
+            {
+                _handlers += handler;
+            }
+        }
+    }
+
+    internal void Remove(EventHandler<TEventArgs>? handler)
+    {
+        if (handler is null)
+        {
+            return;
+        }
+
+        lock (_sync)
+        {
+            _handlers -= handler;
+        }
+    }
+
+    internal void Invoke(
+        object sender,
+        TEventArgs args,
+        Func<Exception, bool>? suppressException = null)
+    {
+        Delegate[] snapshot;
+        lock (_sync)
+        {
+            if (_disposed || _handlers is null)
+            {
+                return;
+            }
+
+            snapshot = _handlers.GetInvocationList();
+        }
+
+        foreach (EventHandler<TEventArgs> handler in snapshot)
+        {
+            if (!TryBeginCallback(handler))
+            {
+                continue;
+            }
+
+            try
+            {
+                handler(sender, args);
+            }
+            catch (Exception exception) when (suppressException?.Invoke(exception) == true)
+            {
+                // The owner decides which observer failures are safe to isolate.
+            }
+            finally
+            {
+                EndCallback();
+            }
+        }
+    }
+
+    public void Dispose()
+    {
+        lock (_sync)
+        {
+            _disposed = true;
+            _handlers = null;
+            if (_activeCallbacksByThread.ContainsKey(Environment.CurrentManagedThreadId))
+            {
+                return;
+            }
+
+            while (_activeCallbacks > 0)
+            {
+                Monitor.Wait(_sync);
+            }
+        }
+    }
+
+    private bool TryBeginCallback(EventHandler<TEventArgs> handler)
+    {
+        lock (_sync)
+        {
+            if (_disposed
+                || _handlers is null
+                || !_handlers.GetInvocationList().Contains(handler))
+            {
+                return false;
+            }
+
+            _activeCallbacks++;
+            var threadId = Environment.CurrentManagedThreadId;
+            _activeCallbacksByThread[threadId] =
+                _activeCallbacksByThread.GetValueOrDefault(threadId) + 1;
+            return true;
+        }
+    }
+
+    private void EndCallback()
+    {
+        lock (_sync)
+        {
+            _activeCallbacks--;
+            var threadId = Environment.CurrentManagedThreadId;
+            var threadCallbacks = _activeCallbacksByThread[threadId] - 1;
+            if (threadCallbacks == 0)
+            {
+                _activeCallbacksByThread.Remove(threadId);
+            }
+            else
+            {
+                _activeCallbacksByThread[threadId] = threadCallbacks;
+            }
+
+            if (_activeCallbacks == 0)
+            {
+                Monitor.PulseAll(_sync);
+            }
+        }
+    }
 }

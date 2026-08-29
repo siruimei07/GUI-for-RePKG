@@ -26,6 +26,10 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
     private readonly ScanSession _scanSession;
     private readonly ProblemCenterSession _problemCenterSession;
     private readonly PreviewThumbnailService _thumbnailService;
+    private readonly ReentrantCallbackGate<PreviewThumbnailSignalEventArgs>
+        _previewCallbacks = new();
+    private readonly TaskCompletionSource<bool> _disposeCompletion = new(
+        TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly SynchronizationContext? _ownerContext;
     private readonly int _ownerThreadId;
     private readonly List<BrowseProjectViewModel> _allProjects = [];
@@ -39,6 +43,7 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
     private int _columnCount = 4;
     private string? _focusedProjectKey;
     private volatile bool _disposed;
+    private int _disposeStarted;
     private long _lastPreviewSignalSequence;
     private bool _suppressSelectionNotifications;
     private bool _selectionChangedWhileSuppressed;
@@ -64,7 +69,11 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
         ApplySnapshot(_scanSession.ProjectSnapshot);
     }
 
-    public event EventHandler<PreviewThumbnailSignalEventArgs>? PreviewStatusChanged;
+    public event EventHandler<PreviewThumbnailSignalEventArgs>? PreviewStatusChanged
+    {
+        add => _previewCallbacks.Add(value);
+        remove => _previewCallbacks.Remove(value);
+    }
 
     public RangeObservableCollection<BrowseRowViewModel> Rows { get; } = [];
 
@@ -303,17 +312,32 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
 
     public void Dispose()
     {
-        if (_disposed)
+        if (Interlocked.CompareExchange(ref _disposeStarted, 1, 0) != 0)
         {
+            _previewCallbacks.Dispose();
+            if (!_previewCallbacks.IsActiveOnCurrentThread)
+            {
+                _disposeCompletion.Task.GetAwaiter().GetResult();
+            }
+
             return;
         }
 
         _disposed = true;
-        _scanSession.PropertyChanged -= OnScanSessionPropertyChanged;
-        _problemCenterSession.Changed -= OnProblemsChanged;
-        _thumbnailService.StatusChanged -= OnThumbnailStatusChanged;
-        _thumbnailService.Dispose();
-        DetachCards();
+        try
+        {
+            _scanSession.PropertyChanged -= OnScanSessionPropertyChanged;
+            _problemCenterSession.Changed -= OnProblemsChanged;
+            _thumbnailService.StatusChanged -= OnThumbnailStatusChanged;
+            _thumbnailService.Dispose();
+            _previewCallbacks.Dispose();
+            DetachCards();
+        }
+        finally
+        {
+            _previewCallbacks.Dispose();
+            _disposeCompletion.TrySetResult(true);
+        }
     }
 
     private void OnScanSessionPropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -429,7 +453,7 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
         }
 
         _lastPreviewSignalSequence = args.Sequence;
-        PreviewStatusChanged?.Invoke(this, args);
+        _previewCallbacks.Invoke(this, args);
     }
 
     private static SynchronizationContext? CaptureOwnerContext()

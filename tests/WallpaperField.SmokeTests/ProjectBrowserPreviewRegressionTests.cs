@@ -20,13 +20,16 @@ internal static class ProjectBrowserPreviewRegressionTests
         VerifySurfaceAndLimits(assert);
         await VerifyRealDecoderAsync(assert);
         await VerifyImmutableValidatedSourceAsync(assert);
+        await VerifyHandleIdentityAgainstAncestorSwapAsync(assert);
         await VerifyInFlightAndConcurrencyAsync(assert);
+        await VerifyHealthyCrossBucketConcurrencyAsync(assert);
         await VerifyCacheAndLeaseLifecycleAsync(assert);
         await VerifyMaliciousResultNormalizationAsync(assert);
         await VerifyFatalDecoderCompletionAsync(assert);
         await VerifyOrderedSignalLifecycleAsync(assert);
         await VerifyFailureRetryAndGenerationAsync(assert);
         await VerifyViewportControlAsync(assert);
+        await VerifyBrowseDisposeCallbackBarrierAsync(assert);
         await VerifyBrowseSignalAffinityAsync(assert);
         await VerifyBrowseIntegrationSurfaceAsync(assert);
     }
@@ -135,6 +138,8 @@ internal static class ProjectBrowserPreviewRegressionTests
             "PNG/JPEG/GIF static thumbnail decoder did not return ready results.");
         assert(results.All(result => result.Bitmap?.IsFrozen == true),
             "A decoded project thumbnail was not frozen for cross-thread use.");
+        assert(results.All(result => result.Bitmap is WriteableBitmap),
+            "A decoded thumbnail retained a BitmapImage/FormatConvertedBitmap source graph instead of detached pixels.");
         assert(results.All(result => result.Bitmap!.PixelWidth <= 256),
             "A decoded project thumbnail ignored its target size bucket.");
         var gifPixel = ReadFirstBgraPixel(results[2].Bitmap!);
@@ -144,6 +149,7 @@ internal static class ProjectBrowserPreviewRegressionTests
             CreateDecodeRequest(highBitPath, 64),
             CancellationToken.None);
         assert(highBitResult.IsSuccess
+               && highBitResult.Bitmap is WriteableBitmap
                && highBitResult.DecodedBytes == CalculateAlignedBitmapBytes(highBitResult.Bitmap!)
                && highBitResult.DecodedBytes <= PreviewThumbnailLimits.MaximumDecodedCacheBytes,
             "A real high-bit-depth PNG reported inaccurate decoded/cache bytes.");
@@ -177,6 +183,42 @@ internal static class ProjectBrowserPreviewRegressionTests
                    && highBitMetrics.CacheDecodedBytes
                    <= PreviewThumbnailLimits.MaximumDecodedCacheBytes,
                 "A real high-bit-depth PNG did not normalize to exact bounded cache bytes.");
+        }
+        var ownershipConstructor = typeof(WpfPreviewThumbnailDecoder).GetConstructor(
+            BindingFlags.Instance | BindingFlags.NonPublic,
+            binder: null,
+            [
+                typeof(Action<int>),
+                typeof(Action),
+                typeof(Action<WeakReference<byte[]>, WeakReference<BitmapSource>>)
+            ],
+            modifiers: null);
+        WeakReference<byte[]>? encodedOwner = null;
+        WeakReference<BitmapSource>? sourceOwner = null;
+        assert(ownershipConstructor is not null,
+            "The real decoder lacks a deterministic detached-source ownership probe.");
+        if (ownershipConstructor is not null)
+        {
+            var ownershipDecoder = (WpfPreviewThumbnailDecoder)ownershipConstructor.Invoke(
+            [
+                (Action<int>)(_ => { }),
+                null!,
+                (Action<WeakReference<byte[]>, WeakReference<BitmapSource>>)(
+                    (encoded, source) =>
+                    {
+                        encodedOwner = encoded;
+                        sourceOwner = source;
+                    })
+            ]);
+            var detachedResult = await ownershipDecoder.DecodeAsync(
+                CreateDecodeRequest(highBitPath, 64),
+                CancellationToken.None);
+            var oldOwnersCollected = await WaitForWeakOwnersCollectionAsync(
+                encodedOwner,
+                sourceOwner);
+            assert(detachedResult.Bitmap is WriteableBitmap
+                   && oldOwnersCollected,
+                "A detached thumbnail retained its encoded buffer or WPF source surface after completion.");
         }
         assert(workerThreadIds.Count == 4
                && workerThreadIds.All(threadId => threadId != callerThreadId),
@@ -457,6 +499,126 @@ internal static class ProjectBrowserPreviewRegressionTests
             "A pathname swap after metadata validation changed the decoded pixel source.");
     }
 
+    private static async Task VerifyHealthyCrossBucketConcurrencyAsync(
+        Action<bool, string> assert)
+    {
+        var release256 = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var release384 = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var decoder = new ControlledDecoder(async (request, _) =>
+        {
+            if (request.SizeBucket == 256)
+            {
+                await release256.Task;
+            }
+            else
+            {
+                await release384.Task;
+            }
+
+            return PreviewThumbnailResult.Ready(CreateFrozenBitmap(8, 8));
+        });
+        using var service = new PreviewThumbnailService(decoder);
+        service.SetGeneration(12);
+        var request256 = CreateFakeRequest(12, generation: 12);
+        var request384 = new PreviewThumbnailRequest(
+            request256.ProjectKey,
+            request256.CanonicalPath,
+            request256.ScanFileLength,
+            request256.ScanLastWriteTimeUtc,
+            request256.PreviewFormat,
+            321,
+            request256.Generation);
+        using var lease256 = service.Acquire(request256);
+        using var lease384 = service.Acquire(request384);
+        await WaitUntilAsync(() => decoder.CallCount == 2);
+
+        release384.TrySetResult(true);
+        var result384 = await lease384.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+        release256.TrySetResult(true);
+        var result256 = await lease256.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+        assert(result256.IsSuccess
+               && result384.IsSuccess
+               && service.GetMetrics().StaleDiscardCount == 0,
+            "A healthy faster size bucket incorrectly retired a slower healthy decode as Stale.");
+    }
+
+    private static async Task VerifyHandleIdentityAgainstAncestorSwapAsync(
+        Action<bool, string> assert)
+    {
+        using var fixture = new PreviewFixture();
+        var safeDirectory = fixture.CreateDirectory("safe-parent");
+        var attackerDirectory = fixture.CreateDirectory("attacker-parent");
+        var safePath = fixture.WriteBitmap(
+            Path.Combine("safe-parent", "preview.png"),
+            new PngBitmapEncoder(),
+            CreateFrozenBitmap(16, 10, blue: 0, green: 0, red: 255));
+        var attackerPath = fixture.WriteBitmap(
+            Path.Combine("attacker-parent", "preview.png"),
+            new PngBitmapEncoder(),
+            CreateFrozenBitmap(16, 10, blue: 255, green: 0, red: 0));
+        EqualizeFileEnvelope(safePath, attackerPath);
+        var request = CreateDecodeRequest(safePath, 64);
+        var holdingDirectory = Path.Combine(fixture.Root, "safe-parent-holding");
+        var constructor = typeof(WpfPreviewThumbnailDecoder).GetConstructor(
+            BindingFlags.Instance | BindingFlags.NonPublic,
+            binder: null,
+            [typeof(Action<int>), typeof(Action), typeof(Action), typeof(Action)],
+            modifiers: null);
+        assert(constructor is not null,
+            "The real decoder lacks deterministic before-open/after-handle-open race barriers.");
+        if (constructor is null)
+        {
+            return;
+        }
+
+        var swapped = false;
+        var restored = false;
+        var decoder = (WpfPreviewThumbnailDecoder)constructor.Invoke(
+        [
+            (Action<int>)(_ => { }),
+            null!,
+            (Action)(() =>
+            {
+                Directory.Move(safeDirectory, holdingDirectory);
+                CreateDirectoryJunction(safeDirectory, attackerDirectory);
+                swapped = true;
+            }),
+            (Action)(() =>
+            {
+                Directory.Delete(safeDirectory);
+                Directory.Move(holdingDirectory, safeDirectory);
+                restored = true;
+            })
+        ]);
+
+        PreviewThumbnailResult result;
+        try
+        {
+            result = await decoder.DecodeAsync(request, CancellationToken.None);
+        }
+        finally
+        {
+            if (Directory.Exists(safeDirectory)
+                && (File.GetAttributes(safeDirectory) & FileAttributes.ReparsePoint) != 0)
+            {
+                Directory.Delete(safeDirectory);
+            }
+
+            if (Directory.Exists(holdingDirectory) && !Directory.Exists(safeDirectory))
+            {
+                Directory.Move(holdingDirectory, safeDirectory);
+            }
+        }
+
+        assert(swapped
+               && restored
+               && result.Status == PreviewThumbnailStatus.ReparsePoint
+               && result.Bitmap is null,
+            "An ancestor junction swap made the decoder consume a different final handle path.");
+    }
+
     private static async Task VerifyCacheAndLeaseLifecycleAsync(Action<bool, string> assert)
     {
         var decoder = new ControlledDecoder((_, _) => Task.FromResult(
@@ -695,7 +857,7 @@ internal static class ProjectBrowserPreviewRegressionTests
                 321,
                 request256.Generation);
             var oldLease = service.Acquire(request256);
-            var oldTerminalBeforeRelease = false;
+            var oldRemainedPendingUntilDecode = false;
             PreviewThumbnailResult oldResult;
             try
             {
@@ -713,10 +875,10 @@ internal static class ProjectBrowserPreviewRegressionTests
                         "The concurrent cross-bucket retry fixture did not recover.");
                 }
 
-                oldTerminalBeforeRelease = await Task.WhenAny(
-                                               oldLease.Completion,
-                                               Task.Delay(TimeSpan.FromSeconds(1)))
-                                           == oldLease.Completion;
+                oldRemainedPendingUntilDecode = await Task.WhenAny(
+                                                    oldLease.Completion,
+                                                    Task.Delay(TimeSpan.FromSeconds(1)))
+                                                != oldLease.Completion;
                 releaseOld.TrySetResult(true);
                 oldResult = await oldLease.Completion.WaitAsync(TimeSpan.FromSeconds(2));
             }
@@ -730,7 +892,7 @@ internal static class ProjectBrowserPreviewRegressionTests
             var recoveredResult = await recovered256.Completion;
             await WaitUntilAsync(() => service.GetMetrics().ActiveDecodes == 0);
             var published = signals.ToArray();
-            assert(oldTerminalBeforeRelease
+            assert(oldRemainedPendingUntilDecode
                    && oldResult.Status == PreviewThumbnailStatus.Stale
                    && recoveredResult.IsSuccess
                    && published.Select(signal => signal.Kind).SequenceEqual(
@@ -1029,6 +1191,7 @@ internal static class ProjectBrowserPreviewRegressionTests
         {
             firstHandlerEntered.Set();
             allowFirstHandler.Wait(TimeSpan.FromSeconds(5));
+            service.Dispose();
             firstHandlerReturned.Set();
         };
         service.StatusChanged += (_, _) =>
@@ -1043,20 +1206,47 @@ internal static class ProjectBrowserPreviewRegressionTests
         _ = await lease.Completion;
         await WaitUntilAsync(() => firstHandlerEntered.IsSet);
         var disposeTask = Task.Run(service.Dispose);
-        var disposedWithoutWaitingOnObserver = await Task.WhenAny(
+        var disposeReturnedBeforeRelease = await Task.WhenAny(
             disposeTask,
             Task.Delay(TimeSpan.FromSeconds(1))) == disposeTask;
-        if (disposedWithoutWaitingOnObserver)
+        if (disposeReturnedBeforeRelease)
         {
             Volatile.Write(ref disposeReturned, 1);
         }
 
         allowFirstHandler.Set();
         await disposeTask.WaitAsync(TimeSpan.FromSeconds(2));
+        Volatile.Write(ref disposeReturned, 1);
         await WaitUntilAsync(() => firstHandlerReturned.IsSet);
         await Task.Delay(50);
-        assert(disposedWithoutWaitingOnObserver && postDisposeCallbacks == 0,
-            "A captured thumbnail signal invocation ran after Dispose or disposal deadlocked on an observer.");
+        assert(!disposeReturnedBeforeRelease && postDisposeCallbacks == 0,
+            "Service Dispose did not wait for an active callback or allowed a captured callback afterward.");
+
+        var selfDecoder = new ControlledDecoder(async (_, _) =>
+        {
+            await Task.Yield();
+            return PreviewThumbnailResult.Failure(
+                PreviewThumbnailStatus.Corrupt,
+                "PREVIEW_SELF_DISPOSE",
+                "预览图损坏。");
+        });
+        var selfService = new PreviewThumbnailService(selfDecoder);
+        selfService.SetGeneration(82);
+        var selfDisposeReturned = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondHandlerCalls = 0;
+        selfService.StatusChanged += (_, _) =>
+        {
+            selfService.Dispose();
+            selfDisposeReturned.TrySetResult(true);
+        };
+        selfService.StatusChanged += (_, _) => Interlocked.Increment(
+            ref secondHandlerCalls);
+        using var selfLease = selfService.Acquire(CreateFakeRequest(82, generation: 82));
+        _ = await selfLease.Completion;
+        await selfDisposeReturned.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        assert(secondHandlerCalls == 0,
+            "A handler-initiated Service Dispose deadlocked or allowed the next handler to start.");
     }
 
     private static async Task VerifyViewportControlAsync(Action<bool, string> assert)
@@ -1398,6 +1588,96 @@ internal static class ProjectBrowserPreviewRegressionTests
         });
     }
 
+    private static async Task VerifyBrowseDisposeCallbackBarrierAsync(
+        Action<bool, string> assert)
+    {
+        var selfDisposeSafe = false;
+        var concurrentDisposeSafe = false;
+        await RunOnStaAsync(async () =>
+        {
+            var selfShell = WallpaperField.Composition.AppComposition
+                .CreateShellViewModel();
+            try
+            {
+                var browse = selfShell.BrowsePageViewModel;
+                var firstReturned = new TaskCompletionSource<bool>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                var secondCalls = 0;
+                browse.PreviewStatusChanged += (_, _) =>
+                {
+                    browse.Dispose();
+                    firstReturned.TrySetResult(true);
+                };
+                browse.PreviewStatusChanged += (_, _) => Interlocked.Increment(
+                    ref secondCalls);
+                using var lease = browse.ThumbnailService.Acquire(
+                    CreateMissingRequest("browse-self-dispose", browse.ThumbnailGeneration));
+                _ = await lease.Completion;
+                await WaitUntilAsync(
+                    () => firstReturned.Task.IsCompleted,
+                    dispatcher: Dispatcher.CurrentDispatcher);
+                await DrainAsync(
+                    Dispatcher.CurrentDispatcher,
+                    DispatcherPriority.ApplicationIdle);
+                selfDisposeSafe = secondCalls == 0;
+            }
+            finally
+            {
+                selfShell.Dispose();
+            }
+
+            var concurrentShell = WallpaperField.Composition.AppComposition
+                .CreateShellViewModel();
+            using var callbackEntered = new ManualResetEventSlim(false);
+            using var allowCallback = new ManualResetEventSlim(false);
+            using var disposeReturned = new ManualResetEventSlim(false);
+            try
+            {
+                var browse = concurrentShell.BrowsePageViewModel;
+                var secondCalls = 0;
+                browse.PreviewStatusChanged += (_, _) =>
+                {
+                    callbackEntered.Set();
+                    allowCallback.Wait(TimeSpan.FromSeconds(5));
+                    browse.Dispose();
+                };
+                browse.PreviewStatusChanged += (_, _) => Interlocked.Increment(
+                    ref secondCalls);
+                var disposeTask = Task.Run(() =>
+                {
+                    callbackEntered.Wait(TimeSpan.FromSeconds(2));
+                    browse.Dispose();
+                    disposeReturned.Set();
+                });
+                var releaseTask = Task.Run(() =>
+                {
+                    callbackEntered.Wait(TimeSpan.FromSeconds(2));
+                    var returnedEarly = disposeReturned.Wait(TimeSpan.FromMilliseconds(250));
+                    allowCallback.Set();
+                    return returnedEarly;
+                });
+                using var lease = browse.ThumbnailService.Acquire(
+                    CreateMissingRequest("browse-concurrent-dispose", browse.ThumbnailGeneration));
+                _ = await lease.Completion;
+                var returnedBeforeRelease = await releaseTask.WaitAsync(
+                    TimeSpan.FromSeconds(3));
+                await disposeTask.WaitAsync(TimeSpan.FromSeconds(3));
+                await DrainAsync(
+                    Dispatcher.CurrentDispatcher,
+                    DispatcherPriority.ApplicationIdle);
+                concurrentDisposeSafe = !returnedBeforeRelease && secondCalls == 0;
+            }
+            finally
+            {
+                allowCallback.Set();
+                concurrentShell.Dispose();
+            }
+        });
+
+        assert(selfDisposeSafe && concurrentDisposeSafe,
+            "Browse Dispose deadlocked/released early or allowed a later captured callback to start.");
+    }
+
     private static PreviewThumbnailDecodeRequest CreateDecodeRequest(
         string path,
         int requestedPixelWidth)
@@ -1410,6 +1690,20 @@ internal static class ProjectBrowserPreviewRegressionTests
             new DateTimeOffset(info.LastWriteTimeUtc),
             Path.GetExtension(path).ToLowerInvariant(),
             PreviewThumbnailLimits.GetSizeBucket(requestedPixelWidth));
+    }
+
+    private static void EqualizeFileEnvelope(string firstPath, string secondPath)
+    {
+        var first = File.ReadAllBytes(firstPath);
+        var second = File.ReadAllBytes(secondPath);
+        var length = Math.Max(first.Length, second.Length);
+        Array.Resize(ref first, length);
+        Array.Resize(ref second, length);
+        File.WriteAllBytes(firstPath, first);
+        File.WriteAllBytes(secondPath, second);
+        var timestamp = DateTime.UtcNow.AddMinutes(-1);
+        File.SetLastWriteTimeUtc(firstPath, timestamp);
+        File.SetLastWriteTimeUtc(secondPath, timestamp);
     }
 
     private static PreviewThumbnailRequest CreateFakeRequest(
@@ -1553,6 +1847,32 @@ internal static class ProjectBrowserPreviewRegressionTests
                 await Task.Delay(10);
             }
         }
+    }
+
+    private static async Task<bool> WaitForWeakOwnersCollectionAsync(
+        WeakReference<byte[]>? encodedOwner,
+        WeakReference<BitmapSource>? sourceOwner)
+    {
+        if (encodedOwner is null || sourceOwner is null)
+        {
+            return false;
+        }
+
+        for (var attempt = 0; attempt < 8; attempt++)
+        {
+            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
+            GC.WaitForPendingFinalizers();
+            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
+            if (!encodedOwner.TryGetTarget(out _)
+                && !sourceOwner.TryGetTarget(out _))
+            {
+                return true;
+            }
+
+            await Task.Delay(10);
+        }
+
+        return false;
     }
 
     private static Task DrainAsync(Dispatcher dispatcher, DispatcherPriority priority)
