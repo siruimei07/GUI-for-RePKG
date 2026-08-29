@@ -39,6 +39,8 @@ public sealed class ScanSession : ObservableObject
     private string _sourcePath = string.Empty;
     private string _outputPath = string.Empty;
     private ScanSnapshotIdentity? _scanIdentity;
+    private ScanProjectSnapshot? _projectSnapshot;
+    private long _snapshotRevision;
     private string _scanSearchText = string.Empty;
     private bool _showOnlyProcessable;
     private bool _showOnlyProblems;
@@ -142,6 +144,12 @@ public sealed class ScanSession : ObservableObject
                 OnPropertiesChanged(nameof(IsCurrentIdentity), nameof(UnpackToolTip));
             }
         }
+    }
+
+    public ScanProjectSnapshot? ProjectSnapshot
+    {
+        get => _projectSnapshot;
+        private set => SetProperty(ref _projectSnapshot, value);
     }
 
     public string ScanSearchText
@@ -364,6 +372,113 @@ public sealed class ScanSession : ObservableObject
             .Select(card => card.Record)
             .ToArray();
 
+    public bool TrySetUnpackSelection(
+        WallpaperCardViewModel card,
+        bool selected)
+    {
+        ArgumentNullException.ThrowIfNull(card);
+        if (HasActiveForegroundOperation()
+            || !ScannedWallpapers.Any(candidate => ReferenceEquals(candidate, card)))
+        {
+            return false;
+        }
+
+        card.IsSelectedForUnpack = selected;
+        return card.IsSelectedForUnpack == (selected && card.CanSelectForUnpack);
+    }
+
+    public bool TrySetUnpackSelection(
+        IReadOnlyList<WallpaperCardViewModel> cards,
+        bool selected)
+    {
+        ArgumentNullException.ThrowIfNull(cards);
+        if (HasActiveForegroundOperation()
+            || cards.Any(card => card is null
+                || !ScannedWallpapers.Any(candidate => ReferenceEquals(candidate, card))))
+        {
+            return false;
+        }
+
+        SetSelection(cards, selected);
+        return true;
+    }
+
+    public bool TryClearUnpackSelection()
+    {
+        if (HasActiveForegroundOperation())
+        {
+            return false;
+        }
+
+        SetSelection(ScannedWallpapers.ToArray(), selected: false);
+        return true;
+    }
+
+    public bool TryFreezeSelectedRequest(
+        out FrozenWallpaperProcessRequest? request)
+        => TryCreateProcessRequest(
+            ScannedWallpapers
+                .Where(card => card.IsSelectedForUnpack && card.IsProcessable)
+                .Select(card => card.Record)
+                .ToArray(),
+            out request);
+
+    public bool TryFreezeItemRequest(
+        WallpaperCardViewModel card,
+        out FrozenWallpaperProcessRequest? request)
+    {
+        ArgumentNullException.ThrowIfNull(card);
+        if (!ScannedWallpapers.Any(candidate => ReferenceEquals(candidate, card)))
+        {
+            request = null;
+            return false;
+        }
+
+        return TryCreateProcessRequest([card.Record], out request);
+    }
+
+    public bool TryFreezeItemRequest(
+        WallpaperRecord item,
+        out FrozenWallpaperProcessRequest? request)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+        return TryCreateProcessRequest([item], out request);
+    }
+
+    public bool IsCurrentSnapshot(FrozenWallpaperProcessRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var snapshot = ProjectSnapshot;
+        if (snapshot is null
+            || request.SnapshotRevision != snapshot.Revision
+            || request.SnapshotIdentity != snapshot.Identity
+            || !IsCurrentScanIdentity()
+            || !PathsEqualOrFalse(request.OutputDirectory, snapshot.Identity.OutputDirectory)
+            || request.Items is null
+            || request.Items.Count == 0)
+        {
+            return false;
+        }
+
+        var records = snapshot.Projects.Select(card => card.Record).ToArray();
+        var seenItems = new HashSet<WallpaperRecord>(ReferenceEqualityComparer.Instance);
+        var seenTargets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in request.Items)
+        {
+            if (item is null
+                || !item.IsProcessable
+                || !records.Any(record => ReferenceEquals(record, item))
+                || !seenItems.Add(item)
+                || !TryNormalizeOutputTarget(item.OutputDirectory, out var outputTarget)
+                || !seenTargets.Add(outputTarget))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     public void ApplyItemResults(
         Guid operationId,
         IReadOnlyList<WallpaperUnpackItemResult> results)
@@ -466,11 +581,21 @@ public sealed class ScanSession : ObservableObject
                 "SCAN_OPERATION_FAILED",
                 NormalizeIssueContext(request.SourceDirectory));
 
-            ReplaceItems(result.Items);
-            ScanIdentity = new ScanSnapshotIdentity(
+            var cards = result.Items
+                .Select(record => new WallpaperCardViewModel(record, OnSelectionChanged))
+                .ToArray();
+            var revision = checked(_snapshotRevision + 1);
+            ReplaceItems(cards);
+            var identity = new ScanSnapshotIdentity(
                 Path.GetFullPath(request.SourceDirectory),
                 Path.GetFullPath(request.OutputDirectory),
                 result.CompletedAtUtc);
+            ScanIdentity = identity;
+            _snapshotRevision = revision;
+            ProjectSnapshot = new ScanProjectSnapshot(
+                identity,
+                revision,
+                Array.AsReadOnly(cards));
             SuccessCount = result.SuccessCount;
             FailureCount = result.FailedCount;
             ScannedCount = result.SuccessCount + result.FailedCount;
@@ -737,12 +862,48 @@ public sealed class ScanSession : ObservableObject
         CurrentTitle = string.Empty;
     }
 
-    private void ReplaceItems(IEnumerable<WallpaperRecord> records)
+    private void ReplaceItems(IEnumerable<WallpaperCardViewModel> cards)
     {
-        ScannedWallpapers.ReplaceRange(records.Select(
-            record => new WallpaperCardViewModel(record, OnSelectionChanged)));
+        ScannedWallpapers.ReplaceRange(cards);
         SynchronizeCardIssueStates();
         NotifyFilterChanged();
+    }
+
+    private bool TryCreateProcessRequest(
+        IReadOnlyList<WallpaperRecord> items,
+        out FrozenWallpaperProcessRequest? request)
+    {
+        request = null;
+        if (HasActiveForegroundOperation())
+        {
+            return false;
+        }
+
+        var snapshot = ProjectSnapshot;
+        if (snapshot is null
+            || !IsCurrentScanIdentity()
+            || items.Count == 0
+            || items.Any(item => !item.IsProcessable
+                || !snapshot.Projects.Any(card => ReferenceEquals(card.Record, item))))
+        {
+            request = null;
+            return false;
+        }
+
+        var frozenItems = Array.AsReadOnly(items.ToArray());
+        var candidate = new FrozenWallpaperProcessRequest(
+            snapshot.Identity,
+            snapshot.Revision,
+            snapshot.Identity.OutputDirectory,
+            frozenItems);
+        if (!IsCurrentSnapshot(candidate))
+        {
+            request = null;
+            return false;
+        }
+
+        request = candidate;
+        return true;
     }
 
     private void OnSelectionChanged()
@@ -973,6 +1134,26 @@ public sealed class ScanSession : ObservableObject
         }
         catch
         {
+            return false;
+        }
+    }
+
+    private static bool TryNormalizeOutputTarget(
+        string? value,
+        out string normalized)
+    {
+        try
+        {
+            normalized = string.IsNullOrWhiteSpace(value)
+                ? string.Empty
+                : Path.TrimEndingDirectorySeparator(Path.GetFullPath(value));
+            return normalized.Length > 0;
+        }
+        catch (Exception exception) when (exception is
+               ArgumentException or NotSupportedException or IOException
+               or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            normalized = string.Empty;
             return false;
         }
     }

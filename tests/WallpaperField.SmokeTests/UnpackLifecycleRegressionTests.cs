@@ -315,6 +315,7 @@ internal static class UnpackLifecycleRegressionTests
             WorkshopId = workshopId,
             SourceDirectory = sourceDirectory,
             OutputDirectory = outputDirectory,
+            WallpaperType = "video",
             HasVideoFile = true,
             VideoFilePath = videoPath,
             VideoRelativePath = Path.GetFileName(videoPath)
@@ -809,6 +810,7 @@ internal static class UnpackLifecycleRegressionTests
                             WorkshopId = "duplicate",
                             SourceDirectory = firstSource,
                             OutputDirectory = sharedOutput,
+                            WallpaperType = "video",
                             HasVideoFile = true,
                             VideoFilePath = firstVideo,
                             VideoRelativePath = "first.mp4"
@@ -818,6 +820,7 @@ internal static class UnpackLifecycleRegressionTests
                             WorkshopId = "DUPLICATE",
                             SourceDirectory = secondSource,
                             OutputDirectory = sharedOutput,
+                            WallpaperType = "video",
                             HasVideoFile = true,
                             VideoFilePath = secondVideo,
                             VideoRelativePath = "second.mp4"
@@ -868,6 +871,7 @@ internal static class UnpackLifecycleRegressionTests
                 WorkshopId = "video",
                 SourceDirectory = videoSource,
                 OutputDirectory = Path.Combine(outputRoot, "video"),
+                WallpaperType = "video",
                 HasVideoFile = true,
                 VideoFilePath = videoPath,
                 VideoRelativePath = "clip.mp4"
@@ -877,6 +881,7 @@ internal static class UnpackLifecycleRegressionTests
                 WorkshopId = "failed",
                 SourceDirectory = Path.Combine(sourceRoot, "missing"),
                 OutputDirectory = Path.Combine(outputRoot, "failed"),
+                WallpaperType = "video",
                 HasVideoFile = true,
                 VideoFilePath = Path.Combine(sourceRoot, "missing", "missing.mp4"),
                 VideoRelativePath = "missing.mp4"

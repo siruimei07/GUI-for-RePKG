@@ -224,10 +224,15 @@ public sealed class WallpaperScanService : IWallpaperScanService
             workshopId = safeWorkshopId;
         }
 
-        var previewPath = WallpaperStorage.FindPreview(sourceFolder);
-        if (previewPath is null)
+        var preview = CapturePreviewSnapshot(sourceFolder, warnings);
+        if (preview is null)
         {
-            warnings.Add("未找到 preview.png、preview.jpg、preview.jpeg 或 preview.gif。");
+            if (!warnings.Any(warning => warning.StartsWith(
+                    "预览文件不可用：",
+                    StringComparison.Ordinal)))
+            {
+                warnings.Add("未找到 preview.png、preview.jpg、preview.jpeg 或 preview.gif。");
+            }
         }
 
         var scenePackagePath = FindScenePackage(sourceFolder);
@@ -255,7 +260,10 @@ public sealed class WallpaperScanService : IWallpaperScanService
             workshopId!,
             title.Trim(),
             Path.GetFullPath(sourceFolder),
-            previewPath,
+            preview?.Path,
+            preview?.Length,
+            preview?.LastWriteTimeUtc,
+            preview?.Format,
             scenePackagePath,
             wallpaperType,
             videoFilePath,
@@ -285,6 +293,9 @@ public sealed class WallpaperScanService : IWallpaperScanService
             PreviewFileName = candidate.PreviewSourcePath is null
                 ? null
                 : Path.GetFileName(candidate.PreviewSourcePath),
+            PreviewFileLength = candidate.PreviewFileLength,
+            PreviewLastWriteTimeUtc = candidate.PreviewLastWriteTimeUtc,
+            PreviewFormat = candidate.PreviewFormat,
             HasPreview = candidate.PreviewSourcePath is not null,
             HasScenePackage = candidate.ScenePackagePath is not null,
             ScenePackagePath = candidate.ScenePackagePath is null
@@ -348,6 +359,61 @@ public sealed class WallpaperScanService : IWallpaperScanService
         {
             warnings.Add($"视频文件路径无效：{exception.Message}");
             return (null, null);
+        }
+    }
+
+    private static PreviewSnapshot? CapturePreviewSnapshot(
+        string sourceFolder,
+        ICollection<string> warnings)
+    {
+        try
+        {
+            var previewPath = WallpaperStorage.FindPreview(sourceFolder);
+            if (previewPath is null)
+            {
+                return null;
+            }
+
+            return CapturePreviewFileFacts(previewPath, warnings);
+        }
+        catch (Exception exception) when (exception is
+               IOException or UnauthorizedAccessException or ArgumentException
+               or NotSupportedException or System.Security.SecurityException)
+        {
+            warnings.Add("预览文件不可用：路径包含重解析点，或无法读取安全扫描事实。");
+            return null;
+        }
+    }
+
+    private static PreviewSnapshot? CapturePreviewFileFacts(
+        string previewPath,
+        ICollection<string> warnings)
+    {
+        try
+        {
+            OutputPathPolicy.RejectReparsePointsInExistingPath(
+                previewPath,
+                "预览文件");
+            var fullPath = Path.GetFullPath(previewPath);
+            var fileInfo = new FileInfo(fullPath);
+            fileInfo.Refresh();
+            if (!fileInfo.Exists)
+            {
+                throw new FileNotFoundException("预览文件已不存在。", fullPath);
+            }
+
+            return new PreviewSnapshot(
+                fullPath,
+                fileInfo.Length,
+                new DateTimeOffset(fileInfo.LastWriteTimeUtc),
+                Path.GetExtension(fullPath).ToLowerInvariant());
+        }
+        catch (Exception exception) when (exception is
+               IOException or UnauthorizedAccessException or ArgumentException
+               or NotSupportedException or System.Security.SecurityException)
+        {
+            warnings.Add("预览文件不可用：路径包含重解析点，或无法读取安全扫描事实。");
+            return null;
         }
     }
 
@@ -437,10 +503,19 @@ public sealed class WallpaperScanService : IWallpaperScanService
         string Title,
         string SourceDirectory,
         string? PreviewSourcePath,
+        long? PreviewFileLength,
+        DateTimeOffset? PreviewLastWriteTimeUtc,
+        string? PreviewFormat,
         string? ScenePackagePath,
         string? WallpaperType,
         string? VideoFilePath,
         string? VideoRelativePath,
         bool UsedFolderNameAsWorkshopId,
         IReadOnlyList<string> Warnings);
+
+    private sealed record PreviewSnapshot(
+        string Path,
+        long Length,
+        DateTimeOffset LastWriteTimeUtc,
+        string Format);
 }

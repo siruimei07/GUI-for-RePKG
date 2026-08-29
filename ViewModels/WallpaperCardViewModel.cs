@@ -45,7 +45,13 @@ public sealed class WallpaperCardViewModel : ObservableObject
 
     public bool HasUnpackableContent => Record.HasUnpackableContent;
 
-    public bool CanSelectForUnpack => HasUnpackableContent;
+    public WallpaperProjectKind ProjectKind => Record.ProjectKind;
+
+    public string ProjectKey => Record.ProjectKey;
+
+    public bool IsProcessable => Record.IsProcessable;
+
+    public bool CanSelectForUnpack => IsProcessable;
 
     public bool IsSelectedForUnpack
     {
@@ -60,17 +66,21 @@ public sealed class WallpaperCardViewModel : ObservableObject
         }
     }
 
-    public string PackageStatus => HasVideoFile
-        ? "VIDEO READY"
-        : HasScenePackage
-            ? "PKG READY"
-            : "NO CONTENT";
+    public string PackageStatus => ProjectKind switch
+    {
+        WallpaperProjectKind.Video => "VIDEO READY",
+        WallpaperProjectKind.Package => "PKG READY",
+        WallpaperProjectKind.Website => "WEB ONLY",
+        _ => "NO CONTENT"
+    };
 
-    public string PackageStatusDetail => HasVideoFile
-        ? $"已发现视频壁纸\n{Record.VideoFilePath}"
-        : HasScenePackage
-            ? $"已发现 scene.pkg\n{Record.ScenePackagePath}"
-            : "扫描时未发现 scene.pkg 或有效视频文件，无法处理此项目。";
+    public string PackageStatusDetail => ProjectKind switch
+    {
+        WallpaperProjectKind.Video => $"已发现视频壁纸\n{Record.VideoFilePath}",
+        WallpaperProjectKind.Package => $"已发现 scene.pkg\n{Record.ScenePackagePath}",
+        WallpaperProjectKind.Website => "网站项目仅供浏览，当前版本不处理其输出。",
+        _ => "扫描时未发现可处理的 scene.pkg 或有效视频文件。"
+    };
 
     public int WarningCount => Record.Warnings.Count;
 

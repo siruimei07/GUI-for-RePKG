@@ -27,6 +27,7 @@ public static class AppComposition
             problemCenterSession);
         var unpackSession = new UnpackSession(
             unpackService,
+            scanSession,
             taskLifecycleCoordinator,
             problemCenterSession);
         var librarySession = new LibrarySession(

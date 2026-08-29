@@ -91,6 +91,7 @@ public sealed class ShellViewModel : ObservableObject
             ProblemCenterSession);
         UnpackSession = unpackSession ?? new UnpackSession(
             unpackService,
+            ScanSession,
             _taskLifecycleCoordinator,
             ProblemCenterSession);
         LibrarySession = librarySession ?? new LibrarySession(
@@ -1108,9 +1109,10 @@ public sealed class ShellViewModel : ObservableObject
            && ScanSession.IsCurrentScanIdentity();
 
     private Task UnpackSelectedAsync()
-        => UnpackSession.UnpackAsync(
-            ScanSession.FreezeSelectedItems(),
-            OutputPath);
+        => ScanSession.TryFreezeSelectedRequest(out var request)
+           && request is not null
+            ? UnpackSession.UnpackAsync(request)
+            : Task.CompletedTask;
 
     private bool CanRefreshLibrary()
         => !IsClosing

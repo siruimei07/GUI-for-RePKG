@@ -13,6 +13,7 @@ namespace WallpaperField.ViewModels.Sessions;
 public sealed class UnpackSession : ObservableObject
 {
     private readonly IWallpaperUnpackService _unpackService;
+    private readonly ScanSession _scanSession;
     private readonly TaskLifecycleCoordinator _taskLifecycleCoordinator;
     private readonly ProblemCenterSession _problemCenter;
     private Func<bool> _isClosing;
@@ -34,12 +35,15 @@ public sealed class UnpackSession : ObservableObject
 
     public UnpackSession(
         IWallpaperUnpackService unpackService,
+        ScanSession scanSession,
         TaskLifecycleCoordinator taskLifecycleCoordinator,
         ProblemCenterSession problemCenter,
         Func<bool>? isClosing = null)
     {
         _unpackService = unpackService
             ?? throw new ArgumentNullException(nameof(unpackService));
+        _scanSession = scanSession
+            ?? throw new ArgumentNullException(nameof(scanSession));
         _taskLifecycleCoordinator = taskLifecycleCoordinator
             ?? throw new ArgumentNullException(nameof(taskLifecycleCoordinator));
         _problemCenter = problemCenter
@@ -204,17 +208,18 @@ public sealed class UnpackSession : ObservableObject
         private set => SetProperty(ref _currentStage, value);
     }
 
-    public async Task UnpackAsync(
-        IReadOnlyList<WallpaperRecord> frozenItems,
-        string outputDirectory)
+    public async Task UnpackAsync(FrozenWallpaperProcessRequest request)
     {
-        ArgumentNullException.ThrowIfNull(frozenItems);
-        ArgumentNullException.ThrowIfNull(outputDirectory);
+        ArgumentNullException.ThrowIfNull(request);
 
-        var items = frozenItems.ToArray();
-        if (items.Length == 0)
+        var frozenRequest = new FrozenWallpaperProcessRequest(
+            request.SnapshotIdentity,
+            request.SnapshotRevision,
+            request.OutputDirectory,
+            Array.AsReadOnly(request.Items?.ToArray() ?? []));
+        if (!_scanSession.IsCurrentSnapshot(frozenRequest))
         {
-            SetStatus("请先勾选至少一个可处理项目", "Neutral");
+            SetStatus("扫描快照已变化；请基于当前扫描结果重新选择项目", "Neutral");
             return;
         }
 
@@ -230,8 +235,8 @@ public sealed class UnpackSession : ObservableObject
                 ForegroundOperationKind.Unpack,
                 (operationId, cancellationToken) => UnpackCoreAsync(
                     operationId,
-                    items,
-                    outputDirectory.Trim(),
+                    frozenRequest.Items.ToArray(),
+                    frozenRequest.OutputDirectory.Trim(),
                     cancellationToken))
                 .ConfigureAwait(true);
         }
