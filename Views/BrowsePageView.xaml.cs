@@ -1,4 +1,6 @@
+using System.ComponentModel;
 using System.Windows;
+using System.Windows.Automation.Peers;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
@@ -6,6 +8,7 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using WallpaperField.Controls;
 using WallpaperField.ViewModels;
+using WallpaperField.ViewModels.Sessions;
 
 namespace WallpaperField.Views;
 
@@ -28,6 +31,8 @@ public sealed partial class BrowsePageView : UserControl
     private string? _pendingDirectionalProjectKey;
     private Button? _pendingDirectionalFocusOwner;
     private ShellViewModel? _subscribedShell;
+    private long _processingLiveRegionVersion;
+    private string? _lastRaisedProcessingLiveText;
 
     public BrowsePageView()
     {
@@ -472,14 +477,72 @@ public sealed partial class BrowsePageView : UserControl
         {
             _subscribedShell.BrowseProjectFocusRequested -=
                 OnBrowseProjectFocusRequested;
+            _subscribedShell.UnpackSession.PropertyChanged -=
+                OnUnpackSessionPropertyChanged;
         }
 
+        Interlocked.Increment(ref _processingLiveRegionVersion);
+        _lastRaisedProcessingLiveText = null;
         _subscribedShell = shell;
         if (_subscribedShell is not null)
         {
+            _subscribedShell.UnpackSession.SetProjectionOwnerContext(
+                SynchronizationContext.Current
+                ?? new DispatcherSynchronizationContext(Dispatcher));
             _subscribedShell.BrowseProjectFocusRequested +=
                 OnBrowseProjectFocusRequested;
+            _subscribedShell.UnpackSession.PropertyChanged +=
+                OnUnpackSessionPropertyChanged;
         }
+    }
+
+    private void OnUnpackSessionPropertyChanged(
+        object? sender,
+        PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(UnpackSession.TrayLiveRegionText)
+            && _subscribedShell is { } shell
+            && ReferenceEquals(sender, shell.UnpackSession))
+        {
+            QueueProcessingLiveRegionChanged(shell);
+        }
+    }
+
+    private void QueueProcessingLiveRegionChanged(ShellViewModel shell)
+    {
+        var version = Interlocked.Increment(ref _processingLiveRegionVersion);
+        _ = Dispatcher.BeginInvoke(
+            () =>
+            {
+                if (version != Volatile.Read(ref _processingLiveRegionVersion)
+                    || !ReferenceEquals(_subscribedShell, shell)
+                    || !ReferenceEquals(DataContext, shell)
+                    || !shell.IsBrowsePage
+                    || !BrowseView.IsVisible
+                    || !BrowseProcessingTraySlot.IsVisible
+                    || !BrowseProcessingTraySlot.IsHitTestVisible)
+                {
+                    return;
+                }
+
+                var text = shell.UnpackSession.TrayLiveRegionText;
+                if (string.IsNullOrWhiteSpace(text)
+                    || string.Equals(
+                        _lastRaisedProcessingLiveText,
+                        text,
+                        StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                _lastRaisedProcessingLiveText = text;
+                var peer = UIElementAutomationPeer.CreatePeerForElement(
+                               BrowseProcessingLiveRegion)
+                           ?? new TextBlockAutomationPeer(
+                               BrowseProcessingLiveRegion);
+                peer.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
+            },
+            DispatcherPriority.ContextIdle);
     }
 
     private void OnBrowseProjectFocusRequested(

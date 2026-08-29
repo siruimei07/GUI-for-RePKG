@@ -541,14 +541,7 @@ public sealed class ScanSession : ObservableObject
                 WallpaperCardViewModel? card;
                 if (string.IsNullOrWhiteSpace(result.ProjectKey))
                 {
-                    card = ScannedWallpapers.FirstOrDefault(candidate =>
-                        string.Equals(
-                            candidate.WorkshopId,
-                            result.WorkshopId,
-                            StringComparison.OrdinalIgnoreCase)
-                        && PathsEqualOrFalse(
-                            candidate.OutputFolder,
-                            result.OutputTarget));
+                    card = FindUniqueLegacyResultCard(result);
                 }
                 else
                 {
@@ -568,6 +561,30 @@ public sealed class ScanSession : ObservableObject
             _batchSelectionChanged = false;
             NotifySelectionChanged();
         }
+    }
+
+    private WallpaperCardViewModel? FindUniqueLegacyResultCard(
+        WallpaperUnpackItemResult result)
+    {
+        WallpaperCardViewModel? match = null;
+        foreach (var candidate in ScannedWallpapers.Where(candidate =>
+                     string.Equals(
+                         candidate.WorkshopId,
+                         result.WorkshopId,
+                         StringComparison.OrdinalIgnoreCase)
+                     && PathsEqualOrFalse(
+                         candidate.OutputFolder,
+                         result.OutputTarget)))
+        {
+            if (match is not null)
+            {
+                return null;
+            }
+
+            match = candidate;
+        }
+
+        return match;
     }
 
     internal void CancelPathValidation() => _pathValidationCancellation?.Cancel();
@@ -656,10 +673,6 @@ public sealed class ScanSession : ObservableObject
                     () => IsSelectionWritable))
                 .ToArray();
 
-            _problemCenter.ResolveMatching(
-                AppIssueSource.Scan,
-                "SCAN_OPERATION_FAILED",
-                NormalizeIssueContext(request.SourceDirectory));
             ReplaceItems(cards);
             ScanIdentity = identity;
             _snapshotRevision = revision;
@@ -674,33 +687,46 @@ public sealed class ScanSession : ObservableObject
             ProgressValue = 100;
             CurrentStage = "COMPLETE";
 
-            var recordIssues = new List<AppIssue>();
+            var publications = new List<AppIssue>(
+                result.Items.Count + result.Errors.Count);
+            var resolutions = new List<AppIssueResolutionRequest>(
+                1 + (result.Items.Count * 4))
+            {
+                new(
+                    AppIssueSource.Scan,
+                    "SCAN_OPERATION_FAILED",
+                    ProjectKey: null,
+                    NormalizeIssueContext(request.SourceDirectory))
+            };
             foreach (var record in result.Items)
             {
-                _problemCenter.ResolveProjectIssues(
+                var context = NormalizeIssueContext(record.SourceDirectory);
+                resolutions.Add(new AppIssueResolutionRequest(
                     AppIssueSource.Scan,
                     "SCAN_ITEM_FAILED",
                     record.ProjectKey,
-                    NormalizeIssueContext(record.SourceDirectory));
-                _problemCenter.ResolveLegacyMatching(
+                    context));
+                resolutions.Add(new AppIssueResolutionRequest(
                     AppIssueSource.Scan,
                     "SCAN_ITEM_FAILED",
-                    NormalizeIssueContext(record.SourceDirectory));
+                    ProjectKey: null,
+                    context));
                 if (record.Warnings.Count == 0)
                 {
-                    _problemCenter.ResolveProjectIssues(
+                    resolutions.Add(new AppIssueResolutionRequest(
                         AppIssueSource.Scan,
                         "SCAN_ITEM_WARNING",
                         record.ProjectKey,
-                        NormalizeIssueContext(record.SourceDirectory));
-                    _problemCenter.ResolveLegacyMatching(
+                        context));
+                    resolutions.Add(new AppIssueResolutionRequest(
                         AppIssueSource.Scan,
                         "SCAN_ITEM_WARNING",
-                        NormalizeIssueContext(record.SourceDirectory));
+                        ProjectKey: null,
+                        context));
                 }
                 else
                 {
-                    recordIssues.Add(AppIssue.Create(
+                    publications.Add(AppIssue.Create(
                         "SCAN_ITEM_WARNING",
                         AppIssueSeverity.Warning,
                         AppIssueSource.Scan,
@@ -708,18 +734,14 @@ public sealed class ScanSession : ObservableObject
                         string.Join("；", record.Warnings),
                         AppDiskFact.NotModified,
                         AppIssueAction.ReviewInput,
-                        NormalizeIssueContext(record.SourceDirectory),
+                        context,
                         operationId,
                         record.SourceDirectory,
                         projectKey: record.ProjectKey));
                 }
             }
 
-            foreach (var issue in recordIssues)
-            {
-                _problemCenter.PublishProjectIssue(issue);
-            }
-            _problemCenter.Publish(result.Errors.Select(error => AppIssue.Create(
+            publications.AddRange(result.Errors.Select(error => AppIssue.Create(
                 "SCAN_ITEM_FAILED",
                 AppIssueSeverity.Error,
                 AppIssueSource.Scan,
@@ -730,6 +752,7 @@ public sealed class ScanSession : ObservableObject
                 NormalizeIssueContext(error.FolderPath),
                 operationId,
                 error.FolderPath)));
+            _problemCenter.ApplyBatch(publications, resolutions);
 
             var issues = JoinIssues(result.Errors);
             var warnings = FormatRecordWarnings(result.Items);
@@ -1120,13 +1143,22 @@ public sealed class ScanSession : ObservableObject
                 && issue.Source == AppIssueSource.Unpack)
             .Select(issue => NormalizeItemContext(issue.ContextKey))
             .ToHashSet(StringComparer.Ordinal);
+        var uniqueUnpackContexts = ScannedWallpapers
+            .GroupBy(
+                card => NormalizeItemContext(card.WorkshopId),
+                StringComparer.Ordinal)
+            .Where(group => !group.Skip(1).Any())
+            .Select(group => group.Key)
+            .ToHashSet(StringComparer.Ordinal);
 
         foreach (var card in ScannedWallpapers)
         {
+            var unpackContext = NormalizeItemContext(card.WorkshopId);
             card.SetHasOpenIssues(
                 projectKeys.Contains(card.Record.ProjectKey)
                 || scanContexts.Contains(NormalizeIssueContext(card.SourceFolder))
-                || unpackContexts.Contains(NormalizeItemContext(card.WorkshopId)));
+                || (uniqueUnpackContexts.Contains(unpackContext)
+                    && unpackContexts.Contains(unpackContext)));
         }
     }
 

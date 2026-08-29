@@ -43,6 +43,13 @@ public enum AppIssueAction
     ExportDiagnostics
 }
 
+public sealed record AppIssueResolutionRequest(
+    AppIssueSource Source,
+    string Code,
+    string? ProjectKey,
+    string ContextKey,
+    DateTimeOffset? ResolvedAtUtc = null);
+
 public sealed class BrowseProjectFocusRequestedEventArgs(string projectKey)
     : EventArgs
 {
@@ -207,39 +214,47 @@ public sealed class AppIssueStore
         }
     }
 
+    public AppIssueBatchResult ApplyBatch(
+        IEnumerable<AppIssue> publications,
+        IEnumerable<AppIssueResolutionRequest> resolutions)
+    {
+        ArgumentNullException.ThrowIfNull(publications);
+        ArgumentNullException.ThrowIfNull(resolutions);
+        var normalizedPublications = publications
+            .Select(issue =>
+            {
+                ArgumentNullException.ThrowIfNull(issue);
+                return issue.Normalize();
+            })
+            .ToArray();
+        var resolutionRequests = resolutions.ToArray();
+        if (resolutionRequests.Any(request => request is null
+            || string.IsNullOrWhiteSpace(request.Code)
+            || string.IsNullOrWhiteSpace(request.ContextKey)))
+        {
+            throw new ArgumentException(
+                "Issue resolution requests require a code and context.",
+                nameof(resolutions));
+        }
+
+        lock (_syncRoot)
+        {
+            var resolved = ApplyResolutions(resolutionRequests);
+            var published = ApplyPublications(normalizedPublications);
+            return new AppIssueBatchResult(published, resolved);
+        }
+    }
+
     public int ResolveMatching(
         AppIssueSource source,
         string code,
         string contextKey,
         DateTimeOffset? resolvedAtUtc = null)
-    {
-        var resolved = 0;
-        var timestamp = resolvedAtUtc ?? DateTimeOffset.UtcNow;
-
-        lock (_syncRoot)
-        {
-            for (var index = 0; index < _items.Count; index++)
-            {
-                var issue = _items[index];
-                if (issue.ResolutionState != AppIssueResolutionState.Open
-                    || issue.Source != source
-                    || !string.Equals(issue.Code, code, StringComparison.Ordinal)
-                    || !string.Equals(issue.ContextKey, contextKey, StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
-                _items[index] = issue with
-                {
-                    ResolutionState = AppIssueResolutionState.Resolved,
-                    ResolvedAtUtc = timestamp
-                };
-                resolved++;
-            }
-        }
-
-        return resolved;
-    }
+        => ResolveLegacyMatching(
+            source,
+            code,
+            contextKey,
+            resolvedAtUtc);
 
     public int ResolveLegacyMatching(
         AppIssueSource source,
@@ -443,4 +458,202 @@ public sealed class AppIssueStore
 
     private static int SaturatingAdd(int left, int right)
         => (int)Math.Min((long)left + right, int.MaxValue);
+
+    private int ApplyResolutions(
+        IReadOnlyList<AppIssueResolutionRequest> requests)
+    {
+        if (requests.Count == 0 || _items.Count == 0)
+        {
+            return 0;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var exactRequests = requests
+            .Where(request => !string.IsNullOrWhiteSpace(request.ProjectKey))
+            .GroupBy(request => new ExactResolutionKey(
+                request.Source,
+                request.Code,
+                request.ProjectKey!,
+                request.ContextKey))
+            .ToDictionary(
+                group => group.Key,
+                group => group.Last().ResolvedAtUtc ?? now);
+        var legacyRequests = requests
+            .Where(request => string.IsNullOrWhiteSpace(request.ProjectKey))
+            .GroupBy(request => new LegacyResolutionKey(
+                request.Source,
+                request.Code,
+                request.ContextKey))
+            .ToDictionary(
+                group => group.Key,
+                group => group.Last().ResolvedAtUtc ?? now);
+        var resolved = 0;
+        for (var index = 0; index < _items.Count; index++)
+        {
+            var issue = _items[index];
+            if (issue.ResolutionState != AppIssueResolutionState.Open)
+            {
+                continue;
+            }
+
+            DateTimeOffset resolvedAt;
+            var matches = issue.ProjectKey is null
+                ? legacyRequests.TryGetValue(
+                    new LegacyResolutionKey(
+                        issue.Source,
+                        issue.Code,
+                        issue.ContextKey),
+                    out resolvedAt)
+                : exactRequests.TryGetValue(
+                    new ExactResolutionKey(
+                        issue.Source,
+                        issue.Code,
+                        issue.ProjectKey,
+                        issue.ContextKey),
+                    out resolvedAt);
+            if (!matches)
+            {
+                continue;
+            }
+
+            _items[index] = issue with
+            {
+                ResolutionState = AppIssueResolutionState.Resolved,
+                ResolvedAtUtc = resolvedAt
+            };
+            resolved++;
+        }
+
+        return resolved;
+    }
+
+    private int ApplyPublications(IReadOnlyList<AppIssue> publications)
+    {
+        if (publications.Count == 0)
+        {
+            return 0;
+        }
+
+        if ((long)_items.Count + publications.Count > MaxVisibleIssues)
+        {
+            foreach (var issue in publications)
+            {
+                ApplyPublicationAtBudget(issue);
+            }
+
+            return publications.Count;
+        }
+
+        var openProjects = new Dictionary<ProjectIssueKey, int>();
+        for (var index = 0; index < _items.Count; index++)
+        {
+            var item = _items[index];
+            if (item.ResolutionState == AppIssueResolutionState.Open
+                && item.ProjectKey is not null)
+            {
+                openProjects.TryAdd(
+                    new ProjectIssueKey(
+                        item.Source,
+                        item.Code,
+                        item.ProjectKey,
+                        item.ContextKey),
+                    index);
+            }
+        }
+
+        foreach (var issue in publications)
+        {
+            if (issue.ProjectKey is null)
+            {
+                AddBounded(issue);
+                continue;
+            }
+
+            var key = new ProjectIssueKey(
+                issue.Source,
+                issue.Code,
+                issue.ProjectKey,
+                issue.ContextKey);
+            if (openProjects.TryGetValue(key, out var existingIndex))
+            {
+                var existing = _items[existingIndex];
+                _items[existingIndex] = issue with
+                {
+                    Id = existing.Id,
+                    TimestampUtc = issue.TimestampUtc >= existing.TimestampUtc
+                        ? issue.TimestampUtc
+                        : existing.TimestampUtc,
+                    OccurrenceCount = SaturatingAdd(
+                        existing.OccurrenceCount,
+                        issue.OccurrenceCount)
+                };
+                continue;
+            }
+
+            var addedIndex = _items.Count;
+            AddBounded(issue);
+            if (_items.Count == addedIndex + 1
+                && addedIndex < MaxVisibleIssues)
+            {
+                openProjects[key] = addedIndex;
+            }
+        }
+
+        return publications.Count;
+    }
+
+    private void ApplyPublicationAtBudget(AppIssue issue)
+    {
+        if (issue.ProjectKey is null)
+        {
+            AddBounded(issue);
+            return;
+        }
+
+        var existingIndex = _items.FindIndex(item =>
+            item.ResolutionState == AppIssueResolutionState.Open
+            && item.Source == issue.Source
+            && string.Equals(item.Code, issue.Code, StringComparison.Ordinal)
+            && string.Equals(item.ProjectKey, issue.ProjectKey, StringComparison.Ordinal)
+            && string.Equals(item.ContextKey, issue.ContextKey, StringComparison.Ordinal));
+        if (existingIndex < 0)
+        {
+            AddBounded(issue);
+            return;
+        }
+
+        var existing = _items[existingIndex];
+        _items[existingIndex] = issue with
+        {
+            Id = existing.Id,
+            TimestampUtc = issue.TimestampUtc >= existing.TimestampUtc
+                ? issue.TimestampUtc
+                : existing.TimestampUtc,
+            OccurrenceCount = SaturatingAdd(
+                existing.OccurrenceCount,
+                issue.OccurrenceCount)
+        };
+    }
+
+    private readonly record struct ProjectIssueKey(
+        AppIssueSource Source,
+        string Code,
+        string ProjectKey,
+        string ContextKey);
+
+    private readonly record struct ExactResolutionKey(
+        AppIssueSource Source,
+        string Code,
+        string ProjectKey,
+        string ContextKey);
+
+    private readonly record struct LegacyResolutionKey(
+        AppIssueSource Source,
+        string Code,
+        string ContextKey);
+}
+
+public sealed record AppIssueBatchResult(int PublishedCount, int ResolvedCount)
+{
+    public bool Changed => PublishedCount > 0 || ResolvedCount > 0;
 }

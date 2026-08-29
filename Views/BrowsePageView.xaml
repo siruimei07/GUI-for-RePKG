@@ -669,21 +669,6 @@
                                     AutomationProperties.Name="{Binding BrowsePageViewModel.CurrentProjectActionText}"
                                     Content="{Binding BrowsePageViewModel.CurrentProjectActionText}" />
                             <TextBlock Margin="0,7,0,0"
-                                       Foreground="{DynamicResource SignalPressedBrush}"
-                                       FontSize="11"
-                                       Text="{Binding ProjectNavigationStatusText}"
-                                       TextWrapping="Wrap">
-                                <TextBlock.Style>
-                                    <Style TargetType="TextBlock">
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding ProjectNavigationStatusText}" Value="">
-                                                <Setter Property="Visibility" Value="Collapsed" />
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </TextBlock.Style>
-                            </TextBlock>
-                            <TextBlock Margin="0,7,0,0"
                                        FontSize="10"
                                        Foreground="{DynamicResource PaperBrush}"
                                        TextWrapping="Wrap"
@@ -768,21 +753,6 @@
                                 ToolTip="{Binding BrowsePageViewModel.CurrentProjectProcessabilityText}"
                                 AutomationProperties.Name="{Binding BrowsePageViewModel.CurrentProjectActionText}"
                                 Content="{Binding BrowsePageViewModel.CurrentProjectActionText}" />
-                        <TextBlock Margin="0,7,0,0"
-                                   Foreground="{DynamicResource SignalPressedBrush}"
-                                   FontSize="11"
-                                   Text="{Binding ProjectNavigationStatusText}"
-                                   TextWrapping="Wrap">
-                            <TextBlock.Style>
-                                <Style TargetType="TextBlock">
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding ProjectNavigationStatusText}" Value="">
-                                            <Setter Property="Visibility" Value="Collapsed" />
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </TextBlock.Style>
-                        </TextBlock>
                     </StackPanel>
                 </Grid>
             </Border>
@@ -871,6 +841,17 @@
                 </Style>
             </Border.Style>
             <Grid>
+                <TextBlock x:Name="BrowseProcessingLiveRegion"
+                           Panel.ZIndex="-1"
+                           HorizontalAlignment="Stretch"
+                           VerticalAlignment="Stretch"
+                           Opacity="0"
+                           IsHitTestVisible="False"
+                           Focusable="False"
+                           Text="{Binding UnpackSession.TrayLiveRegionText}"
+                           AutomationProperties.AutomationId="BrowseProcessingLiveRegion"
+                           AutomationProperties.LiveSetting="Polite"
+                           AutomationProperties.Name="{Binding UnpackSession.TrayLiveRegionText}" />
                 <Grid x:Name="BrowseSelectionTray">
                     <Grid.Style>
                         <Style TargetType="Grid">
@@ -904,7 +885,7 @@
                     <Button Grid.Column="1"
                             Margin="8,0,0,0"
                             MinWidth="92"
-                            MinHeight="40"
+                            MinHeight="44"
                             Style="{StaticResource SecondaryButton}"
                             Command="{Binding BrowsePageViewModel.ClearSelectionCommand}"
                             AutomationProperties.Name="清空项目处理选择"
@@ -912,7 +893,7 @@
                     <Button Grid.Column="2"
                             Margin="8,0,0,0"
                             MinWidth="124"
-                            MinHeight="40"
+                            MinHeight="44"
                             Style="{StaticResource PrimaryButton}"
                             Command="{Binding ProcessBrowseSelectionCommand}"
                             AutomationProperties.Name="处理全部已选项目"
@@ -958,15 +939,10 @@
                                    FontSize="10"
                                    Text="{Binding UnpackSession.WorkText}"
                                    TextTrimming="CharacterEllipsis" />
-                        <TextBlock Height="0"
-                                   Width="0"
-                                   AutomationProperties.LiveSetting="Polite"
-                                   AutomationProperties.Name="项目处理进度播报"
-                                   Text="{Binding UnpackSession.TrayLiveRegionText}" />
                     </StackPanel>
                     <Button Grid.Column="2"
                             MinWidth="104"
-                            MinHeight="40"
+                            MinHeight="44"
                             Style="{StaticResource SecondaryButton}"
                             Command="{Binding UnpackSession.CancelUnpackCommand}"
                             AutomationProperties.Name="取消当前项目处理"
@@ -1009,17 +985,17 @@
                             <Run Text=" · 提交 " /><Run Text="{Binding UnpackSession.CompletionSummary.CommittedCount}" />
                         </TextBlock>
                     </StackPanel>
-                    <Button Grid.Column="1" Margin="8,0,0,0" MinWidth="72" MinHeight="40"
+                    <Button Grid.Column="1" Margin="8,0,0,0" MinWidth="72" MinHeight="44"
                             Style="{StaticResource GhostButton}"
                             Command="{Binding UnpackSession.ClearCompletionCommand}"
                             AutomationProperties.Name="清除项目处理完成摘要"
                             Content="清除" />
-                    <Button Grid.Column="2" Margin="8,0,0,0" MinWidth="88" MinHeight="40"
+                    <Button Grid.Column="2" Margin="8,0,0,0" MinWidth="88" MinHeight="44"
                             Style="{StaticResource SecondaryButton}"
                             Command="{Binding NavigateProblemsCommand}"
                             AutomationProperties.Name="打开问题中心"
                             Content="问题中心" />
-                    <Button Grid.Column="3" Margin="8,0,0,0" MinWidth="88" MinHeight="40"
+                    <Button Grid.Column="3" Margin="8,0,0,0" MinWidth="88" MinHeight="44"
                             Style="{StaticResource PrimaryButton}"
                             Command="{Binding NavigateLibraryCommand}"
                             AutomationProperties.Name="打开输出图库"

@@ -142,6 +142,19 @@ public sealed class ProblemCenterSession : ObservableObject
         return Issues.FirstOrDefault(item => item.Id == published.Id) ?? published;
     }
 
+    internal AppIssueBatchResult ApplyBatch(
+        IEnumerable<AppIssue> publications,
+        IEnumerable<AppIssueResolutionRequest> resolutions)
+    {
+        var result = _store.ApplyBatch(publications, resolutions);
+        if (result.Changed)
+        {
+            Synchronize();
+        }
+
+        return result;
+    }
+
     public int ResolveProjectIssues(
         AppIssueSource source,
         string code,

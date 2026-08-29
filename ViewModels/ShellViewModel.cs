@@ -699,6 +699,7 @@ public sealed class ShellViewModel : ObservableObject, IDisposable
             return;
         }
 
+        ProjectNavigationStatusText = string.Empty;
         if (!SetProperty(ref _currentPage, target, nameof(PageCode)))
         {
             return;
@@ -1147,6 +1148,7 @@ public sealed class ShellViewModel : ObservableObject, IDisposable
                 OnPropertyChanged(nameof(FilteredIssueCount));
                 break;
             case nameof(ProblemCenterSession.SelectedIssue):
+                ProjectNavigationStatusText = string.Empty;
                 OnPropertiesChanged(nameof(SelectedIssue), nameof(HasSelectedIssue));
                 RevealProblemProjectCommand.NotifyCanExecuteChanged();
                 break;
@@ -1309,15 +1311,15 @@ public sealed class ShellViewModel : ObservableObject, IDisposable
         var revealed = BrowsePageViewModel.RevealProject(
             issue.ProjectKey,
             clearBlockingFilters: true);
-        NavigateTo(BrowsePage);
         if (!revealed)
         {
+            NavigateTo(ProblemsPage);
             ProjectNavigationStatusText =
                 "该问题对应的项目已不在当前扫描快照中；请重新扫描后再试。";
             return;
         }
 
-        ProjectNavigationStatusText = string.Empty;
+        NavigateTo(BrowsePage);
         BrowseProjectFocusRequested?.Invoke(
             this,
             new BrowseProjectFocusRequestedEventArgs(issue.ProjectKey));
