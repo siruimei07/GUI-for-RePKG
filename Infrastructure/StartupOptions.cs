@@ -116,9 +116,10 @@ internal sealed record StartupOptions
         return normalized switch
         {
             "scan" or "01" or "scan field" => ParsedOption.Valid("scan"),
-            "library" or "output" or "02" or "output library" => ParsedOption.Valid("library"),
-            "problems" or "problem" or "03" => ParsedOption.Valid("problems"),
-            _ => ParsedOption.Invalid("页面必须是 scan、library 或 problems。")
+            "browse" or "02" => ParsedOption.Valid("browse"),
+            "library" or "output" or "03" or "output library" => ParsedOption.Valid("library"),
+            "problems" or "problem" or "04" => ParsedOption.Valid("problems"),
+            _ => ParsedOption.Invalid("页面必须是 scan、browse、library 或 problems。")
         };
     }
 

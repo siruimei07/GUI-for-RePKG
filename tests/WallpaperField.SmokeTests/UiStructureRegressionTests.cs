@@ -168,8 +168,8 @@ internal static class UiStructureRegressionTests
             "An invalid problem source filter did not fail soft to ALL while retaining text search.");
 
         shell.NavigateProblemsCommand.Execute(null);
-        assert(shell.IsProblemsPage && shell.PageCode == "03",
-            "The persistent problem navigation command did not select page 03.");
+        assert(shell.IsProblemsPage && shell.PageCode == "04",
+            "The persistent problem navigation command did not select page 04.");
 
         shell.SelectedIssue = libraryIssue;
         shell.ResolveIssues(
@@ -235,6 +235,7 @@ internal static class UiStructureRegressionTests
                 VerifyLayoutMode(window, "Compact", assert);
                 VerifyAlwaysAvailableActions(window, shell, assert);
                 VerifyPage(window, shell, "SCAN", "ScanView", "ScanResultsList", assert);
+                VerifyBrowsePage(window, shell, assert);
                 VerifyPage(window, shell, "LIBRARY", "LibraryView", "LibraryResultsList", assert);
                 VerifyPage(window, shell, "PROBLEMS", "ProblemsView", "ProblemResultsList", assert);
                 VerifyProblemExpansionFollowsIssueIdentity(window, shell, assert);
@@ -589,6 +590,7 @@ internal static class UiStructureRegressionTests
         var list = WpfElementFinder.FindByName<ListBox>(window, listName);
         assert(view?.Visibility == Visibility.Visible,
             $"Route {route} did not reveal {viewName}.");
+        VerifyOnlyCurrentPageVisible(window, viewName, assert);
         assert(list is not null
                && list.ActualWidth > 0
                && list.ActualHeight >= 48,
@@ -598,6 +600,47 @@ internal static class UiStructureRegressionTests
                && VirtualizingPanel.GetVirtualizationMode(list) == VirtualizationMode.Recycling
                && ScrollViewer.GetCanContentScroll(list),
             $"{listName} lost WPF recycling virtualization or logical scrolling.");
+    }
+
+    private static void VerifyBrowsePage(
+        WallpaperField.MainWindow window,
+        ShellViewModel shell,
+        Action<bool, string> assert)
+    {
+        shell.NavigateTo("BROWSE");
+        window.UpdateLayout();
+        var browseView = WpfElementFinder.FindByName<FrameworkElement>(window, "BrowseView");
+        var scanEntry = WpfElementFinder.FindByName<Button>(window, "BrowseScannedProjectsButton");
+        assert(browseView is { Visibility: Visibility.Visible, IsVisible: true }
+               && browseView.ActualWidth > 0
+               && browseView.ActualHeight > 0,
+            "Route BROWSE did not reveal its empty-state page at 920x680.");
+        assert(scanEntry is not null
+               && ReferenceEquals(scanEntry.Command, shell.NavigateBrowseCommand),
+            "The Scan success surface is not wired to Browse navigation.");
+        VerifyOnlyCurrentPageVisible(window, "BrowseView", assert);
+
+        window.ConfigureSnapshot(Path.Combine(Path.GetTempPath(), "browse-positioning.png"), scrollIndex: 0);
+        var positionMethod = typeof(WallpaperField.MainWindow).GetMethod(
+            "PositionSnapshotListAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        var positionTask = positionMethod?.Invoke(window, null) as Task<bool>;
+        assert(positionTask?.GetAwaiter().GetResult() == true,
+            "Snapshot positioning did not dispatch through BrowsePageView.");
+    }
+
+    private static void VerifyOnlyCurrentPageVisible(
+        WallpaperField.MainWindow window,
+        string expectedView,
+        Action<bool, string> assert)
+    {
+        foreach (var name in new[] { "ScanView", "BrowseView", "LibraryView", "ProblemsView" })
+        {
+            var page = WpfElementFinder.FindByName<FrameworkElement>(window, name);
+            assert(page is not null
+                   && (page.Visibility == Visibility.Visible) == (name == expectedView),
+                $"Four-page visibility route expected only {expectedView}, but {name} was {page?.Visibility}.");
+        }
     }
 
     private static void VerifyAlwaysAvailableActions(

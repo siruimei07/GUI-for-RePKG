@@ -37,6 +37,7 @@ try
     await SessionBoundaryRegressionTests.RunAsync(Assert);
     await ProjectBrowserFoundationRegressionTests.RunAsync(Assert);
     await ProjectBrowserProjectionRegressionTests.RunAsync(Assert);
+    ProjectBrowserNavigationRegressionTests.Run(Assert);
     await TaskLifecycleRegressionTests.RunAsync(Assert);
     await ScanLifecycleRegressionTests.RunAsync(Assert);
     await LibraryLifecycleRegressionTests.RunAsync(Assert);
@@ -376,6 +377,10 @@ try
     await shell.ScanCommand.ExecuteAsync();
     Assert(shell.ScannedWallpapers.Count == 6 && shell.PackageReadyCount == 5,
         "The scan command did not project PKG and video eligibility into the UI model.");
+    Assert(shell.IsScanPage
+           && shell.BrowsePageViewModel.HasSnapshot
+           && shell.BrowsePageViewModel.TotalProjectCount == 6,
+        "A successful scan did not populate Browse in place while retaining the Scan route.");
     Assert(!Directory.Exists(viewModelOutputRoot),
         "View-model scanning must not create its output root.");
     shell.ScanSearchText = "  gif  ";

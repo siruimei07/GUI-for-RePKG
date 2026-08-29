@@ -220,6 +220,7 @@
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="Auto" />
                                     <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
                                     <ColumnDefinition Width="*" />
                                 </Grid.ColumnDefinitions>
                                 <Button x:Name="ScanButton"
@@ -265,12 +266,25 @@
                                         Visibility="{Binding UnpackSession.IsUnpacking, Converter={StaticResource BooleanToVisibilityConverter}}"
                                         AutomationProperties.Name="取消解包"
                                         Content="取消解包" />
+                                <Button x:Name="BrowseScannedProjectsButton"
+                                        Grid.Column="2"
+                                        MinWidth="150"
+                                        Margin="12,0,0,0"
+                                        Style="{StaticResource SecondaryButton}"
+                                        Command="{Binding NavigateBrowseCommand}"
+                                        Visibility="{Binding BrowsePageViewModel.HasSnapshot, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                        AutomationProperties.Name="浏览扫描项目">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Margin="0,0,9,0" FontFamily="Segoe Fluent Icons" Text="&#xE8B7;" />
+                                        <TextBlock Text="{Binding BrowsePageViewModel.TotalProjectCount, StringFormat={}浏览 {0} 个项目}" />
+                                    </StackPanel>
+                                </Button>
                                 <StackPanel x:Name="UnpackProgressPanel" VerticalAlignment="Center">
                                     <StackPanel.Style>
                                         <Style TargetType="StackPanel">
                                             <Setter Property="Grid.Row" Value="0" />
                                             <Setter Property="Grid.RowSpan" Value="2" />
-                                            <Setter Property="Grid.Column" Value="2" />
+                                            <Setter Property="Grid.Column" Value="3" />
                                             <Setter Property="Grid.ColumnSpan" Value="1" />
                                             <Setter Property="Margin" Value="24,0,0,0" />
                                             <Style.Triggers>
@@ -279,7 +293,7 @@
                                                     <Setter Property="Grid.Row" Value="2" />
                                                     <Setter Property="Grid.RowSpan" Value="1" />
                                                     <Setter Property="Grid.Column" Value="0" />
-                                                    <Setter Property="Grid.ColumnSpan" Value="3" />
+                                                    <Setter Property="Grid.ColumnSpan" Value="4" />
                                                     <Setter Property="Margin" Value="0,14,0,0" />
                                                 </DataTrigger>
                                             </Style.Triggers>

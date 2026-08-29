@@ -4,7 +4,7 @@
              xmlns:local="clr-namespace:WallpaperField"
              SnapsToDevicePixels="True"
              UseLayoutRounding="True">
-    <!-- Page 03: bounded problem center -->
+    <!-- Page 04: bounded problem center -->
     <Grid x:Name="ProblemsView" RenderTransformOrigin="0.5,0.5">
         <Grid.Style>
             <Style TargetType="Grid">
@@ -40,7 +40,7 @@
                 <StackPanel>
                     <TextBlock Style="{StaticResource TechnicalLabel}"
                                Foreground="{DynamicResource TextMutedBrush}"
-                               Text="DIAGNOSTICS / 03 · PROBLEM CENTER" />
+                               Text="DIAGNOSTICS / 04 · PROBLEM CENTER" />
                     <TextBlock x:Name="ProblemsPageTitle"
                                Margin="0,8,0,0"
                                Style="{StaticResource SectionTitle}"

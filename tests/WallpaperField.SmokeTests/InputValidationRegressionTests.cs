@@ -37,7 +37,7 @@ internal static class InputValidationRegressionTests
 
         assert(shell.Issues.SequenceEqual(startup.Issues)
                && shell.IsProblemsPage
-               && shell.PageCode == "03"
+               && shell.PageCode == "04"
                && shell.CurrentPageTitle == "问题中心",
             "A startup Error was not retained and projected to the problems page state.");
         shell.CancelPendingWork();

@@ -34,6 +34,9 @@ public static class AppComposition
             libraryService,
             taskLifecycleCoordinator,
             problemCenterSession);
+        var browsePageViewModel = new BrowsePageViewModel(
+            scanSession,
+            problemCenterSession);
         var shell = new ShellViewModel(
             scanService,
             libraryService,
@@ -45,7 +48,8 @@ public static class AppComposition
             problemCenterSession,
             scanSession,
             unpackSession,
-            librarySession);
+            librarySession,
+            browsePageViewModel);
         AppLog.SetIssueSink(
             issue => problemCenterSession.Publish([issue]),
             (source, code, contextKey) =>
@@ -78,9 +82,7 @@ public static class AppComposition
         ShellViewModel shell)
     {
         ArgumentNullException.ThrowIfNull(shell);
-        return new BrowsePageViewModel(
-            shell.ScanSession,
-            shell.ProblemCenterSession);
+        return shell.BrowsePageViewModel;
     }
 
     public static DiagnosticExportService CreateDiagnosticExportService(

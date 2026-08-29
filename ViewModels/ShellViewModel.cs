@@ -13,9 +13,10 @@ namespace WallpaperField.ViewModels;
 /// <summary>
 /// Coordinates navigation and the application surfaces.
 /// </summary>
-public sealed class ShellViewModel : ObservableObject
+public sealed class ShellViewModel : ObservableObject, IDisposable
 {
     private const string ScanPage = "SCAN";
+    private const string BrowsePage = "BROWSE";
     private const string LibraryPage = "LIBRARY";
     private const string ProblemsPage = "PROBLEMS";
 
@@ -37,6 +38,7 @@ public sealed class ShellViewModel : ObservableObject
     private string _currentTitle = string.Empty;
     private string _currentStage = "IDLE";
     private TaskLifecycleSnapshot _taskLifecycle;
+    private bool _disposed;
 
     public ShellViewModel(
         IWallpaperScanService scanService,
@@ -57,6 +59,7 @@ public sealed class ShellViewModel : ObservableObject
             null,
             null,
             null,
+            null,
             null)
     {
     }
@@ -73,6 +76,35 @@ public sealed class ShellViewModel : ObservableObject
         ScanSession? scanSession,
         UnpackSession? unpackSession,
         LibrarySession? librarySession)
+        : this(
+            scanService,
+            libraryService,
+            folderPickerService,
+            systemFolderService,
+            unpackService,
+            pathInputValidator,
+            taskLifecycleCoordinator,
+            problemCenterSession,
+            scanSession,
+            unpackSession,
+            librarySession,
+            null)
+    {
+    }
+
+    internal ShellViewModel(
+        IWallpaperScanService scanService,
+        IWallpaperLibraryService libraryService,
+        IFolderPickerService folderPickerService,
+        ISystemFolderService systemFolderService,
+        IWallpaperUnpackService unpackService,
+        PathInputValidator? pathInputValidator,
+        TaskLifecycleCoordinator? taskLifecycleCoordinator,
+        ProblemCenterSession? problemCenterSession,
+        ScanSession? scanSession,
+        UnpackSession? unpackSession,
+        LibrarySession? librarySession,
+        BrowsePageViewModel? browsePageViewModel)
     {
         ArgumentNullException.ThrowIfNull(scanService);
         ArgumentNullException.ThrowIfNull(libraryService);
@@ -98,6 +130,9 @@ public sealed class ShellViewModel : ObservableObject
             libraryService,
             _taskLifecycleCoordinator,
             ProblemCenterSession);
+        BrowsePageViewModel = browsePageViewModel ?? new BrowsePageViewModel(
+            ScanSession,
+            ProblemCenterSession);
         ScanSession.SetClosingPredicate(() => IsClosing);
         UnpackSession.SetClosingPredicate(() => IsClosing);
         LibrarySession.SetClosingPredicate(() => IsClosing);
@@ -110,6 +145,7 @@ public sealed class ShellViewModel : ObservableObject
         ProblemCenterSession.Changed += OnProblemCenterChanged;
 
         NavigateScanCommand = new RelayCommand(() => NavigateTo(ScanPage));
+        NavigateBrowseCommand = new RelayCommand(() => NavigateTo(BrowsePage));
         NavigateLibraryCommand = new RelayCommand(() => NavigateTo(LibraryPage));
         NavigateProblemsCommand = new RelayCommand(() => NavigateTo(ProblemsPage));
         NavigateCommand = new RelayCommand(parameter => NavigateTo(parameter?.ToString()));
@@ -143,6 +179,8 @@ public sealed class ShellViewModel : ObservableObject
 
     public ProblemCenterSession ProblemCenterSession { get; }
 
+    public BrowsePageViewModel BrowsePageViewModel { get; }
+
     public RangeObservableCollection<WallpaperCardViewModel> ScannedWallpapers
         => ScanSession.ScannedWallpapers;
 
@@ -158,6 +196,8 @@ public sealed class ShellViewModel : ObservableObject
     public ObservableCollection<WallpaperCardViewModel> OutputItems => LibraryWallpapers;
 
     public RelayCommand NavigateScanCommand { get; }
+
+    public RelayCommand NavigateBrowseCommand { get; }
 
     public RelayCommand NavigateLibraryCommand { get; }
 
@@ -344,21 +384,27 @@ public sealed class ShellViewModel : ObservableObject
 
     public string LibraryEmptyDescription => LibrarySession.EmptyDescription;
 
-    public string PageCode => IsScanPage ? "01" : IsLibraryPage ? "02" : "03";
+    public string PageCode => IsScanPage ? "01" : IsBrowsePage ? "02" : IsLibraryPage ? "03" : "04";
 
     public string CurrentPageTitle => IsScanPage
         ? "扫描中心"
+        : IsBrowsePage
+            ? "项目浏览"
         : IsLibraryPage
             ? "输出壁纸库"
             : "问题中心";
 
     public string CurrentPageSubtitle => IsScanPage
         ? "读取 Workshop 项目元数据，并在内存中选择待处理内容"
+        : IsBrowsePage
+            ? "浏览当前成功扫描的项目快照"
         : IsLibraryPage
             ? "浏览已写入输出目录的壁纸记录"
             : "查看启动、扫描、解包、图库与诊断问题";
 
     public bool IsScanPage => string.Equals(_currentPage, ScanPage, StringComparison.Ordinal);
+
+    public bool IsBrowsePage => string.Equals(_currentPage, BrowsePage, StringComparison.Ordinal);
 
     public bool IsLibraryPage => string.Equals(_currentPage, LibraryPage, StringComparison.Ordinal);
 
@@ -595,7 +641,11 @@ public sealed class ShellViewModel : ObservableObject
     public void NavigateTo(string? pageCode)
     {
         var target = pageCode?.Trim().ToUpperInvariant();
-        if (target is "02" or "OUTPUT" or "OUTPUT LIBRARY")
+        if (target is "02")
+        {
+            target = BrowsePage;
+        }
+        else if (target is "03" or "OUTPUT" or "OUTPUT LIBRARY")
         {
             target = LibraryPage;
         }
@@ -603,12 +653,12 @@ public sealed class ShellViewModel : ObservableObject
         {
             target = ScanPage;
         }
-        else if (target is "03" or "PROBLEM" or "PROBLEM CENTER")
+        else if (target is "04" or "PROBLEM" or "PROBLEM CENTER")
         {
             target = ProblemsPage;
         }
 
-        if (target is not (ScanPage or LibraryPage or ProblemsPage))
+        if (target is not (ScanPage or BrowsePage or LibraryPage or ProblemsPage))
         {
             return;
         }
@@ -620,6 +670,7 @@ public sealed class ShellViewModel : ObservableObject
 
         OnPropertiesChanged(
             nameof(IsScanPage),
+            nameof(IsBrowsePage),
             nameof(IsLibraryPage),
             nameof(IsProblemsPage),
             nameof(CurrentPageTitle),
@@ -642,6 +693,25 @@ public sealed class ShellViewModel : ObservableObject
     {
         ScanSession.CancelPathValidation();
         _taskLifecycleCoordinator.RequestCancellation();
+    }
+
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        CancelPendingWork();
+        _taskLifecycleCoordinator.Changed -= OnTaskLifecycleChanged;
+        ScanSession.PropertyChanged -= OnScanSessionPropertyChanged;
+        UnpackSession.PropertyChanged -= OnUnpackSessionPropertyChanged;
+        UnpackSession.ItemResultsAvailable -= ScanSession.ApplyItemResults;
+        LibrarySession.PropertyChanged -= OnLibrarySessionPropertyChanged;
+        ProblemCenterSession.PropertyChanged -= OnProblemCenterPropertyChanged;
+        ProblemCenterSession.Changed -= OnProblemCenterChanged;
+        BrowsePageViewModel.Dispose();
     }
 
     internal void BeginClosePreparation()
@@ -1233,6 +1303,7 @@ public sealed class ShellViewModel : ObservableObject
     private void UpdateCommandStates()
     {
         NavigateScanCommand.NotifyCanExecuteChanged();
+        NavigateBrowseCommand.NotifyCanExecuteChanged();
         NavigateLibraryCommand.NotifyCanExecuteChanged();
         BrowseSourceCommand.NotifyCanExecuteChanged();
         BrowseOutputCommand.NotifyCanExecuteChanged();

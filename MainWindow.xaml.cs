@@ -196,6 +196,7 @@ public partial class MainWindow : Window
         SystemParameters.StaticPropertyChanged -= SystemParameters_StaticPropertyChanged;
         _motionPolicy.PropertyChanged -= MotionPolicy_PropertyChanged;
         _motionPolicy.Dispose();
+        ViewModel?.Dispose();
     }
 
     private async void Window_Closing(object? sender, CancelEventArgs e)
@@ -329,6 +330,7 @@ public partial class MainWindow : Window
     private void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName is nameof(ShellViewModel.IsScanPage)
+            or nameof(ShellViewModel.IsBrowsePage)
             or nameof(ShellViewModel.IsLibraryPage)
             or nameof(ShellViewModel.IsProblemsPage)
             or nameof(ShellViewModel.PageCode))
@@ -427,8 +429,10 @@ public partial class MainWindow : Window
             ? ProblemCenterPage
             : ViewModel?.IsLibraryPage == true
                 ? LibraryPage
-                : ScanPage;
-        foreach (var view in new FrameworkElement[] { ScanPage, LibraryPage, ProblemCenterPage })
+                : ViewModel?.IsBrowsePage == true
+                    ? BrowsePage
+                    : ScanPage;
+        foreach (var view in new FrameworkElement[] { ScanPage, BrowsePage, LibraryPage, ProblemCenterPage })
         {
             view.ApplyAnimationClock(OpacityProperty, null);
             view.RenderTransform = Transform.Identity;
@@ -441,7 +445,9 @@ public partial class MainWindow : Window
             ? 58
             : ViewModel?.IsLibraryPage == true
                 ? 32
-                : 0;
+                : ViewModel?.IsBrowsePage == true
+                    ? 16
+                    : 0;
         SetBusyAnimation(ViewModel?.IsBusy == true);
     }
 
@@ -643,6 +649,13 @@ public partial class MainWindow : Window
         if (ViewModel?.IsLibraryPage == true)
         {
             return await LibraryPage.PositionSnapshotAsync(
+                requestedIndex,
+                () => ViewModel?.IsBusy == true);
+        }
+
+        if (ViewModel?.IsBrowsePage == true)
+        {
+            return await BrowsePage.PositionSnapshotAsync(
                 requestedIndex,
                 () => ViewModel?.IsBusy == true);
         }
