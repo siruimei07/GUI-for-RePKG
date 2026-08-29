@@ -1064,6 +1064,13 @@ internal static class ProjectBrowserProcessingRegressionTests
                && focusedCard?.IsKeyboardFocusWithin == true,
             "Problems→Browse did not realize/focus the exact project inside the grid.");
 
+        VerifyProblemFocusSurvivesSameIdBatchReset(
+            window,
+            shell,
+            project,
+            problemList!,
+            assert);
+
         var staleIssue = shell.ProblemCenterSession.PublishProjectIssue(AppIssue.Create(
             "WPF_STALE_NAV",
             AppIssueSeverity.Warning,
@@ -1102,6 +1109,52 @@ internal static class ProjectBrowserProcessingRegressionTests
                && AutomationProperties.GetLiveSetting(staleStatusText)
                    == AutomationLiveSetting.Polite,
             "Compact/filtered stale reveal status is not a visible live Problems-page fact.");
+        var visibleStaleStatus = staleStatus!;
+
+        var staleSelectionBeforeBatch = shell.SelectedIssue;
+        var staleStatusBeforeBatch = shell.ProjectNavigationStatusText;
+        var unrelatedIssue = AppIssue.Create(
+            "WPF_STALE_UNRELATED_BATCH",
+            AppIssueSeverity.Information,
+            AppIssueSource.Diagnostics,
+            "Unrelated stale-status batch fixture",
+            "An unchanged selected issue must retain stale status ownership.",
+            AppDiskFact.NotModified,
+            AppIssueAction.None,
+            "wpf-stale-unrelated-batch");
+        shell.ProblemCenterSession.ApplyBatch(
+            publications: [unrelatedIssue],
+            resolutions: []);
+        PumpWindow(window);
+        assert(ReferenceEquals(shell.SelectedIssue, staleSelectionBeforeBatch)
+               && shell.SelectedIssue?.Id == staleIssue.Id
+               && string.Equals(
+                   shell.ProjectNavigationStatusText,
+                   staleStatusBeforeBatch,
+                   StringComparison.Ordinal)
+               && visibleStaleStatus.Visibility == Visibility.Visible
+               && visibleStaleStatus.IsVisible,
+            "An unrelated issue batch cleared stale status despite unchanged selected issue identity "
+            + $"(sameReference={ReferenceEquals(shell.SelectedIssue, staleSelectionBeforeBatch)}; "
+            + $"selected={shell.SelectedIssue?.Id}; expected={staleIssue.Id}; "
+            + $"status='{shell.ProjectNavigationStatusText}').");
+
+        shell.SelectedIssue = unrelatedIssue;
+        PumpWindow(window);
+        assert(string.IsNullOrEmpty(shell.ProjectNavigationStatusText)
+               && visibleStaleStatus.Visibility != Visibility.Visible,
+            "A genuine selected issue change did not clear stale-project status ownership.");
+
+        shell.SelectedIssue = staleIssue;
+        shell.RevealProblemProjectCommand.Execute(staleIssue);
+        PumpWindow(window);
+        assert(!string.IsNullOrWhiteSpace(shell.ProjectNavigationStatusText),
+            "The stale status fixture could not be re-established before semantic navigation.");
+        shell.NavigateTo("PROBLEMS");
+        PumpWindow(window);
+        assert(string.IsNullOrEmpty(shell.ProjectNavigationStatusText)
+               && visibleStaleStatus.Visibility != Visibility.Visible,
+            "A later semantic navigation request did not clear stale-project status ownership.");
 
         var ownershipFillers = Enumerable.Range(0, 80)
             .Select(index => AppIssue.Create(
@@ -1157,6 +1210,99 @@ internal static class ProjectBrowserProcessingRegressionTests
         window.Width = 1190;
         PumpWindow(window);
         VerifyProcessingLiveRegion(window, shell, assert);
+    }
+
+    private static void VerifyProblemFocusSurvivesSameIdBatchReset(
+        WallpaperField.MainWindow window,
+        ShellViewModel shell,
+        BrowseProjectViewModel project,
+        ListBox problemList,
+        Action<bool, string> assert)
+    {
+        const string targetCode = "WPF_RESET_PENDING_FOCUS";
+        const string targetContext = "wpf-reset-pending-focus";
+        var fillers = Enumerable.Range(0, 96)
+            .Select(index => AppIssue.Create(
+                $"WPF_RESET_FOCUS_FILLER_{index:D2}",
+                AppIssueSeverity.Information,
+                AppIssueSource.Diagnostics,
+                $"Reset focus filler {index:D2}",
+                "Keeps the exact target below the virtualized viewport.",
+                AppDiskFact.NotModified,
+                AppIssueAction.None,
+                $"wpf-reset-focus-filler-{index:D2}"))
+            .ToArray();
+        shell.ProblemCenterSession.Publish(fillers);
+        var target = shell.ProblemCenterSession.PublishProjectIssue(AppIssue.Create(
+            targetCode,
+            AppIssueSeverity.Error,
+            AppIssueSource.Browse,
+            "Pending exact focus survives Reset",
+            "The same issue ID is replaced before ContextIdle delivery.",
+            AppDiskFact.NotModified,
+            AppIssueAction.Retry,
+            targetContext,
+            projectKey: project.ProjectKey));
+
+        shell.NavigateTo("PROBLEMS");
+        problemList.ScrollIntoView(fillers[0]);
+        PumpWindow(window);
+        var targetStartedVirtualized = problemList.ItemContainerGenerator
+            .ContainerFromItem(target) is null;
+        shell.NavigateTo("BROWSE");
+        PumpWindow(window);
+
+        shell.ShowBrowseProjectProblemsCommand.Execute(project);
+        var requestSelectedTarget = shell.SelectedIssue?.Id == target.Id;
+        var unrelated = AppIssue.Create(
+            "WPF_RESET_FOCUS_UNRELATED",
+            AppIssueSeverity.Information,
+            AppIssueSource.Diagnostics,
+            "Reset focus unrelated publication",
+            "Forces the same transaction to replace the selected issue.",
+            AppDiskFact.NotModified,
+            AppIssueAction.None,
+            "wpf-reset-focus-unrelated");
+        shell.ProblemCenterSession.ApplyBatch(
+            publications: [unrelated],
+            resolutions:
+            [
+                new AppIssueResolutionRequest(
+                    AppIssueSource.Browse,
+                    targetCode,
+                    project.ProjectKey,
+                    targetContext)
+            ]);
+        var replacement = shell.ProblemCenterSession.Issues
+            .Single(issue => issue.Id == target.Id);
+        PumpWindow(window);
+        var replacementContainer = problemList.ItemContainerGenerator
+            .ContainerFromItem(replacement) as ListBoxItem;
+        assert(targetStartedVirtualized
+               && requestSelectedTarget
+               && replacement.ResolutionState == AppIssueResolutionState.Resolved
+               && ReferenceEquals(shell.SelectedIssue, replacement)
+               && ReferenceEquals(problemList.SelectedItem, replacement)
+               && replacementContainer is
+               {
+                   IsLoaded: true,
+                   IsVisible: true,
+                   IsKeyboardFocusWithin: true,
+                   ActualHeight: > 0
+               },
+            "A same-ID batch Reset cancelled exact pending Problem focus or kept the old issue object "
+            + $"(deep={targetStartedVirtualized}; requested={requestSelectedTarget}; "
+            + $"state={replacement.ResolutionState}; "
+            + $"sessionReplacement={ReferenceEquals(shell.SelectedIssue, replacement)}; "
+            + $"listReplacement={ReferenceEquals(problemList.SelectedItem, replacement)}; "
+            + $"focused={replacementContainer?.IsKeyboardFocusWithin}).");
+
+        shell.ProblemCenterSession.ClearResolvedCount();
+        PumpWindow(window);
+        assert(shell.ProblemCenterSession.Issues.All(issue => issue.Id != target.Id)
+               && shell.SelectedIssue is null
+               && problemList.SelectedItem is null,
+            "Actual selected issue removal did not clear the loaded view selection/focus request.");
     }
 
     private static void VerifyProblemSelectionSurvivesBoundReset(

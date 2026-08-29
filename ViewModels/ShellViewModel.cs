@@ -38,6 +38,7 @@ public sealed class ShellViewModel : ObservableObject, IDisposable
     private string _currentTitle = string.Empty;
     private string _currentStage = "IDLE";
     private string _projectNavigationStatusText = string.Empty;
+    private Guid? _projectNavigationStatusIssueId;
     private TaskLifecycleSnapshot _taskLifecycle;
     private bool _disposed;
 
@@ -699,7 +700,7 @@ public sealed class ShellViewModel : ObservableObject, IDisposable
             return;
         }
 
-        ProjectNavigationStatusText = string.Empty;
+        ClearProjectNavigationStatus();
         if (!SetProperty(ref _currentPage, target, nameof(PageCode)))
         {
             return;
@@ -1148,7 +1149,12 @@ public sealed class ShellViewModel : ObservableObject, IDisposable
                 OnPropertyChanged(nameof(FilteredIssueCount));
                 break;
             case nameof(ProblemCenterSession.SelectedIssue):
-                ProjectNavigationStatusText = string.Empty;
+                if (_projectNavigationStatusIssueId is null
+                    || ProblemCenterSession.SelectedIssue?.Id != _projectNavigationStatusIssueId.Value)
+                {
+                    ClearProjectNavigationStatus();
+                }
+
                 OnPropertiesChanged(nameof(SelectedIssue), nameof(HasSelectedIssue));
                 RevealProblemProjectCommand.NotifyCanExecuteChanged();
                 break;
@@ -1286,11 +1292,10 @@ public sealed class ShellViewModel : ObservableObject, IDisposable
             clearBlockingFilters: true);
         if (issue is null)
         {
-            ProjectNavigationStatusText = "当前项目暂无可定位的问题记录。";
+            SetProjectNavigationStatus("当前项目暂无可定位的问题记录。");
             return;
         }
 
-        ProjectNavigationStatusText = string.Empty;
         NavigateTo(ProblemsPage);
         ProblemIssueFocusRequested?.Invoke(
             this,
@@ -1314,8 +1319,9 @@ public sealed class ShellViewModel : ObservableObject, IDisposable
         if (!revealed)
         {
             NavigateTo(ProblemsPage);
-            ProjectNavigationStatusText =
-                "该问题对应的项目已不在当前扫描快照中；请重新扫描后再试。";
+            SetProjectNavigationStatus(
+                "该问题对应的项目已不在当前扫描快照中；请重新扫描后再试。",
+                issue.Id);
             return;
         }
 
@@ -1323,6 +1329,15 @@ public sealed class ShellViewModel : ObservableObject, IDisposable
         BrowseProjectFocusRequested?.Invoke(
             this,
             new BrowseProjectFocusRequestedEventArgs(issue.ProjectKey));
+    }
+
+    private void ClearProjectNavigationStatus()
+        => SetProjectNavigationStatus(string.Empty);
+
+    private void SetProjectNavigationStatus(string statusText, Guid? issueId = null)
+    {
+        _projectNavigationStatusIssueId = issueId;
+        ProjectNavigationStatusText = statusText;
     }
 
     private bool CanRefreshLibrary()
