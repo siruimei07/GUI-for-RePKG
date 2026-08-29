@@ -515,13 +515,17 @@ internal static class ProblemDiagnosticsRegressionTests
                 "Compact",
                 "1.2.2.0");
             var privatePath = Path.Combine(root, "private", "metadata.json");
+            const string projectKey = "export-fixture:0123456789ABCDEF";
             var issue = CreateIssue(
                 "EXPORT_FIXTURE",
                 AppIssueSource.Diagnostics,
                 privatePath,
                 summary: $"Problem at {privatePath}",
                 details: $"Technical detail for {privatePath}",
-                pathContext: privatePath);
+                pathContext: privatePath) with
+            {
+                ProjectKey = projectKey
+            };
             var service = new DiagnosticExportService();
 
             var defaultPath = Path.Combine(root, "default.json");
@@ -536,6 +540,7 @@ internal static class ProblemDiagnosticsRegressionTests
                    && defaultDocument.Counts.Visible == 1
                    && defaultDocument.Counts.TotalOccurrences == 1
                    && defaultDocument.Issues.Single().PathContext is null
+                   && defaultDocument.Issues.Single().ProjectKey == projectKey
                    && !defaultDocument.Issues.Single().Summary.Contains(
                        privatePath,
                        StringComparison.OrdinalIgnoreCase)

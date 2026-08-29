@@ -3,7 +3,9 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using Microsoft.Win32;
 using WallpaperField.Composition;
 using WallpaperField.Infrastructure;
@@ -16,6 +18,9 @@ public sealed partial class ProblemCenterView : UserControl
 {
     private readonly HashSet<Guid> _expandedIssueIds = [];
     private bool _restoringExpansion;
+    private bool _isApplyingIssueFocus;
+    private long _issueFocusRequestVersion;
+    private ShellViewModel? _subscribedShell;
 
     public ProblemCenterView()
     {
@@ -23,6 +28,153 @@ public sealed partial class ProblemCenterView : UserControl
     }
 
     private ShellViewModel? ViewModel => DataContext as ShellViewModel;
+
+    private void ProblemCenterView_DataContextChanged(
+        object sender,
+        DependencyPropertyChangedEventArgs e)
+    {
+        AttachShell(e.NewValue as ShellViewModel);
+        Interlocked.Increment(ref _issueFocusRequestVersion);
+    }
+
+    private void ProblemCenterView_Loaded(object sender, RoutedEventArgs e)
+        => AttachShell(DataContext as ShellViewModel);
+
+    private void ProblemCenterView_Unloaded(object sender, RoutedEventArgs e)
+    {
+        AttachShell(null);
+        Interlocked.Increment(ref _issueFocusRequestVersion);
+    }
+
+    private void AttachShell(ShellViewModel? shell)
+    {
+        if (ReferenceEquals(_subscribedShell, shell))
+        {
+            return;
+        }
+
+        if (_subscribedShell is not null)
+        {
+            _subscribedShell.ProblemIssueFocusRequested -=
+                OnProblemIssueFocusRequested;
+        }
+
+        _subscribedShell = shell;
+        if (_subscribedShell is not null)
+        {
+            _subscribedShell.ProblemIssueFocusRequested +=
+                OnProblemIssueFocusRequested;
+        }
+    }
+
+    private void OnProblemIssueFocusRequested(
+        object? sender,
+        ProblemIssueFocusRequestedEventArgs e)
+    {
+        if (sender is not ShellViewModel shell
+            || !ReferenceEquals(shell, _subscribedShell))
+        {
+            return;
+        }
+
+        var requestVersion = Interlocked.Increment(ref _issueFocusRequestVersion);
+        _ = Dispatcher.BeginInvoke(
+            () => TryFocusIssue(shell, e.IssueId, requestVersion, 0),
+            DispatcherPriority.ContextIdle);
+    }
+
+    private void TryFocusIssue(
+        ShellViewModel shell,
+        Guid issueId,
+        long requestVersion,
+        int attempt)
+    {
+        if (requestVersion != Volatile.Read(ref _issueFocusRequestVersion)
+            || !ReferenceEquals(DataContext, shell)
+            || !shell.IsProblemsPage
+            || !ProblemsView.IsVisible)
+        {
+            return;
+        }
+
+        var issue = shell.ProblemCenterSession.FilteredIssues.FirstOrDefault(
+            candidate => candidate.Id == issueId);
+        if (issue is null)
+        {
+            return;
+        }
+
+        shell.ProblemCenterSession.SelectedIssue = issue;
+        ProblemResultsList.ScrollIntoView(issue);
+        ProblemResultsList.UpdateLayout();
+        if (requestVersion != Volatile.Read(ref _issueFocusRequestVersion)
+            || !ReferenceEquals(DataContext, shell)
+            || !shell.IsProblemsPage)
+        {
+            return;
+        }
+
+        if (ProblemResultsList.ItemContainerGenerator.ContainerFromItem(issue)
+            is ListBoxItem { IsLoaded: true } container)
+        {
+            _isApplyingIssueFocus = true;
+            try
+            {
+                var scope = FocusManager.GetFocusScope(container);
+                FocusManager.SetFocusedElement(scope, container);
+                container.Focus();
+            }
+            finally
+            {
+                _isApplyingIssueFocus = false;
+            }
+
+            return;
+        }
+
+        if (attempt >= 7)
+        {
+            return;
+        }
+
+        _ = Dispatcher.BeginInvoke(
+            () => TryFocusIssue(
+                shell,
+                issueId,
+                requestVersion,
+                attempt + 1),
+            DispatcherPriority.Loaded);
+    }
+
+    private void ProblemCenterView_PreviewGotKeyboardFocus(
+        object sender,
+        KeyboardFocusChangedEventArgs e)
+    {
+        if (!_isApplyingIssueFocus
+            && !IsVisualDescendantOf(
+                e.NewFocus as DependencyObject,
+                ProblemResultsList))
+        {
+            Interlocked.Increment(ref _issueFocusRequestVersion);
+        }
+    }
+
+    private static bool IsVisualDescendantOf(
+        DependencyObject? candidate,
+        DependencyObject ancestor)
+    {
+        while (candidate is not null)
+        {
+            if (ReferenceEquals(candidate, ancestor))
+            {
+                return true;
+            }
+
+            candidate = VisualTreeHelper.GetParent(candidate);
+        }
+
+        return false;
+    }
 
     internal Task<bool> PositionSnapshotAsync(
         int requestedIndex,

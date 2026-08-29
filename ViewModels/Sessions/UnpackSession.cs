@@ -2,6 +2,7 @@ using System.IO;
 using WallpaperField.Application;
 using WallpaperField.Contracts;
 using WallpaperField.Models;
+using WallpaperField.Services;
 using WallpaperField.ViewModels;
 
 namespace WallpaperField.ViewModels.Sessions;
@@ -33,6 +34,11 @@ public sealed class UnpackSession : ObservableObject
     private string _currentFolder = string.Empty;
     private string _currentTitle = string.Empty;
     private string _currentStage = "IDLE";
+    private Guid? _activeOperationId;
+    private bool _itemResultsConsumed;
+    private WallpaperProcessScope? _activeScope;
+    private WallpaperProcessCompletionSummary? _completionSummary;
+    private string _trayLiveRegionText = string.Empty;
 
     public UnpackSession(
         IWallpaperUnpackService unpackService,
@@ -73,6 +79,9 @@ public sealed class UnpackSession : ObservableObject
         CancelUnpackCommand = new RelayCommand(
             RequestCancellation,
             () => CanCancel);
+        ClearCompletionCommand = new RelayCommand(
+            ClearCompletion,
+            () => HasCompletionSummary);
         _taskLifecycleCoordinator.Changed += OnTaskLifecycleChanged;
     }
 
@@ -80,6 +89,57 @@ public sealed class UnpackSession : ObservableObject
         ItemResultsAvailable;
 
     public RelayCommand CancelUnpackCommand { get; }
+
+    public RelayCommand ClearCompletionCommand { get; }
+
+    public WallpaperProcessScope? ActiveScope
+    {
+        get => _activeScope;
+        private set
+        {
+            if (SetProperty(ref _activeScope, value))
+            {
+                OnPropertyChanged(nameof(HasActiveScope));
+            }
+        }
+    }
+
+    public bool HasActiveScope => ActiveScope is not null;
+
+    public WallpaperProcessCompletionSummary? CompletionSummary
+    {
+        get => _completionSummary;
+        private set
+        {
+            if (SetProperty(ref _completionSummary, value))
+            {
+                OnPropertyChanged(nameof(HasCompletionSummary));
+                ClearCompletionCommand.NotifyCanExecuteChanged();
+            }
+        }
+    }
+
+    public bool HasCompletionSummary => CompletionSummary is not null;
+
+    public bool IsCommitCritical
+        => ActiveScope is not null
+           && (_taskLifecycleCoordinator.Current is
+               {
+                   OperationId: var operationId,
+                   OperationKind: ForegroundOperationKind.Unpack,
+                   State: TaskLifecycleState.CommitCritical
+               }
+               && operationId == ActiveScope.OperationId
+               || CurrentStage is "COMMITTING" or "ROLLINGBACK");
+
+    public string TrayStatusText
+        => IsCommitCritical ? "正在完成安全提交" : StatusText;
+
+    public string TrayLiveRegionText
+    {
+        get => _trayLiveRegionText;
+        private set => SetProperty(ref _trayLiveRegionText, value);
+    }
 
     public bool IsUnpacking
     {
@@ -259,8 +319,7 @@ public sealed class UnpackSession : ObservableObject
                 ForegroundOperationKind.Unpack,
                 (operationId, cancellationToken) => UnpackCoreAsync(
                     operationId,
-                    frozenRequest.Items.ToArray(),
-                    frozenRequest.OutputDirectory.Trim(),
+                    frozenRequest,
                     cancellationToken),
                 out var execution)
             || execution is null)
@@ -295,10 +354,35 @@ public sealed class UnpackSession : ObservableObject
 
     private async Task UnpackCoreAsync(
         Guid operationId,
-        WallpaperRecord[] items,
-        string outputDirectory,
+        FrozenWallpaperProcessRequest frozenRequest,
         CancellationToken cancellationToken)
     {
+        if (_taskLifecycleCoordinator.Current is not
+            {
+                OperationId: var activeOperationId,
+                OperationKind: ForegroundOperationKind.Unpack,
+                State: TaskLifecycleState.Running
+            }
+            || activeOperationId != operationId
+            || !_scanSession.IsCurrentSnapshot(frozenRequest))
+        {
+            SetStatus("扫描快照已变化；当前处理请求未启动", "Neutral");
+            return;
+        }
+
+        var items = frozenRequest.Items.ToArray();
+        var outputDirectory = frozenRequest.OutputDirectory.Trim();
+        _activeOperationId = operationId;
+        _itemResultsConsumed = false;
+        CompletionSummary = null;
+        ActiveScope = new WallpaperProcessScope(
+            operationId,
+            frozenRequest.SnapshotRevision,
+            items.Select(item => new WallpaperProcessScopeItem(
+                item.ProjectKey,
+                item.WorkshopId,
+                item.ProjectKind)));
+        TrayLiveRegionText = $"开始处理 {items.Length:N0} 个项目";
         ClearError();
         IsUnpacking = true;
         CurrentStage = "UNPACK";
@@ -324,13 +408,24 @@ public sealed class UnpackSession : ObservableObject
             var result = await _unpackService
                 .UnpackAsync(request, progress, cancellationToken)
                 .ConfigureAwait(true);
+            var enrichedResult = result with
+            {
+                ItemResults = EnrichItemResults(items, result.ItemResults)
+            };
 
             _problemCenter.ResolveMatching(
                 AppIssueSource.Unpack,
                 "UNPACK_OPERATION_FAILED",
                 NormalizeIssueContext(request.OutputDirectory));
-            PublishItemResults(operationId, result.ItemResults);
-            PublishIssues(operationId, result);
+            PublishItemResults(operationId, enrichedResult.ItemResults);
+            PublishIssues(operationId, enrichedResult, items);
+            CompletionSummary = CreateCompletionSummary(
+                operationId,
+                items.Length,
+                enrichedResult.ItemResults,
+                conservativeCancelledRemainder: false,
+                conservativeFailedRemainder: false);
+            TrayLiveRegionText = FormatCompletionLiveText(CompletionSummary);
             ProcessedCount = result.ProcessedCount;
             TotalCount = result.TotalCount;
             ProgressValue = 100;
@@ -357,8 +452,19 @@ public sealed class UnpackSession : ObservableObject
         catch (WallpaperUnpackCanceledException exception)
             when (cancellationToken.IsCancellationRequested)
         {
-            PublishItemResults(operationId, exception.Result.ItemResults);
-            PublishIssues(operationId, exception.Result);
+            var enrichedResult = exception.Result with
+            {
+                ItemResults = EnrichItemResults(items, exception.Result.ItemResults)
+            };
+            PublishItemResults(operationId, enrichedResult.ItemResults);
+            PublishIssues(operationId, enrichedResult, items);
+            CompletionSummary = CreateCompletionSummary(
+                operationId,
+                items.Length,
+                enrichedResult.ItemResults,
+                conservativeCancelledRemainder: true,
+                conservativeFailedRemainder: false);
+            TrayLiveRegionText = FormatCompletionLiveText(CompletionSummary);
             ProcessedCount = exception.Result.ProcessedCount;
             TotalCount = exception.Result.TotalCount;
             SetSummaryWork(
@@ -375,6 +481,13 @@ public sealed class UnpackSession : ObservableObject
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            CompletionSummary = CreateCompletionSummary(
+                operationId,
+                items.Length,
+                [],
+                conservativeCancelledRemainder: true,
+                conservativeFailedRemainder: false);
+            TrayLiveRegionText = FormatCompletionLiveText(CompletionSummary);
             CurrentStage = "CANCELED";
             IsProgressIndeterminate = false;
             SetProgressCanCancel(false);
@@ -383,6 +496,13 @@ public sealed class UnpackSession : ObservableObject
         }
         catch (Exception exception)
         {
+            CompletionSummary = CreateCompletionSummary(
+                operationId,
+                items.Length,
+                [],
+                conservativeCancelledRemainder: false,
+                conservativeFailedRemainder: true);
+            TrayLiveRegionText = FormatCompletionLiveText(CompletionSummary);
             CurrentStage = "FAILED";
             IsProgressIndeterminate = false;
             SetProgressCanCancel(false);
@@ -405,6 +525,9 @@ public sealed class UnpackSession : ObservableObject
         }
         finally
         {
+            ActiveScope = null;
+            _activeOperationId = null;
+            _itemResultsConsumed = false;
             IsUnpacking = false;
         }
     }
@@ -413,6 +536,15 @@ public sealed class UnpackSession : ObservableObject
         Guid operationId,
         WallpaperUnpackProgress progress)
     {
+        if (_activeOperationId != operationId
+            || ActiveScope?.OperationId != operationId
+            || _taskLifecycleCoordinator.Current.OperationId != operationId)
+        {
+            return;
+        }
+
+        var previousProcessedCount = ProcessedCount;
+        var previousStage = CurrentStage;
         ProcessedCount = progress.ProcessedCount;
         TotalCount = progress.TotalCount;
         ProgressValue = progress is
@@ -449,22 +581,56 @@ public sealed class UnpackSession : ObservableObject
         {
             SetStatus(progress.Message, "Working");
         }
+
+        if (previousProcessedCount != ProcessedCount
+            || !string.Equals(previousStage, CurrentStage, StringComparison.Ordinal))
+        {
+            TrayLiveRegionText = IsCommitCritical
+                ? "正在完成安全提交"
+                : $"{CurrentStage} · 已处理 {ProcessedCount:N0}/{TotalCount:N0}";
+        }
     }
 
     private void PublishItemResults(
         Guid operationId,
         IReadOnlyList<WallpaperUnpackItemResult> itemResults)
-        => ItemResultsAvailable?.Invoke(operationId, itemResults);
-
-    private void PublishIssues(Guid operationId, WallpaperUnpackResult result)
     {
-        var warningGroups = result.Warnings
+        if (_activeOperationId != operationId
+            || ActiveScope?.OperationId != operationId
+            || _itemResultsConsumed)
+        {
+            return;
+        }
+
+        _itemResultsConsumed = true;
+        ItemResultsAvailable?.Invoke(operationId, itemResults);
+    }
+
+    private void PublishIssues(
+        Guid operationId,
+        WallpaperUnpackResult result,
+        IReadOnlyList<WallpaperRecord> records)
+    {
+        var warningFacts = result.Warnings
+            .Select(warning => new
+            {
+                Warning = warning,
+                Record = FindUniqueRecord(records, warning.WorkshopId)
+            })
+            .ToArray();
+        var warningGroups = warningFacts
             .GroupBy(
-                warning => NormalizeItemContext(warning.WorkshopId),
+                fact => fact.Record?.ProjectKey
+                    ?? $"legacy:{NormalizeItemContext(fact.Warning.WorkshopId)}",
                 StringComparer.Ordinal)
             .ToArray();
-        var warningContexts = warningGroups
-            .Select(group => group.Key)
+        var warningProjectKeys = warningFacts
+            .Where(fact => fact.Record is not null)
+            .Select(fact => fact.Record!.ProjectKey)
+            .ToHashSet(StringComparer.Ordinal);
+        var legacyWarningContexts = warningFacts
+            .Where(fact => fact.Record is null)
+            .Select(fact => NormalizeItemContext(fact.Warning.WorkshopId))
             .ToHashSet(StringComparer.Ordinal);
 
         foreach (var item in result.ItemResults.Where(item =>
@@ -472,53 +638,166 @@ public sealed class UnpackSession : ObservableObject
                      && item.CommitState == WallpaperItemCommitState.Committed))
         {
             var context = NormalizeItemContext(item.WorkshopId);
-            _problemCenter.ResolveMatching(
-                AppIssueSource.Unpack,
-                "UNPACK_ITEM_FAILED",
-                context);
-            if (!warningContexts.Contains(context))
+            if (string.IsNullOrWhiteSpace(item.ProjectKey))
             {
-                _problemCenter.ResolveMatching(
+                _problemCenter.ResolveLegacyMatching(
                     AppIssueSource.Unpack,
-                    "UNPACK_ITEM_WARNING",
+                    "UNPACK_ITEM_FAILED",
                     context);
+                if (!legacyWarningContexts.Contains(context))
+                {
+                    _problemCenter.ResolveLegacyMatching(
+                        AppIssueSource.Unpack,
+                        "UNPACK_ITEM_WARNING",
+                        context);
+                }
+            }
+            else
+            {
+                _problemCenter.ResolveProjectIssues(
+                    AppIssueSource.Unpack,
+                    "UNPACK_ITEM_FAILED",
+                    item.ProjectKey,
+                    context);
+                _problemCenter.ResolveLegacyMatching(
+                    AppIssueSource.Unpack,
+                    "UNPACK_ITEM_FAILED",
+                    context);
+                if (!warningProjectKeys.Contains(item.ProjectKey))
+                {
+                    _problemCenter.ResolveProjectIssues(
+                        AppIssueSource.Unpack,
+                        "UNPACK_ITEM_WARNING",
+                        item.ProjectKey,
+                        context);
+                    _problemCenter.ResolveLegacyMatching(
+                        AppIssueSource.Unpack,
+                        "UNPACK_ITEM_WARNING",
+                        context);
+                }
             }
         }
 
-        _problemCenter.Publish(result.Errors.Select(error => AppIssue.Create(
-            "UNPACK_ITEM_FAILED",
-            AppIssueSeverity.Error,
-            AppIssueSource.Unpack,
-            $"{error.WorkshopId} 解包失败。",
-            error.Message,
-            MapDiskFact(error.CommitState),
-            error.CommitState == WallpaperItemCommitState.AdditionalEffectsPossible
-                ? AppIssueAction.OpenOutput
-                : AppIssueAction.Retry,
-            NormalizeItemContext(error.WorkshopId),
-            operationId,
-            error.ScenePackagePath)));
-
-        _problemCenter.Publish(warningGroups.Select(group =>
+        foreach (var error in result.Errors)
         {
+            var record = FindErrorRecord(records, error);
+            var issue = AppIssue.Create(
+                "UNPACK_ITEM_FAILED",
+                AppIssueSeverity.Error,
+                AppIssueSource.Unpack,
+                $"{error.WorkshopId} 解包失败。",
+                error.Message,
+                MapDiskFact(error.CommitState),
+                error.CommitState == WallpaperItemCommitState.AdditionalEffectsPossible
+                    ? AppIssueAction.OpenOutput
+                    : AppIssueAction.Retry,
+                NormalizeItemContext(error.WorkshopId),
+                operationId,
+                error.ScenePackagePath,
+                projectKey: record?.ProjectKey);
+            if (record is null)
+            {
+                _problemCenter.Publish([issue]);
+            }
+            else
+            {
+                _problemCenter.PublishProjectIssue(issue);
+            }
+        }
+
+        foreach (var group in warningGroups)
+        {
+            var first = group.First();
             var item = result.ItemResults.LastOrDefault(candidate =>
-                string.Equals(
-                    candidate.WorkshopId,
-                    group.First().WorkshopId,
-                    StringComparison.OrdinalIgnoreCase));
-            return AppIssue.Create(
+                first.Record is null
+                    ? string.Equals(
+                        candidate.WorkshopId,
+                        first.Warning.WorkshopId,
+                        StringComparison.OrdinalIgnoreCase)
+                    : string.Equals(
+                        candidate.ProjectKey,
+                        first.Record.ProjectKey,
+                        StringComparison.Ordinal));
+            var issue = AppIssue.Create(
                 "UNPACK_ITEM_WARNING",
                 AppIssueSeverity.Warning,
                 AppIssueSource.Unpack,
-                $"{group.First().WorkshopId} 解包完成，但包含需要查看的转换提示。",
+                $"{first.Warning.WorkshopId} 解包完成，但包含需要查看的转换提示。",
                 string.Join(
                     Environment.NewLine,
-                    group.Select(warning => $"{warning.EntryPath}：{warning.Message}")),
+                    group.Select(fact =>
+                        $"{fact.Warning.EntryPath}：{fact.Warning.Message}")),
                 item is null ? AppDiskFact.Unknown : MapDiskFact(item.CommitState),
                 AppIssueAction.OpenOutput,
-                group.Key,
-                operationId);
-        }));
+                NormalizeItemContext(first.Warning.WorkshopId),
+                operationId,
+                projectKey: first.Record?.ProjectKey);
+            if (first.Record is null)
+            {
+                _problemCenter.Publish([issue]);
+            }
+            else
+            {
+                _problemCenter.PublishProjectIssue(issue);
+            }
+        }
+    }
+
+    private static WallpaperRecord? FindErrorRecord(
+        IReadOnlyList<WallpaperRecord> records,
+        WallpaperUnpackError error)
+    {
+        if (!string.IsNullOrWhiteSpace(error.ScenePackagePath))
+        {
+            WallpaperRecord? pathMatch = null;
+            foreach (var record in records.Where(record =>
+                         string.Equals(
+                             record.WorkshopId,
+                             error.WorkshopId,
+                             StringComparison.OrdinalIgnoreCase)
+                         && (PathsEqualOrFalse(
+                                 record.ScenePackagePath,
+                                 error.ScenePackagePath)
+                             || PathsEqualOrFalse(
+                                 record.VideoFilePath,
+                                 error.ScenePackagePath))))
+            {
+                if (pathMatch is not null)
+                {
+                    return null;
+                }
+
+                pathMatch = record;
+            }
+
+            if (pathMatch is not null)
+            {
+                return pathMatch;
+            }
+        }
+
+        return FindUniqueRecord(records, error.WorkshopId);
+    }
+
+    private static WallpaperRecord? FindUniqueRecord(
+        IReadOnlyList<WallpaperRecord> records,
+        string workshopId)
+    {
+        WallpaperRecord? match = null;
+        foreach (var record in records.Where(record => string.Equals(
+                     record.WorkshopId,
+                     workshopId,
+                     StringComparison.OrdinalIgnoreCase)))
+        {
+            if (match is not null)
+            {
+                return null;
+            }
+
+            match = record;
+        }
+
+        return match;
     }
 
     private void RequestCancellation()
@@ -530,6 +809,67 @@ public sealed class UnpackSession : ObservableObject
 
         SetStatus("正在安全取消解包…", "Neutral");
         _taskLifecycleCoordinator.RequestCancellation();
+    }
+
+    private void ClearCompletion()
+    {
+        if (ActiveScope is null)
+        {
+            CompletionSummary = null;
+        }
+    }
+
+    private static IReadOnlyList<WallpaperUnpackItemResult> EnrichItemResults(
+        IReadOnlyList<WallpaperRecord> items,
+        IReadOnlyList<WallpaperUnpackItemResult> itemResults)
+    {
+        var enriched = new WallpaperUnpackItemResult[itemResults.Count];
+        for (var index = 0; index < itemResults.Count; index++)
+        {
+            var result = itemResults[index];
+            var record = items.FirstOrDefault(item =>
+                string.Equals(
+                    item.WorkshopId,
+                    result.WorkshopId,
+                    StringComparison.OrdinalIgnoreCase)
+                && PathsEqualOrFalse(item.OutputDirectory, result.OutputTarget));
+            enriched[index] = record is null
+                ? result
+                : result with { ProjectKey = record.ProjectKey };
+        }
+
+        return Array.AsReadOnly(enriched);
+    }
+
+    private static WallpaperProcessCompletionSummary CreateCompletionSummary(
+        Guid operationId,
+        int totalCount,
+        IReadOnlyList<WallpaperUnpackItemResult> itemResults,
+        bool conservativeCancelledRemainder,
+        bool conservativeFailedRemainder)
+    {
+        var acceptedResults = itemResults
+            .GroupBy(
+                item => string.IsNullOrWhiteSpace(item.ProjectKey)
+                    ? $"legacy:{item.WorkshopId}:{NormalizeIssueContext(item.OutputTarget)}"
+                    : item.ProjectKey,
+                StringComparer.Ordinal)
+            .Select(group => group.Last())
+            .Take(Math.Max(0, totalCount))
+            .ToArray();
+        var remainder = Math.Max(0, totalCount - acceptedResults.Length);
+        return new WallpaperProcessCompletionSummary(
+            operationId,
+            Math.Max(0, totalCount),
+            acceptedResults.Count(item => item.Outcome == WallpaperUnpackOutcome.Succeeded),
+            acceptedResults.Count(item => item.Outcome == WallpaperUnpackOutcome.Failed)
+            + (conservativeFailedRemainder ? remainder : 0),
+            acceptedResults.Count(item => item.Outcome == WallpaperUnpackOutcome.Skipped),
+            acceptedResults.Count(item => item.Outcome == WallpaperUnpackOutcome.Cancelled)
+            + (conservativeCancelledRemainder ? remainder : 0),
+            acceptedResults.Count(item =>
+                item.CommitState == WallpaperItemCommitState.Committed),
+            DateTimeOffset.UtcNow);
     }
 
     private void SetProgressCanCancel(bool value)
@@ -556,7 +896,15 @@ public sealed class UnpackSession : ObservableObject
         object? sender,
         TaskLifecycleSnapshot snapshot)
     {
-        OnPropertyChanged(nameof(CanCancel));
+        OnPropertiesChanged(
+            nameof(CanCancel),
+            nameof(IsCommitCritical),
+            nameof(TrayStatusText));
+        if (IsCommitCritical)
+        {
+            TrayLiveRegionText = "正在完成安全提交";
+        }
+
         CancelUnpackCommand.NotifyCanExecuteChanged();
     }
 
@@ -564,6 +912,7 @@ public sealed class UnpackSession : ObservableObject
     {
         StatusText = text;
         StatusKind = kind;
+        OnPropertyChanged(nameof(TrayStatusText));
     }
 
     private void ClearError() => ErrorText = string.Empty;
@@ -617,6 +966,26 @@ public sealed class UnpackSession : ObservableObject
 
     private static string NormalizeItemContext(string? value)
         => (value?.Trim() ?? string.Empty).ToUpperInvariant();
+
+    private static bool PathsEqualOrFalse(string? left, string? right)
+    {
+        try
+        {
+            return !string.IsNullOrWhiteSpace(left)
+                   && !string.IsNullOrWhiteSpace(right)
+                   && OutputPathPolicy.PathsEqual(left, right);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static string FormatCompletionLiveText(
+        WallpaperProcessCompletionSummary? summary)
+        => summary is null
+            ? string.Empty
+            : $"处理完成 · 成功 {summary.SucceededCount:N0}，失败 {summary.FailedCount:N0}，取消 {summary.CancelledCount:N0}";
 
     private static double NormalizePercent(double value)
     {

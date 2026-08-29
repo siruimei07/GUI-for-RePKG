@@ -37,6 +37,7 @@ public sealed class ShellViewModel : ObservableObject, IDisposable
     private string _currentFolder = string.Empty;
     private string _currentTitle = string.Empty;
     private string _currentStage = "IDLE";
+    private string _projectNavigationStatusText = string.Empty;
     private TaskLifecycleSnapshot _taskLifecycle;
     private bool _disposed;
 
@@ -145,6 +146,7 @@ public sealed class ShellViewModel : ObservableObject, IDisposable
         LibrarySession.PropertyChanged += OnLibrarySessionPropertyChanged;
         ProblemCenterSession.PropertyChanged += OnProblemCenterPropertyChanged;
         ProblemCenterSession.Changed += OnProblemCenterChanged;
+        BrowsePageViewModel.PropertyChanged += OnBrowsePagePropertyChanged;
 
         NavigateScanCommand = new RelayCommand(() => NavigateTo(ScanPage));
         NavigateBrowseCommand = new RelayCommand(() => NavigateTo(BrowsePage));
@@ -157,6 +159,12 @@ public sealed class ShellViewModel : ObservableObject, IDisposable
         ScanCommand = ScanSession.ScanCommand;
         CancelScanCommand = ScanSession.CancelScanCommand;
         UnpackCommand = new AsyncRelayCommand(UnpackSelectedAsync, CanStartUnpack);
+        ProcessCurrentBrowseProjectCommand = new AsyncRelayCommand(
+            ProcessCurrentBrowseProjectAsync,
+            CanProcessCurrentBrowseProject);
+        ProcessBrowseSelectionCommand = new AsyncRelayCommand(
+            ProcessBrowseSelectionAsync,
+            CanProcessBrowseSelection);
         CancelUnpackCommand = UnpackSession.CancelUnpackCommand;
         RefreshLibraryCommand = new AsyncRelayCommand(
             LibrarySession.RefreshAsync,
@@ -169,6 +177,12 @@ public sealed class ShellViewModel : ObservableObject, IDisposable
         ClearResolvedIssuesCommand = ProblemCenterSession.ClearResolvedCommand;
         SelectCurrentMatchesCommand = ScanSession.SelectCurrentMatchesCommand;
         ClearUnpackSelectionCommand = ScanSession.ClearUnpackSelectionCommand;
+        ShowBrowseProjectProblemsCommand = new RelayCommand(
+            ShowBrowseProjectProblems,
+            CanShowBrowseProjectProblems);
+        RevealProblemProjectCommand = new RelayCommand(
+            RevealProblemProject,
+            CanRevealProblemProject);
         _taskLifecycleCoordinator.Changed += OnTaskLifecycleChanged;
         TaskLifecycle = _taskLifecycleCoordinator.Current;
     }
@@ -182,6 +196,12 @@ public sealed class ShellViewModel : ObservableObject, IDisposable
     public ProblemCenterSession ProblemCenterSession { get; }
 
     public BrowsePageViewModel BrowsePageViewModel { get; }
+
+    public event EventHandler<BrowseProjectFocusRequestedEventArgs>?
+        BrowseProjectFocusRequested;
+
+    public event EventHandler<ProblemIssueFocusRequestedEventArgs>?
+        ProblemIssueFocusRequested;
 
     public RangeObservableCollection<WallpaperCardViewModel> ScannedWallpapers
         => ScanSession.ScannedWallpapers;
@@ -217,6 +237,10 @@ public sealed class ShellViewModel : ObservableObject, IDisposable
 
     public AsyncRelayCommand UnpackCommand { get; }
 
+    public AsyncRelayCommand ProcessCurrentBrowseProjectCommand { get; }
+
+    public AsyncRelayCommand ProcessBrowseSelectionCommand { get; }
+
     public RelayCommand CancelUnpackCommand { get; }
 
     public AsyncRelayCommand RefreshLibraryCommand { get; }
@@ -236,6 +260,16 @@ public sealed class ShellViewModel : ObservableObject, IDisposable
     public RelayCommand SelectCurrentMatchesCommand { get; }
 
     public RelayCommand ClearUnpackSelectionCommand { get; }
+
+    public RelayCommand ShowBrowseProjectProblemsCommand { get; }
+
+    public RelayCommand RevealProblemProjectCommand { get; }
+
+    public string ProjectNavigationStatusText
+    {
+        get => _projectNavigationStatusText;
+        private set => SetProperty(ref _projectNavigationStatusText, value);
+    }
 
     public string SourcePath
     {
@@ -713,6 +747,7 @@ public sealed class ShellViewModel : ObservableObject, IDisposable
         LibrarySession.PropertyChanged -= OnLibrarySessionPropertyChanged;
         ProblemCenterSession.PropertyChanged -= OnProblemCenterPropertyChanged;
         ProblemCenterSession.Changed -= OnProblemCenterChanged;
+        BrowsePageViewModel.PropertyChanged -= OnBrowsePagePropertyChanged;
         BrowsePageViewModel.Dispose();
     }
 
@@ -1072,6 +1107,19 @@ public sealed class ShellViewModel : ObservableObject, IDisposable
             nameof(ScanIssueSummary),
             nameof(LibraryIssueSummary));
         ClearResolvedIssuesCommand.NotifyCanExecuteChanged();
+        ShowBrowseProjectProblemsCommand.NotifyCanExecuteChanged();
+        RevealProblemProjectCommand.NotifyCanExecuteChanged();
+    }
+
+    private void OnBrowsePagePropertyChanged(
+        object? sender,
+        PropertyChangedEventArgs args)
+    {
+        if (args.PropertyName == nameof(BrowsePageViewModel.CurrentProject))
+        {
+            ProcessCurrentBrowseProjectCommand.NotifyCanExecuteChanged();
+            ShowBrowseProjectProblemsCommand.NotifyCanExecuteChanged();
+        }
     }
 
     private void OnProblemCenterPropertyChanged(
@@ -1100,6 +1148,7 @@ public sealed class ShellViewModel : ObservableObject, IDisposable
                 break;
             case nameof(ProblemCenterSession.SelectedIssue):
                 OnPropertiesChanged(nameof(SelectedIssue), nameof(HasSelectedIssue));
+                RevealProblemProjectCommand.NotifyCanExecuteChanged();
                 break;
             case nameof(ProblemCenterSession.OpenIssueCount):
                 OnPropertyChanged(nameof(OpenIssueCount));
@@ -1185,6 +1234,94 @@ public sealed class ShellViewModel : ObservableObject, IDisposable
            && request is not null
             ? UnpackSession.UnpackAsync(request)
             : Task.CompletedTask;
+
+    private bool CanProcessCurrentBrowseProject()
+        => !IsClosing
+           && !HasActiveForegroundOperation
+           && !IsBusy
+           && ScanSession.IsCurrentScanIdentity()
+           && BrowsePageViewModel.CurrentProject is { IsProcessable: true };
+
+    private Task ProcessCurrentBrowseProjectAsync()
+        => BrowsePageViewModel.CurrentProject is { } project
+           && ScanSession.TryFreezeItemRequest(project.Card, out var request)
+           && request is not null
+            ? UnpackSession.UnpackAsync(request)
+            : Task.CompletedTask;
+
+    private bool CanProcessBrowseSelection()
+        => !IsClosing
+           && !HasActiveForegroundOperation
+           && !IsBusy
+           && ScanSession.IsCurrentScanIdentity()
+           && ScanSession.SelectedUnpackCount > 0;
+
+    private Task ProcessBrowseSelectionAsync()
+        => ScanSession.TryFreezeSelectedRequest(out var request)
+           && request is not null
+            ? UnpackSession.UnpackAsync(request)
+            : Task.CompletedTask;
+
+    private bool CanShowBrowseProjectProblems(object? parameter)
+    {
+        var project = parameter as BrowseProjectViewModel
+                      ?? BrowsePageViewModel.CurrentProject;
+        return project is not null
+               && ProblemCenterSession.GetProjectIssues(project.ProjectKey).Count > 0;
+    }
+
+    private void ShowBrowseProjectProblems(object? parameter)
+    {
+        var project = parameter as BrowseProjectViewModel
+                      ?? BrowsePageViewModel.CurrentProject;
+        if (project is null)
+        {
+            return;
+        }
+
+        var issue = ProblemCenterSession.SelectPreferredProjectIssue(
+            project.ProjectKey,
+            clearBlockingFilters: true);
+        if (issue is null)
+        {
+            ProjectNavigationStatusText = "当前项目暂无可定位的问题记录。";
+            return;
+        }
+
+        ProjectNavigationStatusText = string.Empty;
+        NavigateTo(ProblemsPage);
+        ProblemIssueFocusRequested?.Invoke(
+            this,
+            new ProblemIssueFocusRequestedEventArgs(issue.Id));
+    }
+
+    private bool CanRevealProblemProject(object? parameter)
+        => (parameter as AppIssue ?? SelectedIssue)?.ProjectKey is { Length: > 0 };
+
+    private void RevealProblemProject(object? parameter)
+    {
+        var issue = parameter as AppIssue ?? SelectedIssue;
+        if (string.IsNullOrWhiteSpace(issue?.ProjectKey))
+        {
+            return;
+        }
+
+        var revealed = BrowsePageViewModel.RevealProject(
+            issue.ProjectKey,
+            clearBlockingFilters: true);
+        NavigateTo(BrowsePage);
+        if (!revealed)
+        {
+            ProjectNavigationStatusText =
+                "该问题对应的项目已不在当前扫描快照中；请重新扫描后再试。";
+            return;
+        }
+
+        ProjectNavigationStatusText = string.Empty;
+        BrowseProjectFocusRequested?.Invoke(
+            this,
+            new BrowseProjectFocusRequestedEventArgs(issue.ProjectKey));
+    }
 
     private bool CanRefreshLibrary()
         => !IsClosing
@@ -1312,12 +1449,16 @@ public sealed class ShellViewModel : ObservableObject, IDisposable
         ScanCommand.NotifyCanExecuteChanged();
         CancelScanCommand.NotifyCanExecuteChanged();
         UnpackCommand.NotifyCanExecuteChanged();
+        ProcessCurrentBrowseProjectCommand.NotifyCanExecuteChanged();
+        ProcessBrowseSelectionCommand.NotifyCanExecuteChanged();
         CancelUnpackCommand.NotifyCanExecuteChanged();
         RefreshLibraryCommand.NotifyCanExecuteChanged();
         CancelLibraryRefreshCommand.NotifyCanExecuteChanged();
         OpenFolderCommand.NotifyCanExecuteChanged();
         SelectCurrentMatchesCommand.NotifyCanExecuteChanged();
         ClearUnpackSelectionCommand.NotifyCanExecuteChanged();
+        ShowBrowseProjectProblemsCommand.NotifyCanExecuteChanged();
+        RevealProblemProjectCommand.NotifyCanExecuteChanged();
     }
 
 }

@@ -14,7 +14,8 @@ public enum AppIssueSource
     Unpack,
     Library,
     Settings,
-    Diagnostics
+    Diagnostics,
+    Browse
 }
 
 public enum AppDiskFact
@@ -42,6 +43,18 @@ public enum AppIssueAction
     ExportDiagnostics
 }
 
+public sealed class BrowseProjectFocusRequestedEventArgs(string projectKey)
+    : EventArgs
+{
+    public string ProjectKey { get; } = projectKey;
+}
+
+public sealed class ProblemIssueFocusRequestedEventArgs(Guid issueId)
+    : EventArgs
+{
+    public Guid IssueId { get; } = issueId;
+}
+
 public sealed record AppIssue(
     Guid Id,
     string Code,
@@ -62,6 +75,8 @@ public sealed record AppIssue(
 
     public int OccurrenceCount { get; init; } = 1;
 
+    public string? ProjectKey { get; init; }
+
     public static AppIssue Create(
         string code,
         AppIssueSeverity severity,
@@ -73,7 +88,8 @@ public sealed record AppIssue(
         string contextKey,
         Guid? operationId = null,
         string? pathContext = null,
-        DateTimeOffset? timestampUtc = null)
+        DateTimeOffset? timestampUtc = null,
+        string? projectKey = null)
         => new(
             Guid.NewGuid(),
             code,
@@ -88,7 +104,10 @@ public sealed record AppIssue(
             pathContext,
             contextKey,
             AppIssueResolutionState.Open,
-            null);
+            null)
+        {
+            ProjectKey = projectKey
+        };
 
     internal AppIssue Normalize()
         => this with
@@ -100,6 +119,9 @@ public sealed record AppIssue(
                 ? null
                 : Bound(PathContext, 1024),
             ContextKey = Bound(ContextKey, 512),
+            ProjectKey = string.IsNullOrWhiteSpace(ProjectKey)
+                ? null
+                : Bound(ProjectKey, 512),
             OccurrenceCount = Math.Max(1, OccurrenceCount)
         };
 
@@ -144,6 +166,47 @@ public sealed class AppIssueStore
         }
     }
 
+    public AppIssue PublishProjectIssue(AppIssue issue)
+    {
+        ArgumentNullException.ThrowIfNull(issue);
+        var normalized = issue.Normalize();
+        if (string.IsNullOrWhiteSpace(normalized.ProjectKey))
+        {
+            throw new ArgumentException(
+                "A project issue requires a non-empty ProjectKey.",
+                nameof(issue));
+        }
+
+        lock (_syncRoot)
+        {
+            var existingIndex = _items.FindIndex(item =>
+                item.ResolutionState == AppIssueResolutionState.Open
+                && item.Source == normalized.Source
+                && string.Equals(item.Code, normalized.Code, StringComparison.Ordinal)
+                && string.Equals(item.ProjectKey, normalized.ProjectKey, StringComparison.Ordinal)
+                && string.Equals(item.ContextKey, normalized.ContextKey, StringComparison.Ordinal));
+            if (existingIndex >= 0)
+            {
+                var existing = _items[existingIndex];
+                var updated = normalized with
+                {
+                    Id = existing.Id,
+                    TimestampUtc = normalized.TimestampUtc >= existing.TimestampUtc
+                        ? normalized.TimestampUtc
+                        : existing.TimestampUtc,
+                    OccurrenceCount = SaturatingAdd(
+                        existing.OccurrenceCount,
+                        normalized.OccurrenceCount)
+                };
+                _items[existingIndex] = updated;
+                return updated;
+            }
+
+            AddBounded(normalized);
+            return normalized;
+        }
+    }
+
     public int ResolveMatching(
         AppIssueSource source,
         string code,
@@ -178,6 +241,99 @@ public sealed class AppIssueStore
         return resolved;
     }
 
+    public int ResolveLegacyMatching(
+        AppIssueSource source,
+        string code,
+        string contextKey,
+        DateTimeOffset? resolvedAtUtc = null)
+    {
+        var resolved = 0;
+        var timestamp = resolvedAtUtc ?? DateTimeOffset.UtcNow;
+
+        lock (_syncRoot)
+        {
+            for (var index = 0; index < _items.Count; index++)
+            {
+                var issue = _items[index];
+                if (issue.ResolutionState != AppIssueResolutionState.Open
+                    || issue.ProjectKey is not null
+                    || issue.Source != source
+                    || !string.Equals(issue.Code, code, StringComparison.Ordinal)
+                    || !string.Equals(
+                        issue.ContextKey,
+                        contextKey,
+                        StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                _items[index] = issue with
+                {
+                    ResolutionState = AppIssueResolutionState.Resolved,
+                    ResolvedAtUtc = timestamp
+                };
+                resolved++;
+            }
+        }
+
+        return resolved;
+    }
+
+    public int ResolveProjectMatching(
+        AppIssueSource source,
+        string code,
+        string projectKey,
+        string? contextKey = null,
+        DateTimeOffset? resolvedAtUtc = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(projectKey);
+        var resolved = 0;
+        var timestamp = resolvedAtUtc ?? DateTimeOffset.UtcNow;
+
+        lock (_syncRoot)
+        {
+            for (var index = 0; index < _items.Count; index++)
+            {
+                var issue = _items[index];
+                if (issue.ResolutionState != AppIssueResolutionState.Open
+                    || issue.Source != source
+                    || !string.Equals(issue.Code, code, StringComparison.Ordinal)
+                    || !string.Equals(issue.ProjectKey, projectKey, StringComparison.Ordinal)
+                    || (contextKey is not null
+                        && !string.Equals(
+                            issue.ContextKey,
+                            contextKey,
+                            StringComparison.Ordinal)))
+                {
+                    continue;
+                }
+
+                _items[index] = issue with
+                {
+                    ResolutionState = AppIssueResolutionState.Resolved,
+                    ResolvedAtUtc = timestamp
+                };
+                resolved++;
+            }
+        }
+
+        return resolved;
+    }
+
+    public IReadOnlyList<AppIssue> ProjectSnapshot(string projectKey)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(projectKey);
+        lock (_syncRoot)
+        {
+            return _items
+                .Where(issue => string.Equals(
+                    issue.ProjectKey,
+                    projectKey,
+                    StringComparison.Ordinal))
+                .ToArray();
+        }
+    }
+
     public int ClearResolved()
     {
         lock (_syncRoot)
@@ -195,6 +351,9 @@ public sealed class AppIssueStore
                 Environment.NewLine,
                 _items.Select(issue =>
                     $"[{issue.Severity}] {issue.Source}/{issue.Code} · {issue.Summary}"
+                    + (string.IsNullOrWhiteSpace(issue.ProjectKey)
+                        ? string.Empty
+                        : $" · 项目 {issue.ProjectKey}")
                     + (issue.OccurrenceCount > 1 ? $" ×{issue.OccurrenceCount}" : string.Empty)
                     + (string.IsNullOrWhiteSpace(issue.Details) ? string.Empty : $" · {issue.Details}")));
         }
@@ -261,6 +420,7 @@ public sealed class AppIssueStore
             Summary = $"同类问题已聚合 · {occurrenceCount:N0} 次",
             Details = $"问题预算已达到上限；已按 {issue.Source}/{issue.Code} 聚合同类记录。",
             PathContext = null,
+            ProjectKey = null,
             ContextKey = $"aggregate:{issue.Source}:{issue.Code}",
             ResolutionState = AppIssueResolutionState.Open,
             ResolvedAtUtc = null,

@@ -34,6 +34,8 @@ public enum WallpaperUnpackStage
 
 public sealed record WallpaperUnpackItemResult
 {
+    public string? ProjectKey { get; init; }
+
     public string WorkshopId { get; init; } = string.Empty;
 
     public string OutputTarget { get; init; } = string.Empty;
@@ -48,6 +50,49 @@ public sealed record WallpaperUnpackItemResult
 
     public IReadOnlyList<string> IssueCodes { get; init; } = Array.Empty<string>();
 }
+
+public sealed record WallpaperProcessScopeItem(
+    string ProjectKey,
+    string WorkshopId,
+    WallpaperProjectKind ProjectKind);
+
+public sealed record WallpaperProcessScope
+{
+    public WallpaperProcessScope(
+        Guid operationId,
+        long snapshotRevision,
+        IEnumerable<WallpaperProcessScopeItem> items)
+    {
+        ArgumentNullException.ThrowIfNull(items);
+        OperationId = operationId;
+        SnapshotRevision = snapshotRevision;
+        Items = Array.AsReadOnly(items.ToArray());
+    }
+
+    public Guid OperationId { get; }
+
+    public long SnapshotRevision { get; }
+
+    public IReadOnlyList<WallpaperProcessScopeItem> Items { get; }
+
+    public int TotalCount => Items.Count;
+
+    public int PackageCount => Items.Count(item =>
+        item.ProjectKind == WallpaperProjectKind.Package);
+
+    public int VideoCount => Items.Count(item =>
+        item.ProjectKind == WallpaperProjectKind.Video);
+}
+
+public sealed record WallpaperProcessCompletionSummary(
+    Guid OperationId,
+    int TotalCount,
+    int SucceededCount,
+    int FailedCount,
+    int SkippedCount,
+    int CancelledCount,
+    int CommittedCount,
+    DateTimeOffset CompletedAtUtc);
 
 public sealed record WallpaperUnpackRequest
 {

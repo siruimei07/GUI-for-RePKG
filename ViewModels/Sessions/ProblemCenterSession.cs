@@ -88,7 +88,10 @@ public sealed class ProblemCenterSession : ObservableObject
         issue.ResolutionState == AppIssueResolutionState.Resolved);
 
     public int ScanIssueCount
-        => CountOpenIssues(AppIssueSource.Scan, AppIssueSource.Unpack);
+        => CountOpenIssues(
+            AppIssueSource.Scan,
+            AppIssueSource.Unpack,
+            AppIssueSource.Browse);
 
     public int LibraryIssueCount => CountOpenIssues(AppIssueSource.Library);
 
@@ -101,7 +104,10 @@ public sealed class ProblemCenterSession : ObservableObject
     public string ScanSummary
         => FormatSummary(
             ScanIssueCount,
-            HighestOpenSeverityFor(AppIssueSource.Scan, AppIssueSource.Unpack));
+            HighestOpenSeverityFor(
+                AppIssueSource.Scan,
+                AppIssueSource.Unpack,
+                AppIssueSource.Browse));
 
     public string LibrarySummary
         => FormatSummary(
@@ -129,6 +135,82 @@ public sealed class ProblemCenterSession : ObservableObject
         Synchronize();
     }
 
+    public AppIssue PublishProjectIssue(AppIssue issue)
+    {
+        var published = _store.PublishProjectIssue(issue);
+        Synchronize();
+        return Issues.FirstOrDefault(item => item.Id == published.Id) ?? published;
+    }
+
+    public int ResolveProjectIssues(
+        AppIssueSource source,
+        string code,
+        string projectKey,
+        string? contextKey = null,
+        DateTimeOffset? resolvedAtUtc = null)
+    {
+        var resolved = _store.ResolveProjectMatching(
+            source,
+            code,
+            projectKey,
+            contextKey,
+            resolvedAtUtc);
+        if (resolved > 0)
+        {
+            Synchronize();
+        }
+
+        return resolved;
+    }
+
+    public IReadOnlyList<AppIssue> GetProjectIssues(string projectKey)
+        => _store.ProjectSnapshot(projectKey);
+
+    public AppIssue? SelectPreferredProjectIssue(
+        string projectKey,
+        bool clearBlockingFilters)
+    {
+        var issue = GetProjectIssues(projectKey)
+            .OrderBy(item => item.ResolutionState == AppIssueResolutionState.Open ? 0 : 1)
+            .ThenByDescending(item => item.Severity)
+            .ThenByDescending(item => item.TimestampUtc)
+            .ThenBy(item => item.Id)
+            .FirstOrDefault();
+        if (issue is null)
+        {
+            return null;
+        }
+
+        if (clearBlockingFilters)
+        {
+            if (!string.Equals(SourceFilter, "ALL", StringComparison.Ordinal)
+                && !string.Equals(
+                    SourceFilter,
+                    issue.Source.ToString(),
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                SourceFilter = "ALL";
+            }
+
+            if (!string.Equals(SeverityFilter, "ALL", StringComparison.Ordinal)
+                && !string.Equals(
+                    SeverityFilter,
+                    issue.Severity.ToString(),
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                SeverityFilter = "ALL";
+            }
+
+            if (HasSearchText && !MatchesSearch(issue, SearchText.Trim()))
+            {
+                SearchText = string.Empty;
+            }
+        }
+
+        SelectedIssue = Issues.FirstOrDefault(item => item.Id == issue.Id) ?? issue;
+        return SelectedIssue;
+    }
+
     public void Resolve(
         AppIssueSource source,
         string code,
@@ -149,6 +231,9 @@ public sealed class ProblemCenterSession : ObservableObject
                + $"{issue.Summary}{Environment.NewLine}"
                + $"{issue.Details}{Environment.NewLine}"
                + $"磁盘：{issue.DiskFact} · 建议：{issue.SuggestedAction}"
+               + (string.IsNullOrWhiteSpace(issue.ProjectKey)
+                   ? string.Empty
+                   : $"{Environment.NewLine}项目：{issue.ProjectKey}")
                + (string.IsNullOrWhiteSpace(issue.PathContext)
                    ? string.Empty
                    : $"{Environment.NewLine}路径：{issue.PathContext}");
@@ -163,6 +248,25 @@ public sealed class ProblemCenterSession : ObservableObject
         DateTimeOffset? resolvedAtUtc = null)
     {
         var resolved = _store.ResolveMatching(
+            source,
+            code,
+            contextKey,
+            resolvedAtUtc);
+        if (resolved > 0)
+        {
+            Synchronize();
+        }
+
+        return resolved;
+    }
+
+    internal int ResolveLegacyMatching(
+        AppIssueSource source,
+        string code,
+        string contextKey,
+        DateTimeOffset? resolvedAtUtc = null)
+    {
+        var resolved = _store.ResolveLegacyMatching(
             source,
             code,
             contextKey,
@@ -230,13 +334,16 @@ public sealed class ProblemCenterSession : ObservableObject
         }
 
         var search = SearchText.Trim();
-        return search.Length == 0
-            || issue.Code.Contains(search, StringComparison.OrdinalIgnoreCase)
-            || issue.Summary.Contains(search, StringComparison.CurrentCultureIgnoreCase)
-            || issue.Details.Contains(search, StringComparison.CurrentCultureIgnoreCase)
-            || issue.Source.ToString().Contains(search, StringComparison.OrdinalIgnoreCase)
-            || (issue.PathContext?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false);
+        return search.Length == 0 || MatchesSearch(issue, search);
     }
+
+    private static bool MatchesSearch(AppIssue issue, string search)
+        => issue.Code.Contains(search, StringComparison.OrdinalIgnoreCase)
+           || issue.Summary.Contains(search, StringComparison.CurrentCultureIgnoreCase)
+           || issue.Details.Contains(search, StringComparison.CurrentCultureIgnoreCase)
+           || issue.Source.ToString().Contains(search, StringComparison.OrdinalIgnoreCase)
+           || (issue.ProjectKey?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false)
+           || (issue.PathContext?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false);
 
     private int CountOpenIssues(params AppIssueSource[] sources)
         => Issues.Count(issue =>

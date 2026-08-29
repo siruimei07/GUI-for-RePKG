@@ -8,16 +8,19 @@ namespace WallpaperField.ViewModels;
 public sealed class WallpaperCardViewModel : ObservableObject
 {
     private readonly Action? _unpackSelectionChanged;
+    private readonly Func<bool>? _canChangeUnpackSelection;
     private bool _hasOpenIssues;
     private bool _isSelectedForUnpack;
 
     public WallpaperCardViewModel(
         WallpaperRecord record,
-        Action? unpackSelectionChanged = null)
+        Action? unpackSelectionChanged = null,
+        Func<bool>? canChangeUnpackSelection = null)
     {
         ArgumentNullException.ThrowIfNull(record);
         Record = record;
         _unpackSelectionChanged = unpackSelectionChanged;
+        _canChangeUnpackSelection = canChangeUnpackSelection;
         ShowsUnpackSelection = unpackSelectionChanged is not null;
     }
 
@@ -56,13 +59,28 @@ public sealed class WallpaperCardViewModel : ObservableObject
     public bool IsSelectedForUnpack
     {
         get => _isSelectedForUnpack;
-        set
+        set => SetUnpackSelection(value, bypassOwnerGate: false);
+    }
+
+    internal void ClearUnpackSelectionAfterCommit()
+        => SetUnpackSelection(selected: false, bypassOwnerGate: true);
+
+    private void SetUnpackSelection(bool selected, bool bypassOwnerGate)
+    {
+        var normalizedValue = selected && CanSelectForUnpack;
+        if (_isSelectedForUnpack == normalizedValue
+            || !bypassOwnerGate
+            && _canChangeUnpackSelection?.Invoke() == false)
         {
-            var normalizedValue = value && CanSelectForUnpack;
-            if (SetProperty(ref _isSelectedForUnpack, normalizedValue))
-            {
-                _unpackSelectionChanged?.Invoke();
-            }
+            return;
+        }
+
+        if (SetProperty(
+                ref _isSelectedForUnpack,
+                normalizedValue,
+                nameof(IsSelectedForUnpack)))
+        {
+            _unpackSelectionChanged?.Invoke();
         }
     }
 

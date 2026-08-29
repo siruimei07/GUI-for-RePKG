@@ -1,4 +1,6 @@
 using System.ComponentModel;
+using System.Security.Cryptography;
+using System.Text;
 using System.Windows.Threading;
 using WallpaperField.Application;
 using WallpaperField.Contracts;
@@ -187,7 +189,8 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
 
             OnPropertiesChanged(
                 nameof(HasCurrentProject),
-                nameof(CurrentProjectActionText));
+                nameof(CurrentProjectActionText),
+                nameof(CurrentProjectProcessabilityText));
             ScheduleFolderTargetResolution();
         }
     }
@@ -346,14 +349,22 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
         _ => "当前项目不可处理"
     };
 
+    public string CurrentProjectProcessabilityText
+        => CurrentProject?.ProcessabilityText ?? "尚未选择项目";
+
     public int TotalProjectCount => _allProjects.Count;
 
     public int MatchCount => VisibleProjects.Count;
 
     public int SelectedCount => _allProjects.Count(project => project.Card.IsSelectedForUnpack);
 
+    public bool HasSelection => SelectedCount > 0;
+
     public int HiddenSelectedCount
-        => SelectedCount - VisibleProjects.Count(project => project.Card.IsSelectedForUnpack);
+        => SelectedCount - VisibleSelectedCount;
+
+    public int VisibleSelectedCount
+        => VisibleProjects.Count(project => project.Card.IsSelectedForUnpack);
 
     public int SelectedPackageCount => _allProjects.Count(project =>
         project.Card.IsSelectedForUnpack
@@ -362,6 +373,10 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
     public int SelectedVideoCount => _allProjects.Count(project =>
         project.Card.IsSelectedForUnpack
         && project.ProjectKind == WallpaperProjectKind.Video);
+
+    public string SelectionTraySummaryText
+        => $"可见 {VisibleSelectedCount:N0} · 隐藏 {HiddenSelectedCount:N0}"
+           + $" · Package {SelectedPackageCount:N0} / Video {SelectedVideoCount:N0}";
 
     public bool HasSnapshot => _snapshot is not null;
 
@@ -614,37 +629,40 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
         var result = await _folderTargetResolver
             .OpenAsync(target)
             .ConfigureAwait(true);
-        if (!ReferenceEquals(target, CurrentFolderTarget))
-        {
-            return;
-        }
+        var isCurrentTarget = ReferenceEquals(target, CurrentFolderTarget);
 
         if (result.Succeeded)
         {
-            FolderActionStatusText = "已打开此前显示的目录。";
-            ResolveFolderOpenIssues(target.ProjectKey);
+            ResolveFolderOpenIssues(target);
+            if (isCurrentTarget)
+            {
+                FolderActionStatusText = "已打开此前显示的目录。";
+            }
+
             return;
         }
 
-        FolderActionStatusText = result.FailureSummary ?? "无法打开此前显示的目录。";
         var failureCode = result.FailureCode ?? "BROWSE_FOLDER_OPEN_FAILED";
-        _problemCenterSession.Publish(
-        [
-            AppIssue.Create(
-                failureCode,
-                AppIssueSeverity.Warning,
-                AppIssueSource.Diagnostics,
-                FolderActionStatusText,
-                "打开目录前已重新验证此前显示的精确目标；未切换到其他目录。",
-                AppDiskFact.NotModified,
-                AppIssueAction.ReviewInput,
-                CreateFolderIssueContextKey(target.ProjectKey, failureCode),
-                pathContext: target.Path)
-        ]);
-        FolderOpenFailed?.Invoke(this, new ProjectFolderOpenFailedEventArgs(result));
+        var summary = result.FailureSummary ?? "无法打开此前显示的目录。";
+        _problemCenterSession.PublishProjectIssue(AppIssue.Create(
+            failureCode,
+            AppIssueSeverity.Warning,
+            AppIssueSource.Browse,
+            summary,
+            "打开目录前已重新验证此前显示的精确目标；未切换到其他目录。",
+            AppDiskFact.NotModified,
+            AppIssueAction.ReviewInput,
+            CreateFolderIssueContextKey(target, failureCode),
+            pathContext: target.Path,
+            projectKey: target.ProjectKey));
+        if (isCurrentTarget)
+        {
+            FolderActionStatusText = summary;
+            FolderOpenFailed?.Invoke(this, new ProjectFolderOpenFailedEventArgs(result));
+        }
     }
 
-    private void ResolveFolderOpenIssues(string projectKey)
+    private void ResolveFolderOpenIssues(ProjectFolderTarget target)
     {
         foreach (var code in new[]
                  {
@@ -652,18 +670,49 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
                      "BROWSE_FOLDER_OPEN_FAILED"
                  })
         {
-            _problemCenterSession.Resolve(
-                AppIssueSource.Diagnostics,
+            _problemCenterSession.ResolveProjectIssues(
+                AppIssueSource.Browse,
                 code,
-                CreateFolderIssueContextKey(projectKey, code),
+                target.ProjectKey,
+                CreateFolderIssueContextKey(target, code),
                 DateTimeOffset.UtcNow);
         }
     }
 
     private static string CreateFolderIssueContextKey(
-        string projectKey,
+        ProjectFolderTarget target,
         string code)
-        => $"BROWSE_FOLDER:{projectKey}:{code}";
+    {
+        var targetIdentity = string.Create(
+            System.Globalization.CultureInfo.InvariantCulture,
+            $"{target.Kind}|{NormalizeFolderTargetPath(target.Path)}");
+        var fingerprint = Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(targetIdentity)));
+        return $"BROWSE_FOLDER:{target.ProjectKey}:{fingerprint}:{code}";
+    }
+
+    private static string NormalizeFolderTargetPath(string? value)
+    {
+        var normalized = value?.Trim() ?? string.Empty;
+        try
+        {
+            normalized = Path.TrimEndingDirectorySeparator(
+                Path.GetFullPath(normalized));
+        }
+        catch (Exception exception) when (exception is
+                   ArgumentException or NotSupportedException or IOException
+                   or UnauthorizedAccessException
+                   or System.Security.SecurityException)
+        {
+            normalized = normalized.TrimEnd(
+                Path.DirectorySeparatorChar,
+                Path.AltDirectorySeparatorChar);
+        }
+
+        return normalized
+            .Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar)
+            .ToUpperInvariant();
+    }
 
     public void Dispose()
     {
@@ -717,12 +766,19 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
             ApplySnapshot(_scanSession.ProjectSnapshot);
         }
         else if (e.PropertyName is nameof(ScanSession.SourcePath)
-                 or nameof(ScanSession.SourcePathValidation))
+                  or nameof(ScanSession.SourcePathValidation))
         {
             OnPropertiesChanged(
                 nameof(CurrentSourcePath),
                 nameof(IsSnapshotSourceCurrent),
                 nameof(SnapshotSourceStatusText));
+        }
+        else if (e.PropertyName == nameof(ScanSession.SelectedUnpackCount)
+                 && _selectionChangedWhileSuppressed
+                 && !_suppressSelectionNotifications)
+        {
+            _selectionChangedWhileSuppressed = false;
+            NotifySelectionChanged();
         }
     }
 
@@ -856,8 +912,41 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
         }
 
         _lastPreviewSignalSequence = args.Sequence;
+        if (_allProjects.Any(project => string.Equals(
+                project.ProjectKey,
+                args.ProjectKey,
+                StringComparison.Ordinal)))
+        {
+            var contextKey = CreatePreviewIssueContextKey(args);
+            if (args.Kind == PreviewThumbnailSignalKind.Failed)
+            {
+                _problemCenterSession.PublishProjectIssue(AppIssue.Create(
+                    args.FailureCode,
+                    AppIssueSeverity.Warning,
+                    AppIssueSource.Browse,
+                    args.Summary,
+                    "预览图未通过受限静态解码；项目内容处理能力不受影响。",
+                    AppDiskFact.NotModified,
+                    AppIssueAction.Retry,
+                    contextKey,
+                    projectKey: args.ProjectKey));
+            }
+            else
+            {
+                _problemCenterSession.ResolveProjectIssues(
+                    AppIssueSource.Browse,
+                    args.FailureCode,
+                    args.ProjectKey,
+                    contextKey);
+            }
+        }
+
         _previewCallbacks.Invoke(this, args);
     }
+
+    private static string CreatePreviewIssueContextKey(
+        PreviewThumbnailSignalEventArgs args)
+        => $"BROWSE_PREVIEW:{args.PreviewVersion}:{args.FailureCode}";
 
     private void PublishSelectionWritable(bool isWritable)
     {
@@ -935,7 +1024,9 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
         OnPropertiesChanged(
             nameof(VisibleProjects),
             nameof(MatchCount),
+            nameof(VisibleSelectedCount),
             nameof(HiddenSelectedCount),
+            nameof(SelectionTraySummaryText),
             nameof(HasVisibleProjects),
             nameof(EmptyTitle),
             nameof(EmptyDescription));
@@ -1012,7 +1103,8 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
 
         if (e.PropertyName == nameof(WallpaperCardViewModel.IsSelectedForUnpack))
         {
-            if (_suppressSelectionNotifications)
+            if (_suppressSelectionNotifications
+                || _scanSession.IsSelectionBatchUpdating)
             {
                 _selectionChangedWhileSuppressed = true;
                 return;
@@ -1048,9 +1140,12 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
     {
         OnPropertiesChanged(
             nameof(SelectedCount),
+            nameof(HasSelection),
+            nameof(VisibleSelectedCount),
             nameof(HiddenSelectedCount),
             nameof(SelectedPackageCount),
-            nameof(SelectedVideoCount));
+            nameof(SelectedVideoCount),
+            nameof(SelectionTraySummaryText));
         ClearSelectionCommand.NotifyCanExecuteChanged();
     }
 

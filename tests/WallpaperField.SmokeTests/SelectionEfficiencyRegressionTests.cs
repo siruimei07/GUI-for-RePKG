@@ -353,6 +353,14 @@ internal static class SelectionEfficiencyRegressionTests
                 $"The scan efficiency surface is missing {name}.");
         }
 
+        assert(scanPage.Descendants().Any(element =>
+                   element.Name.LocalName == "Condition"
+                   && (Attribute(element, "Binding")?.Contains(
+                       "ScanSession.IsSelectionWritable",
+                       StringComparison.Ordinal) ?? false)
+                   && Attribute(element, "Value") == "True"),
+            "The Scan selection surface does not project the session-owned foreground-I/O gate.");
+
         var densityTrigger = domainTheme.Descendants().FirstOrDefault(element =>
             element.Name.LocalName == "DataTrigger"
             && (Attribute(element, "Binding")?.Contains("Density", StringComparison.Ordinal) ?? false)

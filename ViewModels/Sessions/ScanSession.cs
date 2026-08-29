@@ -1,6 +1,7 @@
 using System.Collections.Specialized;
 using System.Globalization;
 using System.IO;
+using System.Windows.Threading;
 using WallpaperField.Application;
 using WallpaperField.Contracts;
 using WallpaperField.Models;
@@ -19,6 +20,8 @@ public sealed class ScanSession : ObservableObject
     private readonly PathInputValidator _pathInputValidator;
     private readonly TaskLifecycleCoordinator _taskLifecycleCoordinator;
     private readonly ProblemCenterSession _problemCenter;
+    private readonly SynchronizationContext? _lifecycleOwnerContext;
+    private readonly int _ownerThreadId;
     private Func<bool> _isClosing;
     private CancellationTokenSource? _pathValidationCancellation;
     private long _pathValidationVersion;
@@ -76,6 +79,9 @@ public sealed class ScanSession : ObservableObject
         _problemCenter = problemCenter
             ?? throw new ArgumentNullException(nameof(problemCenter));
         _isClosing = isClosing ?? (() => false);
+        _lifecycleOwnerContext = SynchronizationContext.Current
+            ?? CaptureDispatcherContext();
+        _ownerThreadId = Environment.CurrentManagedThreadId;
 
         ScannedWallpapers.CollectionChanged += OnCollectionChanged;
         _problemCenter.Changed += OnProblemsChanged;
@@ -110,6 +116,8 @@ public sealed class ScanSession : ObservableObject
 
     internal TaskLifecycleCoordinator TaskLifecycleCoordinator
         => _taskLifecycleCoordinator;
+
+    internal bool IsSelectionBatchUpdating => _isBatchUpdatingSelection;
 
     public string SourcePath
     {
@@ -498,25 +506,67 @@ public sealed class ScanSession : ObservableObject
         IReadOnlyList<WallpaperUnpackItemResult> results)
     {
         ArgumentNullException.ThrowIfNull(results);
-        if (_taskLifecycleCoordinator.Current.OperationId != operationId)
+        if (_taskLifecycleCoordinator.Current is not
+            {
+                OperationId: var activeOperationId,
+                OperationKind: ForegroundOperationKind.Unpack,
+                State: TaskLifecycleState.Running
+                    or TaskLifecycleState.CancellationRequested
+                    or TaskLifecycleState.CommitCritical
+            }
+            || activeOperationId != operationId)
         {
             return;
         }
 
-        foreach (var result in results.Where(item =>
-                     item.Outcome == WallpaperUnpackOutcome.Succeeded
-                     && item.CommitState == WallpaperItemCommitState.Committed))
+        var cardsByProjectKey = new Dictionary<string, WallpaperCardViewModel?>(
+            StringComparer.Ordinal);
+        foreach (var candidate in ScannedWallpapers)
         {
-            var card = ScannedWallpapers.FirstOrDefault(candidate =>
-                string.Equals(
-                    candidate.WorkshopId,
-                    result.WorkshopId,
-                    StringComparison.OrdinalIgnoreCase)
-                && PathsEqualOrFalse(candidate.OutputFolder, result.OutputTarget));
-            if (card is not null)
+            var projectKey = candidate.Record.ProjectKey;
+            if (!cardsByProjectKey.TryAdd(projectKey, candidate))
             {
-                card.IsSelectedForUnpack = false;
+                cardsByProjectKey[projectKey] = null;
             }
+        }
+
+        _isBatchUpdatingSelection = true;
+        _batchSelectionChanged = false;
+        try
+        {
+            foreach (var result in results.Where(item =>
+                         item.Outcome == WallpaperUnpackOutcome.Succeeded
+                         && item.CommitState == WallpaperItemCommitState.Committed))
+            {
+                WallpaperCardViewModel? card;
+                if (string.IsNullOrWhiteSpace(result.ProjectKey))
+                {
+                    card = ScannedWallpapers.FirstOrDefault(candidate =>
+                        string.Equals(
+                            candidate.WorkshopId,
+                            result.WorkshopId,
+                            StringComparison.OrdinalIgnoreCase)
+                        && PathsEqualOrFalse(
+                            candidate.OutputFolder,
+                            result.OutputTarget));
+                }
+                else
+                {
+                    cardsByProjectKey.TryGetValue(result.ProjectKey, out card);
+                }
+
+                card?.ClearUnpackSelectionAfterCommit();
+            }
+        }
+        finally
+        {
+            _isBatchUpdatingSelection = false;
+        }
+
+        if (_batchSelectionChanged)
+        {
+            _batchSelectionChanged = false;
+            NotifySelectionChanged();
         }
     }
 
@@ -600,7 +650,10 @@ public sealed class ScanSession : ObservableObject
                 result.CompletedAtUtc);
             var revision = checked(_snapshotRevision + 1);
             var cards = result.Items
-                .Select(record => new WallpaperCardViewModel(record, OnSelectionChanged))
+                .Select(record => new WallpaperCardViewModel(
+                    record,
+                    OnSelectionChanged,
+                    () => IsSelectionWritable))
                 .ToArray();
 
             _problemCenter.ResolveMatching(
@@ -624,13 +677,23 @@ public sealed class ScanSession : ObservableObject
             var recordIssues = new List<AppIssue>();
             foreach (var record in result.Items)
             {
-                _problemCenter.ResolveMatching(
+                _problemCenter.ResolveProjectIssues(
+                    AppIssueSource.Scan,
+                    "SCAN_ITEM_FAILED",
+                    record.ProjectKey,
+                    NormalizeIssueContext(record.SourceDirectory));
+                _problemCenter.ResolveLegacyMatching(
                     AppIssueSource.Scan,
                     "SCAN_ITEM_FAILED",
                     NormalizeIssueContext(record.SourceDirectory));
                 if (record.Warnings.Count == 0)
                 {
-                    _problemCenter.ResolveMatching(
+                    _problemCenter.ResolveProjectIssues(
+                        AppIssueSource.Scan,
+                        "SCAN_ITEM_WARNING",
+                        record.ProjectKey,
+                        NormalizeIssueContext(record.SourceDirectory));
+                    _problemCenter.ResolveLegacyMatching(
                         AppIssueSource.Scan,
                         "SCAN_ITEM_WARNING",
                         NormalizeIssueContext(record.SourceDirectory));
@@ -647,11 +710,15 @@ public sealed class ScanSession : ObservableObject
                         AppIssueAction.ReviewInput,
                         NormalizeIssueContext(record.SourceDirectory),
                         operationId,
-                        record.SourceDirectory));
+                        record.SourceDirectory,
+                        projectKey: record.ProjectKey));
                 }
             }
 
-            _problemCenter.Publish(recordIssues);
+            foreach (var issue in recordIssues)
+            {
+                _problemCenter.PublishProjectIssue(issue);
+            }
             _problemCenter.Publish(result.Errors.Select(error => AppIssue.Create(
                 "SCAN_ITEM_FAILED",
                 AppIssueSeverity.Error,
@@ -1035,21 +1102,30 @@ public sealed class ScanSession : ObservableObject
     {
         var openIssues = _problemCenter.Issues.Where(issue =>
             issue.ResolutionState == AppIssueResolutionState.Open
-            && issue.Source is AppIssueSource.Scan or AppIssueSource.Unpack)
+            && issue.Source is AppIssueSource.Scan
+                or AppIssueSource.Unpack
+                or AppIssueSource.Browse)
             .ToArray();
+        var projectKeys = openIssues
+            .Where(issue => !string.IsNullOrWhiteSpace(issue.ProjectKey))
+            .Select(issue => issue.ProjectKey!)
+            .ToHashSet(StringComparer.Ordinal);
         var scanContexts = openIssues
-            .Where(issue => issue.Source == AppIssueSource.Scan)
+            .Where(issue => issue.ProjectKey is null
+                && issue.Source == AppIssueSource.Scan)
             .Select(issue => issue.ContextKey)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var unpackContexts = openIssues
-            .Where(issue => issue.Source == AppIssueSource.Unpack)
+            .Where(issue => issue.ProjectKey is null
+                && issue.Source == AppIssueSource.Unpack)
             .Select(issue => NormalizeItemContext(issue.ContextKey))
             .ToHashSet(StringComparer.Ordinal);
 
         foreach (var card in ScannedWallpapers)
         {
             card.SetHasOpenIssues(
-                scanContexts.Contains(NormalizeIssueContext(card.SourceFolder))
+                projectKeys.Contains(card.Record.ProjectKey)
+                || scanContexts.Contains(NormalizeIssueContext(card.SourceFolder))
                 || unpackContexts.Contains(NormalizeItemContext(card.WorkshopId)));
         }
     }
@@ -1058,12 +1134,41 @@ public sealed class ScanSession : ObservableObject
         object? sender,
         TaskLifecycleSnapshot snapshot)
     {
+        if (_lifecycleOwnerContext is not null
+            && Environment.CurrentManagedThreadId != _ownerThreadId)
+        {
+            try
+            {
+                _lifecycleOwnerContext.Post(
+                    static state =>
+                        ((ScanSession)state!).PublishTaskLifecycleChanged(),
+                    this);
+            }
+            catch (Exception exception) when (exception is
+                       InvalidOperationException or TaskCanceledException)
+            {
+                // The owning dispatcher is shutting down; no UI can consume the update.
+            }
+
+            return;
+        }
+
+        PublishTaskLifecycleChanged();
+    }
+
+    private void PublishTaskLifecycleChanged()
+    {
         OnPropertiesChanged(
             nameof(CanScan),
             nameof(CanCancelScan),
             nameof(IsSelectionWritable));
         UpdateCommandStates();
     }
+
+    private static SynchronizationContext? CaptureDispatcherContext()
+        => Dispatcher.FromThread(Thread.CurrentThread) is { } dispatcher
+            ? new DispatcherSynchronizationContext(dispatcher)
+            : null;
 
     private void UpdateCommandStates()
     {

@@ -106,6 +106,10 @@ internal static class ProjectBrowserUiRegressionTests
             window.DataContext = fixtureShell;
             fixtureShell.NavigateTo("BROWSE");
             VerifyResponsiveGeometry(window, fixtureShell, assert);
+            ProjectBrowserProcessingRegressionTests.VerifyWindow(
+                window,
+                fixtureShell,
+                assert);
             VerifyCardSemantics(window, fixtureShell, assert);
             VerifyQueuedDirectionalFocus(window, fixtureShell, assert);
             VerifySelectionBusyStates(window, fixtureShell, fixtureCoordinator, assert);
@@ -124,7 +128,10 @@ internal static class ProjectBrowserUiRegressionTests
         }
         finally
         {
-            window.SetReducedMotion(true);
+            if (window.IsLoaded)
+            {
+                window.SetReducedMotion(true);
+            }
             window.DataContext = shell;
             window.Width = 920;
             window.Height = 680;
@@ -2316,9 +2323,11 @@ internal static class ProjectBrowserUiRegressionTests
             }
 
             await viewModel.OpenCurrentFolderCommand.ExecuteAsync();
+            var currentProjectKey = viewModel.CurrentProject?.ProjectKey;
             assert(problemCenter.Issues.Any(issue =>
                        issue.Code == "BROWSE_FOLDER_TARGET_MISSING"
-                       && issue.Source == AppIssueSource.Diagnostics
+                       && issue.Source == AppIssueSource.Browse
+                       && issue.ProjectKey == currentProjectKey
                        && issue.DiskFact == AppDiskFact.NotModified)
                    && viewModel.FolderActionStatusText.Contains("未切换", StringComparison.Ordinal),
                 "A controlled frozen-folder disappearance was not published to Problem Center.");

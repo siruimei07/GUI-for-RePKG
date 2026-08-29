@@ -751,8 +751,10 @@ internal static class UnpackLifecycleRegressionTests
 
             var execution = shell.UnpackCommand.ExecuteAsync();
             await unpackService.Started.WaitAsync(TimeSpan.FromSeconds(2));
-            shell.ScannedWallpapers.Single(card => card.WorkshopId == "late-selection")
-                .IsSelectedForUnpack = true;
+            var lateSelection = shell.ScannedWallpapers.Single(card =>
+                card.WorkshopId == "late-selection");
+            lateSelection.IsSelectedForUnpack = true;
+            var lateSelectionRejected = !lateSelection.IsSelectedForUnpack;
             unpackService.Complete();
             await execution.WaitAsync(TimeSpan.FromSeconds(2));
 
@@ -764,8 +766,9 @@ internal static class UnpackLifecycleRegressionTests
                        .SequenceEqual(ids.Take(5)) == true,
                 "Selections made after unpack started leaked into the frozen request.");
             assert(!selectedIds.Contains("committed")
-                   && selectedIds.SetEquals(ids.Skip(1)),
-                "Selection was not cleared exclusively for the committed successful item.");
+                   && selectedIds.SetEquals(ids.Skip(1).Take(4))
+                   && lateSelectionRejected,
+                "Selection did not remain owner-gated while clearing only the committed successful item.");
             assert(shell.UnpackWorkText.Contains("5 / 5 ITEMS", StringComparison.Ordinal),
                 "Completed unpack work still appeared indeterminate instead of using item totals.");
         }

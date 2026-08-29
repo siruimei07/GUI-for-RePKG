@@ -27,6 +27,7 @@ public sealed partial class BrowsePageView : UserControl
     private ResponsiveFocusTransferLease? _pendingResponsiveFocusTransfer;
     private string? _pendingDirectionalProjectKey;
     private Button? _pendingDirectionalFocusOwner;
+    private ShellViewModel? _subscribedShell;
 
     public BrowsePageView()
     {
@@ -438,6 +439,7 @@ public sealed partial class BrowsePageView : UserControl
         object sender,
         DependencyPropertyChangedEventArgs e)
     {
+        AttachShell(e.NewValue as ShellViewModel);
         CancelPendingProjectFocus();
         CancelPendingResponsiveFocusTransfer();
         if (Window.GetWindow(this) is MainWindow window)
@@ -447,6 +449,83 @@ public sealed partial class BrowsePageView : UserControl
 
         // A replacement context owns no transfer captured from the prior model.
         CancelPendingResponsiveFocusTransfer();
+    }
+
+    private void BrowsePageView_Loaded(object sender, RoutedEventArgs e)
+        => AttachShell(DataContext as ShellViewModel);
+
+    private void BrowsePageView_Unloaded(object sender, RoutedEventArgs e)
+    {
+        AttachShell(null);
+        CancelPendingProjectFocus();
+        CancelPendingResponsiveFocusTransfer();
+    }
+
+    private void AttachShell(ShellViewModel? shell)
+    {
+        if (ReferenceEquals(_subscribedShell, shell))
+        {
+            return;
+        }
+
+        if (_subscribedShell is not null)
+        {
+            _subscribedShell.BrowseProjectFocusRequested -=
+                OnBrowseProjectFocusRequested;
+        }
+
+        _subscribedShell = shell;
+        if (_subscribedShell is not null)
+        {
+            _subscribedShell.BrowseProjectFocusRequested +=
+                OnBrowseProjectFocusRequested;
+        }
+    }
+
+    private void OnBrowseProjectFocusRequested(
+        object? sender,
+        WallpaperField.Models.BrowseProjectFocusRequestedEventArgs e)
+    {
+        if (sender is not ShellViewModel shell
+            || !ReferenceEquals(shell, _subscribedShell))
+        {
+            return;
+        }
+
+        _ = Dispatcher.BeginInvoke(
+            () => BeginBrowseProjectFocus(shell, e.ProjectKey),
+            DispatcherPriority.ContextIdle);
+    }
+
+    private void BeginBrowseProjectFocus(
+        ShellViewModel shell,
+        string projectKey)
+    {
+        if (!ReferenceEquals(DataContext, shell)
+            || !shell.IsBrowsePage
+            || !BrowseView.IsVisible
+            || !shell.BrowsePageViewModel.VisibleProjects.Any(project =>
+                string.Equals(
+                    project.ProjectKey,
+                    projectKey,
+                    StringComparison.Ordinal)))
+        {
+            return;
+        }
+
+        CancelPendingProjectFocus();
+        CancelPendingResponsiveFocusTransfer();
+        shell.BrowsePageViewModel.CloseDetails();
+        shell.BrowsePageViewModel.CloseFilterLayer();
+        UpdateModalBackgroundState();
+        FocusElement(BrowseProjectGrid);
+        var completion = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var lease = new ProjectFocusLease(
+            Interlocked.Increment(ref _focusRequestVersion),
+            DataContext,
+            Keyboard.FocusedElement);
+        BeginFocusProject(projectKey, lease, completion);
     }
 
     private void BrowsePageView_PreviewGotKeyboardFocus(
