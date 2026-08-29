@@ -21,6 +21,14 @@ if (args.Length == 1
     Assert(false, "Intentional SmokeTests failure-exit verification.");
 }
 
+if (args.Length == 1
+    && string.Equals(args[0], "--project-browser-preview-only", StringComparison.Ordinal))
+{
+    await ProjectBrowserPreviewRegressionTests.RunAsync(Assert);
+    Console.WriteLine(metrics.CreateSuccessSummary());
+    return;
+}
+
 var testRoot = Path.Combine(
     Path.GetTempPath(),
     $"WallpaperField-Smoke-{Guid.NewGuid():N}");
@@ -38,6 +46,7 @@ try
     await ProjectBrowserFoundationRegressionTests.RunAsync(Assert);
     await ProjectBrowserProjectionRegressionTests.RunAsync(Assert);
     ProjectBrowserNavigationRegressionTests.Run(Assert);
+    await ProjectBrowserPreviewRegressionTests.RunAsync(Assert);
     await TaskLifecycleRegressionTests.RunAsync(Assert);
     await ScanLifecycleRegressionTests.RunAsync(Assert);
     await LibraryLifecycleRegressionTests.RunAsync(Assert);

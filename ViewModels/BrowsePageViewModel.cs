@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using WallpaperField.Models;
+using WallpaperField.Services;
 using WallpaperField.ViewModels.Sessions;
 
 namespace WallpaperField.ViewModels;
@@ -24,6 +25,7 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
 {
     private readonly ScanSession _scanSession;
     private readonly ProblemCenterSession _problemCenterSession;
+    private readonly PreviewThumbnailService _thumbnailService;
     private readonly List<BrowseProjectViewModel> _allProjects = [];
     private ScanProjectSnapshot? _snapshot;
     private BrowseProjectViewModel? _currentProject;
@@ -41,19 +43,29 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
 
     public BrowsePageViewModel(
         ScanSession scanSession,
-        ProblemCenterSession problemCenterSession)
+        ProblemCenterSession problemCenterSession,
+        PreviewThumbnailService? thumbnailService = null)
     {
         ArgumentNullException.ThrowIfNull(scanSession);
         ArgumentNullException.ThrowIfNull(problemCenterSession);
 
         _scanSession = scanSession;
         _problemCenterSession = problemCenterSession;
+        _thumbnailService = thumbnailService
+            ?? new PreviewThumbnailService(new WpfPreviewThumbnailDecoder());
         _scanSession.PropertyChanged += OnScanSessionPropertyChanged;
         _problemCenterSession.Changed += OnProblemsChanged;
+        _thumbnailService.StatusChanged += OnThumbnailStatusChanged;
         ApplySnapshot(_scanSession.ProjectSnapshot);
     }
 
+    public event EventHandler<PreviewThumbnailSignalEventArgs>? PreviewStatusChanged;
+
     public RangeObservableCollection<BrowseRowViewModel> Rows { get; } = [];
+
+    public PreviewThumbnailService ThumbnailService => _thumbnailService;
+
+    public long ThumbnailGeneration => _snapshot?.Revision ?? 0;
 
     public IReadOnlyList<BrowseProjectViewModel> VisibleProjects { get; private set; }
         = Array.Empty<BrowseProjectViewModel>();
@@ -294,6 +306,8 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
         _disposed = true;
         _scanSession.PropertyChanged -= OnScanSessionPropertyChanged;
         _problemCenterSession.Changed -= OnProblemsChanged;
+        _thumbnailService.StatusChanged -= OnThumbnailStatusChanged;
+        _thumbnailService.Dispose();
         DetachCards();
     }
 
@@ -325,6 +339,7 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
                 string.Equals(project.ProjectKey, previousFocusKey, StringComparison.Ordinal))
                 ?.WorkshopId;
 
+        _thumbnailService.SetGeneration(snapshot?.Revision ?? 0);
         DetachCards();
         _allProjects.Clear();
         _snapshot = snapshot;
@@ -355,6 +370,7 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
         RefreshProjection(restoredCurrent?.ProjectKey, restoredFocus?.ProjectKey);
         OnPropertiesChanged(
             nameof(TotalProjectCount),
+            nameof(ThumbnailGeneration),
             nameof(HasSnapshot),
             nameof(SnapshotSourcePath),
             nameof(IsSnapshotSourceCurrent),
@@ -363,6 +379,11 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
             nameof(EmptyDescription));
         NotifySelectionChanged();
     }
+
+    private void OnThumbnailStatusChanged(
+        object? sender,
+        PreviewThumbnailSignalEventArgs args)
+        => PreviewStatusChanged?.Invoke(this, args);
 
     private BrowseProjectViewModel? FindRestoredProject(string? projectKey, string? workshopId)
         => _allProjects.FirstOrDefault(project =>

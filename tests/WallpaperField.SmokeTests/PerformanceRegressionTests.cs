@@ -356,6 +356,28 @@ internal static class PerformanceRegressionTests
         }
     }
 
+    internal static void ReportThumbnailMetrics(
+        string phase,
+        PreviewThumbnailMetrics metrics,
+        Action<bool, string> assert)
+    {
+        Console.WriteLine(string.Create(
+            CultureInfo.InvariantCulture,
+            $"PERF_METRIC name=project_browser.thumbnail_{phase} "
+            + $"active={metrics.ActiveDecodes} peak_active={metrics.PeakActiveDecodes} "
+            + $"pending={metrics.PendingDecodes} observers={metrics.ObserverCount} "
+            + $"cache_entries={metrics.CacheEntryCount} "
+            + $"cache_bytes={metrics.CacheDecodedBytes} evictions={metrics.EvictionCount} "
+            + $"active_budget={PreviewThumbnailLimits.MaximumConcurrentDecodes} "
+            + $"entry_budget={PreviewThumbnailLimits.MaximumEntries} "
+            + $"byte_budget={PreviewThumbnailLimits.MaximumDecodedCacheBytes}"));
+        assert(metrics.ActiveDecodes <= PreviewThumbnailLimits.MaximumConcurrentDecodes
+               && metrics.PeakActiveDecodes <= PreviewThumbnailLimits.MaximumConcurrentDecodes
+               && metrics.CacheEntryCount <= PreviewThumbnailLimits.MaximumEntries
+               && metrics.CacheDecodedBytes <= PreviewThumbnailLimits.MaximumDecodedCacheBytes,
+            "Thumbnail metrics exceeded a concurrency, entry-count, or decoded-byte budget.");
+    }
+
     private static WallpaperCardViewModel[] CreateCards(bool showsUnpackSelection)
         => Enumerable.Range(0, FixtureCount)
             .Select(index => new WallpaperCardViewModel(

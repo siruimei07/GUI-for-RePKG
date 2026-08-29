@@ -20,6 +20,8 @@ public static class AppComposition
         var unpackService = new RePkgWallpaperUnpackService();
         var pathInputValidator = new PathInputValidator();
         var problemCenterSession = new ProblemCenterSession();
+        var previewThumbnailService = new PreviewThumbnailService(
+            new WpfPreviewThumbnailDecoder());
         var scanSession = new ScanSession(
             scanService,
             pathInputValidator,
@@ -36,7 +38,8 @@ public static class AppComposition
             problemCenterSession);
         var browsePageViewModel = new BrowsePageViewModel(
             scanSession,
-            problemCenterSession);
+            problemCenterSession,
+            previewThumbnailService);
         var shell = new ShellViewModel(
             scanService,
             libraryService,
