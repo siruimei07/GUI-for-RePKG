@@ -1212,6 +1212,166 @@ internal static class ProjectBrowserProcessingRegressionTests
         VerifyProcessingLiveRegion(window, shell, assert);
     }
 
+    internal static void VerifyTask7StateMatrix(
+        WallpaperField.MainWindow window,
+        ShellViewModel restoreShell,
+        Action<bool, string> assert)
+    {
+        var testRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"WallpaperField-Task7-Processing-{Guid.NewGuid():N}");
+        var sourceRoot = Path.Combine(testRoot, "source");
+        var outputRoot = Path.Combine(testRoot, "output");
+        Directory.CreateDirectory(sourceRoot);
+        var record = CreatePackageRecord(sourceRoot, outputRoot, "task7-processing") with
+        {
+            Title = "TASK7 · processing state owner"
+        };
+        var service = new Task7StateUnpackService();
+        using var stateShell = CreateShell(
+            record,
+            service,
+            new TaskLifecycleCoordinator(),
+            sourceRoot,
+            outputRoot);
+        Task? processingTask = null;
+        try
+        {
+            WaitForDispatcherTask(window, stateShell.ScanSession.ScanAsync());
+            window.DataContext = stateShell;
+            stateShell.NavigateTo("BROWSE");
+            var card = stateShell.ScannedWallpapers.Single();
+            var selectedForCancellation = stateShell.ScanSession
+                .TrySetUnpackSelection(card, true);
+            var frozeCancellable = stateShell.ScanSession
+                .TryFreezeSelectedRequest(out var cancellableRequest);
+            assert(selectedForCancellation && frozeCancellable,
+                "The Task 7 processing matrix could not freeze its cancellable request.");
+            processingTask = stateShell.UnpackSession.UnpackAsync(cancellableRequest!);
+            PumpWindow(window);
+            assert(service.CallCount == 1
+                   && stateShell.TaskState == TaskLifecycleState.Running
+                   && stateShell.UnpackSession.HasActiveScope
+                   && stateShell.UnpackSession.CanCancel,
+                "The Task 7 processing matrix did not enter the Task 6 Running owner state.");
+            ProjectBrowserUiRegressionTests.VerifyTask7PageStateAcrossSizes(
+                window,
+                stateShell,
+                "running-cancellable",
+                openCompactDetails: false,
+                assert);
+
+            stateShell.UnpackSession.CancelUnpackCommand.Execute(null);
+            PumpWindow(window);
+            assert(stateShell.TaskState == TaskLifecycleState.CancellationRequested
+                   && stateShell.TaskLifecycle.CancellationPending
+                   && stateShell.UnpackSession.HasActiveScope
+                   && !stateShell.UnpackSession.CanCancel,
+                "The Task 7 processing matrix did not hold the Task 6 CancellationRequested state.");
+            ProjectBrowserUiRegressionTests.VerifyTask7PageStateAcrossSizes(
+                window,
+                stateShell,
+                "cancellation-requested",
+                openCompactDetails: false,
+                assert);
+
+            service.Release();
+            WaitForDispatcherTask(window, processingTask);
+            processingTask = null;
+            PumpWindow(window);
+            assert(stateShell.TaskState == TaskLifecycleState.Cancelled
+                   && !stateShell.UnpackSession.HasActiveScope
+                   && stateShell.UnpackSession.CompletionSummary is
+                   {
+                       TotalCount: 1,
+                       CancelledCount: 1,
+                       CommittedCount: 0
+                   },
+                "The Task 7 cancellation fixture did not reach a truthful terminal summary.");
+            stateShell.UnpackSession.ClearCompletionCommand.Execute(null);
+            stateShell.ScanSession.TryClearUnpackSelection();
+            var selectedForCommit = stateShell.ScanSession
+                .TrySetUnpackSelection(card, true);
+            var frozeCommit = stateShell.ScanSession
+                .TryFreezeSelectedRequest(out var commitRequest);
+            assert(selectedForCommit && frozeCommit,
+                "The Task 7 processing matrix could not freeze its commit-critical request.");
+
+            processingTask = stateShell.UnpackSession.UnpackAsync(commitRequest!);
+            PumpWindow(window);
+            assert(service.CallCount == 2
+                   && stateShell.TaskState == TaskLifecycleState.Running,
+                "The Task 7 processing matrix could not start its second Task 6 operation.");
+            service.Report(new WallpaperUnpackProgress
+            {
+                ProcessedCount = 1,
+                TotalCount = 1,
+                Stage = WallpaperUnpackStage.Committing,
+                Message = "Commit-critical Task 7 fixture",
+                CompletedWork = 1,
+                TotalWork = 1,
+                WorkUnit = WallpaperWorkUnit.Items,
+                IsIndeterminate = false,
+                CanCancel = false
+            });
+            PumpWindow(window);
+            assert(stateShell.TaskState == TaskLifecycleState.CommitCritical
+                   && stateShell.UnpackSession.IsCommitCritical
+                   && stateShell.UnpackSession.HasActiveScope
+                   && !stateShell.UnpackSession.CanCancel
+                   && string.Equals(
+                       stateShell.UnpackSession.TrayStatusText,
+                       "正在完成安全提交",
+                       StringComparison.Ordinal),
+                "The Task 7 processing matrix did not project truthful non-cancellable commit state.");
+            ProjectBrowserUiRegressionTests.VerifyTask7PageStateAcrossSizes(
+                window,
+                stateShell,
+                "commit-critical",
+                openCompactDetails: false,
+                assert);
+
+            service.Release();
+            WaitForDispatcherTask(window, processingTask);
+            processingTask = null;
+            PumpWindow(window);
+            assert(stateShell.TaskState == TaskLifecycleState.Succeeded
+                   && !stateShell.UnpackSession.HasActiveScope
+                   && stateShell.UnpackSession.CompletionSummary is
+                   {
+                       TotalCount: 1,
+                       SucceededCount: 1,
+                       FailedCount: 0,
+                       CancelledCount: 0,
+                       CommittedCount: 1
+                   },
+                "The Task 7 processing matrix did not reach its committed completion owner state.");
+            ProjectBrowserUiRegressionTests.VerifyTask7PageStateAcrossSizes(
+                window,
+                stateShell,
+                "completion",
+                openCompactDetails: false,
+                assert);
+        }
+        finally
+        {
+            if (processingTask is { IsCompleted: false })
+            {
+                service.Release();
+                WaitForDispatcherTask(window, processingTask);
+            }
+
+            window.DataContext = restoreShell;
+            restoreShell.NavigateTo("BROWSE");
+            window.Width = 1190;
+            window.Height = 800;
+            PumpWindow(window);
+            Directory.Delete(testRoot, recursive: true);
+        }
+
+        VerifyProcessingLiveRegion(window, restoreShell, assert);
+    }
+
     private static void VerifyProblemFocusSurvivesSameIdBatchReset(
         WallpaperField.MainWindow window,
         ShellViewModel shell,
@@ -3412,6 +3572,65 @@ internal static class ProjectBrowserProcessingRegressionTests
                     }).ToArray()
             });
         }
+    }
+
+    private sealed class Task7StateUnpackService : IWallpaperUnpackService
+    {
+        private TaskCompletionSource? _release;
+        private IProgress<WallpaperUnpackProgress>? _progress;
+        private WallpaperUnpackRequest? _request;
+
+        internal int CallCount { get; private set; }
+
+        public async Task<WallpaperUnpackResult> UnpackAsync(
+            WallpaperUnpackRequest request,
+            IProgress<WallpaperUnpackProgress>? progress = null,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            CallCount++;
+            _request = request;
+            _progress = progress;
+            _release = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            await _release.Task.ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            return new WallpaperUnpackResult
+            {
+                Succeeded = true,
+                ProcessedCount = request.Items.Count,
+                TotalCount = request.Items.Count,
+                EligibleCount = request.Items.Count,
+                SucceededCount = request.Items.Count,
+                CommittedCount = request.Items.Count,
+                Message = "Task 7 state fixture completed",
+                ItemResults = request.Items.Select(item =>
+                    new WallpaperUnpackItemResult
+                    {
+                        ProjectKey = item.ProjectKey,
+                        WorkshopId = item.WorkshopId,
+                        OutputTarget = item.OutputDirectory,
+                        Outcome = WallpaperUnpackOutcome.Succeeded,
+                        CommitState = WallpaperItemCommitState.Committed,
+                        CompletedWork = 1,
+                        WorkUnit = WallpaperWorkUnit.Items
+                    }).ToArray()
+            };
+        }
+
+        internal void Report(WallpaperUnpackProgress progress)
+        {
+            if (_request is null)
+            {
+                throw new InvalidOperationException(
+                    "The Task 7 state service has no active request.");
+            }
+
+            _progress?.Report(progress);
+        }
+
+        internal void Release()
+            => _release?.TrySetResult();
     }
 
     private sealed class BatchIssueUnpackService(BatchIssueMode mode)

@@ -4,12 +4,18 @@ using System.IO.MemoryMappedFiles;
 using System.Reflection;
 using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using WallpaperField.Application;
+using WallpaperField.Controls;
 using WallpaperField.Contracts;
+using WallpaperField.Infrastructure;
 using WallpaperField.Models;
 using WallpaperField.Services;
 using WallpaperField.ViewModels;
 using WallpaperField.ViewModels.Sessions;
+using WallpaperField.Views;
 
 internal static class ProjectBrowserProjectionRegressionTests
 {
@@ -172,28 +178,196 @@ internal static class ProjectBrowserProjectionRegressionTests
 
     private static void VerifyProjectionHasNoFileSystemCalls(Action<bool, string> assert)
     {
+        VerifyFileSystemCallGraphProbes(assert);
+
+        var projectionRoots = new[]
+            {
+                typeof(BrowsePageViewModel),
+                typeof(BrowseProjectViewModel),
+                typeof(BrowseRowViewModel)
+            }
+            .SelectMany(GetDeclaredCallGraphRoots)
+            .ToArray();
+        var scan = ScanFileSystemCallGraph(projectionRoots);
+        assert(scan.ForbiddenChains.Count == 0,
+            "Browse projection methods reached forbidden filesystem APIs: "
+            + string.Join("; ", scan.ForbiddenChains));
+    }
+
+    internal static void VerifyBrowseUiHasNoFileSystemCalls(Action<bool, string> assert)
+    {
+        ArgumentNullException.ThrowIfNull(assert);
+        VerifyFileSystemCallGraphProbes(assert);
+
+        var roots = new[]
+            {
+                typeof(BrowsePageView),
+                typeof(ThumbnailPreviewImage),
+                typeof(BrowseSelectionToggle),
+                typeof(BrowsePageViewModel),
+                typeof(BrowseProjectViewModel),
+                typeof(BrowseRowViewModel)
+            }
+            .SelectMany(GetDeclaredCallGraphRoots)
+            .ToArray();
+        var scan = ScanFileSystemCallGraph(roots);
+        assert(scan.DecoderBoundaryChains.Count > 0,
+            "The Browse UI filesystem-call guard did not reach the exact "
+            + "IPreviewThumbnailDecoder.DecodeAsync worker boundary.");
+        assert(scan.ForbiddenChains.Count == 0,
+            "Browse UI Dispatcher methods reached forbidden filesystem APIs: "
+            + string.Join("; ", scan.ForbiddenChains));
+    }
+
+    internal static void VerifySnapshotCaptureUiHasNoFileSystemCalls(
+        Action<bool, string> assert)
+    {
+        ArgumentNullException.ThrowIfNull(assert);
+        VerifySnapshotDiagnosticWriterWorkerBoundary(assert);
+        var rootNames = new[]
+        {
+            "Window_Loaded",
+            "StartSnapshotCaptureIfConfigured",
+            "CompleteSnapshotCaptureAndExitAsync",
+            "CaptureSnapshotCoreAsync",
+            "RenderAndFreezeSnapshot",
+            "PositionSnapshotListAsync"
+        };
+        var roots = rootNames
+            .Select(name => typeof(WallpaperField.MainWindow).GetMethod(
+                name,
+                BindingFlags.Instance | BindingFlags.NonPublic)
+                ?? throw new InvalidOperationException(
+                    $"Missing MainWindow snapshot call-graph root {name}."))
+            .Cast<MethodBase>()
+            .ToArray();
+        var scan = ScanFileSystemCallGraph(roots);
+        const string writerBoundary =
+            "WallpaperField.Services.ISnapshotPngWriter.WriteAsync";
+        const string diagnosticBoundary =
+            "WallpaperField.Services.ISnapshotDiagnosticWriter.WriteAsync";
+        assert(scan.WriterBoundaryChains.Count > 0
+               && scan.WriterBoundaryChains.All(chain =>
+                   chain.EndsWith(writerBoundary, StringComparison.Ordinal))
+               && scan.WriterBoundaryChains.Any(chain =>
+                   chain.Contains(
+                       "MainWindow+<CaptureSnapshotCoreAsync>",
+                       StringComparison.Ordinal)
+                   && chain.Contains(".MoveNext", StringComparison.Ordinal)),
+            "The Main snapshot UI call-graph guard did not reach the exact "
+            + "ISnapshotPngWriter.WriteAsync worker boundary through "
+            + "CaptureSnapshotCoreAsync.MoveNext.");
+        assert(scan.DiagnosticWriterBoundaryChains.Count > 0
+               && scan.DiagnosticWriterBoundaryChains.All(chain =>
+                   chain.EndsWith(diagnosticBoundary, StringComparison.Ordinal))
+               && scan.DiagnosticWriterBoundaryChains.Any(chain =>
+                   chain.Contains(
+                       "MainWindow+<PositionSnapshotListAsync>",
+                       StringComparison.Ordinal)
+                   && chain.Contains(".MoveNext", StringComparison.Ordinal)),
+            "The Main snapshot UI call-graph guard did not reach the exact "
+            + "ISnapshotDiagnosticWriter.WriteAsync worker boundary through "
+            + "PositionSnapshotListAsync.MoveNext.");
+        assert(scan.ForbiddenChains.Count == 0,
+            "Main snapshot UI methods reached forbidden filesystem, codec, or logging APIs: "
+            + string.Join("; ", scan.ForbiddenChains));
+    }
+
+    private static void VerifySnapshotDiagnosticWriterWorkerBoundary(
+        Action<bool, string> assert)
+    {
+        var write = typeof(AppLogSnapshotDiagnosticWriter).GetMethod(
+            nameof(ISnapshotDiagnosticWriter.WriteAsync),
+            BindingFlags.Instance | BindingFlags.Public)
+            ?? throw new InvalidOperationException(
+                "Missing AppLogSnapshotDiagnosticWriter.WriteAsync.");
+        var directCalls = ReadCalledMethods(write).ToArray();
+        var scan = ScanFileSystemCallGraph([write]);
+        assert(directCalls.Any(method =>
+                   method.DeclaringType == typeof(Task)
+                   && string.Equals(method.Name, nameof(Task.Run), StringComparison.Ordinal))
+               && directCalls.All(method => method.DeclaringType != typeof(AppLog))
+               && scan.CompilerGeneratedMethodCount > 0
+               && scan.ForbiddenChains.Any(chain =>
+                   chain.Contains("WallpaperField.Infrastructure.AppLog.Write", StringComparison.Ordinal))
+               && scan.ForbiddenChains.All(chain =>
+                   chain.Contains(
+                       "AppLogSnapshotDiagnosticWriter+",
+                       StringComparison.Ordinal)),
+            "The default snapshot diagnostic writer did not isolate AppLog and filesystem "
+            + "work inside its Task.Run compiler-generated worker closure.");
+    }
+
+    private static void VerifyFileSystemCallGraphProbes(Action<bool, string> assert)
+    {
         var probe = typeof(ProjectBrowserProjectionRegressionTests).GetMethod(
             nameof(ForbiddenFileSystemProbe),
             BindingFlags.NonPublic | BindingFlags.Static)!;
-        var probeCalls = FindForbiddenFileSystemCalls([probe]);
-        assert(probeCalls.Any(call => call.Contains("System.IO.File.Exists", StringComparison.Ordinal)),
+        var probeScan = ScanFileSystemCallGraph([probe], TraverseProbeMethod);
+        assert(probeScan.ForbiddenChains.Any(call =>
+                call.Contains("System.IO.File.Exists", StringComparison.Ordinal)),
             "The Browse filesystem-call guard did not detect its controlled File.Exists probe.");
 
         foreach (var probeName in new[]
                  {
+                     nameof(ForbiddenIndirectFileSystemProbe),
                      nameof(ForbiddenStreamReaderProbe),
                      nameof(ForbiddenMemoryMappedFileProbe),
                      nameof(ForbiddenAsyncFileProbe),
                      nameof(ForbiddenIteratorFileProbe),
-                     nameof(ForbiddenAsyncIteratorFileProbe)
+                     nameof(ForbiddenAsyncIteratorFileProbe),
+                     nameof(ForbiddenTaskRunClosureProbe),
+                     nameof(ForbiddenDispatcherClosureProbe),
+                     nameof(ForbiddenWpfDecodeProbe),
+                     nameof(ForbiddenWpfEncodeProbe),
+                     nameof(ForbiddenAppLogProbe),
+                     nameof(ForbiddenPInvokeFileProbe)
                  })
         {
             var systemIoProbe = typeof(ProjectBrowserProjectionRegressionTests).GetMethod(
                 probeName,
                 BindingFlags.NonPublic | BindingFlags.Static)!;
-            assert(FindForbiddenFileSystemCalls([systemIoProbe]).Count > 0,
+            assert(ScanFileSystemCallGraph([systemIoProbe], TraverseProbeMethod)
+                    .ForbiddenChains.Count > 0,
                 $"The Browse filesystem-call guard did not reject controlled System.IO probe {probeName}.");
         }
+
+        var closureProbe = typeof(ProjectBrowserProjectionRegressionTests).GetMethod(
+            nameof(ForbiddenTaskRunClosureProbe),
+            BindingFlags.NonPublic | BindingFlags.Static)!;
+        var closureScan = ScanFileSystemCallGraph([closureProbe], TraverseProbeMethod);
+        assert(closureScan.CompilerGeneratedMethodCount > 0
+               && closureScan.ForbiddenChains.Any(chain =>
+                   chain.Contains("System.IO.File.Exists", StringComparison.Ordinal)),
+            "The Browse filesystem-call guard did not traverse a compiler-generated Task.Run closure.");
+
+        var dispatcherProbe = typeof(ProjectBrowserProjectionRegressionTests).GetMethod(
+            nameof(ForbiddenDispatcherClosureProbe),
+            BindingFlags.NonPublic | BindingFlags.Static)!;
+        var dispatcherScan = ScanFileSystemCallGraph([dispatcherProbe], TraverseProbeMethod);
+        assert(dispatcherScan.CompilerGeneratedMethodCount > 0
+               && dispatcherScan.ForbiddenChains.Any(chain =>
+                   chain.Contains("System.IO.File.Exists", StringComparison.Ordinal)),
+            "The Browse filesystem-call guard did not traverse a compiler-generated Dispatcher callback.");
+
+        var asyncProbe = typeof(ProjectBrowserProjectionRegressionTests).GetMethod(
+            nameof(ForbiddenAsyncFileProbe),
+            BindingFlags.NonPublic | BindingFlags.Static)!;
+        var iteratorProbe = typeof(ProjectBrowserProjectionRegressionTests).GetMethod(
+            nameof(ForbiddenIteratorFileProbe),
+            BindingFlags.NonPublic | BindingFlags.Static)!;
+        assert(ScanFileSystemCallGraph([asyncProbe], TraverseProbeMethod)
+                   .StateMachineMethodCount > 0
+               && ScanFileSystemCallGraph([iteratorProbe], TraverseProbeMethod)
+                   .StateMachineMethodCount > 0,
+            "The Browse filesystem-call guard did not traverse async and iterator state machines.");
+
+        var allowedPathProbe = typeof(ProjectBrowserProjectionRegressionTests).GetMethod(
+            nameof(AllowedPathProbe),
+            BindingFlags.NonPublic | BindingFlags.Static)!;
+        assert(ScanFileSystemCallGraph([allowedPathProbe], TraverseProbeMethod)
+                .ForbiddenChains.Count == 0,
+            "The Browse filesystem-call guard rejected System.IO.Path pure string operations.");
 
         var resolverFailedClosed = false;
         try
@@ -214,69 +388,118 @@ internal static class ProjectBrowserProjectionRegressionTests
 
         assert(resolverFailedClosed,
             "The Browse filesystem-call guard did not fail closed with caller/token context.");
-
-        var projectionRoots = new[]
-            {
-                typeof(BrowsePageViewModel),
-                typeof(BrowseProjectViewModel),
-                typeof(BrowseRowViewModel)
-            }
-            .SelectMany(type => type
-                .GetMethods(
-                    BindingFlags.Instance
-                    | BindingFlags.Static
-                    | BindingFlags.Public
-                    | BindingFlags.NonPublic
-                    | BindingFlags.DeclaredOnly)
-                .Cast<MethodBase>()
-                .Concat(type.GetConstructors(
-                    BindingFlags.Instance
-                    | BindingFlags.Static
-                    | BindingFlags.Public
-                    | BindingFlags.NonPublic)))
-            .ToArray();
-        var forbiddenCalls = FindForbiddenFileSystemCalls(projectionRoots);
-        assert(forbiddenCalls.Count == 0,
-            "Browse projection methods reached forbidden filesystem APIs: "
-            + string.Join("; ", forbiddenCalls));
     }
 
-    private static IReadOnlyList<string> FindForbiddenFileSystemCalls(
-        IEnumerable<MethodBase> roots)
+    private static IEnumerable<MethodBase> GetDeclaredCallGraphRoots(Type type)
+    {
+        foreach (var method in type.GetMethods(
+                     BindingFlags.Instance
+                     | BindingFlags.Static
+                     | BindingFlags.Public
+                     | BindingFlags.NonPublic
+                     | BindingFlags.DeclaredOnly))
+        {
+            yield return method;
+        }
+
+        foreach (var constructor in type.GetConstructors(
+                     BindingFlags.Instance
+                     | BindingFlags.Static
+                     | BindingFlags.Public
+                     | BindingFlags.NonPublic))
+        {
+            yield return constructor;
+        }
+
+        if (type.TypeInitializer is { } typeInitializer)
+        {
+            yield return typeInitializer;
+        }
+    }
+
+    private static FileSystemCallGraphScan ScanFileSystemCallGraph(
+        IEnumerable<MethodBase> roots,
+        Func<MethodBase, bool>? additionalTraversal = null)
     {
         var wallpaperAssembly = typeof(BrowsePageViewModel).Assembly;
-        var pending = new Queue<MethodBase>(roots);
+        var pending = new Queue<CallGraphNode>(roots.Select(root =>
+            new CallGraphNode(root, FormatMethod(root))));
         var visited = new HashSet<(Module Module, int Token)>();
         var forbidden = new SortedSet<string>(StringComparer.Ordinal);
+        var decoderBoundaries = new SortedSet<string>(StringComparer.Ordinal);
+        var writerBoundaries = new SortedSet<string>(StringComparer.Ordinal);
+        var diagnosticWriterBoundaries = new SortedSet<string>(StringComparer.Ordinal);
+        var compilerGeneratedMethodCount = 0;
+        var stateMachineMethodCount = 0;
         while (pending.Count > 0)
         {
-            var caller = pending.Dequeue();
+            var node = pending.Dequeue();
+            var caller = node.Method;
             if (!TryGetMethodIdentity(caller, out var identity) || !visited.Add(identity))
             {
                 continue;
             }
 
-            EnqueueStateMachineMoveNext(caller, pending);
+            if (caller.IsDefined(typeof(CompilerGeneratedAttribute), inherit: false)
+                || caller.DeclaringType?.IsDefined(
+                    typeof(CompilerGeneratedAttribute),
+                    inherit: false) == true)
+            {
+                compilerGeneratedMethodCount++;
+            }
+
+            foreach (var stateMachine in GetStateMachineMoveNextMethods(caller))
+            {
+                stateMachineMethodCount++;
+                pending.Enqueue(new CallGraphNode(
+                    stateMachine,
+                    node.Path + " -> " + FormatMethod(stateMachine)));
+            }
+
             foreach (var called in ReadCalledMethods(caller))
             {
-                if (IsForbiddenFileSystemType(called.DeclaringType))
+                var path = node.Path + " -> " + FormatMethod(called);
+                if (IsPreviewDecoderBoundary(called))
                 {
-                    forbidden.Add(
-                        $"{caller.DeclaringType?.FullName}.{caller.Name} -> "
-                        + $"{called.DeclaringType?.FullName}.{called.Name}");
+                    decoderBoundaries.Add(path);
+                    continue;
                 }
 
-                if (called.Module.Assembly == wallpaperAssembly
-                    && called.DeclaringType?.Namespace?.StartsWith(
-                        "WallpaperField",
-                        StringComparison.Ordinal) == true)
+                if (IsSnapshotWriterBoundary(called))
                 {
-                    pending.Enqueue(called);
+                    writerBoundaries.Add(path);
+                    continue;
+                }
+
+                if (IsSnapshotDiagnosticWriterBoundary(called))
+                {
+                    diagnosticWriterBoundaries.Add(path);
+                    continue;
+                }
+
+                if (IsForbiddenCall(called))
+                {
+                    forbidden.Add(path);
+                }
+
+                if ((called.Module.Assembly == wallpaperAssembly
+                     && called.DeclaringType?.Namespace?.StartsWith(
+                         "WallpaperField",
+                         StringComparison.Ordinal) == true)
+                    || additionalTraversal?.Invoke(called) == true)
+                {
+                    pending.Enqueue(new CallGraphNode(called, path));
                 }
             }
         }
 
-        return forbidden.ToArray();
+        return new FileSystemCallGraphScan(
+            forbidden.ToArray(),
+            decoderBoundaries.ToArray(),
+            writerBoundaries.ToArray(),
+            diagnosticWriterBoundaries.ToArray(),
+            compilerGeneratedMethodCount,
+            stateMachineMethodCount);
     }
 
     private static IEnumerable<MethodBase> ReadCalledMethods(MethodBase caller)
@@ -310,13 +533,12 @@ internal static class ProjectBrowserProjectionRegressionTests
         }
     }
 
-    private static void EnqueueStateMachineMoveNext(
-        MethodBase method,
-        Queue<MethodBase> pending)
+    private static IEnumerable<MethodBase> GetStateMachineMoveNextMethods(
+        MethodBase method)
     {
         if (method is not MethodInfo methodInfo)
         {
-            return;
+            yield break;
         }
 
         foreach (var attribute in methodInfo.GetCustomAttributes<StateMachineAttribute>())
@@ -329,7 +551,7 @@ internal static class ProjectBrowserProjectionRegressionTests
                 | BindingFlags.DeclaredOnly);
             if (moveNext is not null)
             {
-                pending.Enqueue(moveNext);
+                yield return moveNext;
             }
         }
     }
@@ -398,11 +620,83 @@ internal static class ProjectBrowserProjectionRegressionTests
         }
     }
 
+    private static bool IsForbiddenCall(MethodBase method)
+        => IsForbiddenFileSystemType(method.DeclaringType)
+           || IsSynchronousWpfCodec(method)
+           || method.DeclaringType == typeof(AppLog)
+           || IsFilePInvoke(method);
+
     private static bool IsForbiddenFileSystemType(Type? type)
         => type?.Namespace?.StartsWith("System.IO", StringComparison.Ordinal) == true
+           && !typeof(Exception).IsAssignableFrom(type)
            && type != typeof(Path);
 
+    private static bool IsSynchronousWpfCodec(MethodBase method)
+        => method.DeclaringType == typeof(BitmapImage)
+           || method.DeclaringType == typeof(BitmapFrame)
+           || method.DeclaringType == typeof(BitmapDecoder)
+           || method.DeclaringType?.IsSubclassOf(typeof(BitmapDecoder)) == true
+           || method.DeclaringType == typeof(BitmapEncoder)
+           || method.DeclaringType?.IsSubclassOf(typeof(BitmapEncoder)) == true;
+
+    private static bool IsFilePInvoke(MethodBase method)
+    {
+        var import = method.GetCustomAttribute<DllImportAttribute>();
+        if (import is null)
+        {
+            return false;
+        }
+
+        var entryPoint = string.IsNullOrWhiteSpace(import.EntryPoint)
+            ? method.Name
+            : import.EntryPoint;
+        return new[]
+        {
+            "File", "Directory", "Path", "FindFirst", "FindNext", "FindClose",
+            "MapView", "UnmapView"
+        }.Any(fragment => entryPoint.Contains(fragment, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsPreviewDecoderBoundary(MethodBase method)
+        => method.DeclaringType == typeof(IPreviewThumbnailDecoder)
+           && string.Equals(method.Name, nameof(IPreviewThumbnailDecoder.DecodeAsync),
+               StringComparison.Ordinal);
+
+    private static bool IsSnapshotWriterBoundary(MethodBase method)
+        => method.DeclaringType == typeof(ISnapshotPngWriter)
+           && string.Equals(method.Name, nameof(ISnapshotPngWriter.WriteAsync),
+               StringComparison.Ordinal);
+
+    private static bool IsSnapshotDiagnosticWriterBoundary(MethodBase method)
+        => method.DeclaringType == typeof(ISnapshotDiagnosticWriter)
+           && string.Equals(
+               method.Name,
+               nameof(ISnapshotDiagnosticWriter.WriteAsync),
+               StringComparison.Ordinal);
+
+    private static bool TraverseProbeMethod(MethodBase method)
+    {
+        var declaringType = method.DeclaringType;
+        while (declaringType is not null)
+        {
+            if (declaringType == typeof(ProjectBrowserProjectionRegressionTests))
+            {
+                return true;
+            }
+
+            declaringType = declaringType.DeclaringType;
+        }
+
+        return false;
+    }
+
+    private static string FormatMethod(MethodBase method)
+        => $"{method.DeclaringType?.FullName ?? "<global>"}.{method.Name}";
+
     private static bool ForbiddenFileSystemProbe(string path) => File.Exists(path);
+
+    private static bool ForbiddenIndirectFileSystemProbe(string path)
+        => ForbiddenFileSystemProbe(path);
 
     private static int ForbiddenStreamReaderProbe(string path)
     {
@@ -433,6 +727,41 @@ internal static class ProjectBrowserProjectionRegressionTests
         yield return File.Exists(path);
     }
 
+    private static Task<bool> ForbiddenTaskRunClosureProbe(string path)
+        => Task.Run(() => File.Exists(path));
+
+    private static DispatcherOperation ForbiddenDispatcherClosureProbe(
+        Dispatcher dispatcher,
+        string path)
+        => dispatcher.BeginInvoke(new Func<bool>(() => File.Exists(path)));
+
+    private static void ForbiddenWpfDecodeProbe(string path)
+    {
+        var image = new BitmapImage();
+        image.BeginInit();
+        image.UriSource = new Uri(path, UriKind.Absolute);
+        image.EndInit();
+    }
+
+    private static PngBitmapEncoder ForbiddenWpfEncodeProbe(BitmapSource bitmap)
+    {
+        var encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        return encoder;
+    }
+
+    private static void ForbiddenAppLogProbe()
+        => AppLog.Write("controlled call-graph probe");
+
+    private static uint ForbiddenPInvokeFileProbe(string path)
+        => GetFileAttributesW(path);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint GetFileAttributesW(string path);
+
+    private static string AllowedPathProbe(string left, string right)
+        => Path.GetFullPath(Path.Combine(left, right));
+
     private static readonly IReadOnlyDictionary<int, OpCode> IlOpCodes = typeof(OpCodes)
         .GetFields(BindingFlags.Public | BindingFlags.Static)
         .Where(field => field.FieldType == typeof(OpCode))
@@ -444,6 +773,16 @@ internal static class ProjectBrowserProjectionRegressionTests
         int token,
         Type[]? typeArguments,
         Type[]? methodArguments);
+
+    private sealed record CallGraphNode(MethodBase Method, string Path);
+
+    private sealed record FileSystemCallGraphScan(
+        IReadOnlyList<string> ForbiddenChains,
+        IReadOnlyList<string> DecoderBoundaryChains,
+        IReadOnlyList<string> WriterBoundaryChains,
+        IReadOnlyList<string> DiagnosticWriterBoundaryChains,
+        int CompilerGeneratedMethodCount,
+        int StateMachineMethodCount);
 
     private static async Task VerifyProjectionFilteringSortingAndRowsAsync(
         Action<bool, string> assert)
@@ -506,6 +845,7 @@ internal static class ProjectBrowserProjectionRegressionTests
         var scanInvocationCount = fixture.Service.InvocationCount;
         foreach (var columns in new[] { 3, 4, 5, 6 })
         {
+            var previousRows = fixture.Browse.Rows.ToArray();
             fixture.Browse.SetColumnCount(columns);
             var flattened = fixture.Browse.Rows
                 .SelectMany(row => row.Projects)
@@ -514,12 +854,15 @@ internal static class ProjectBrowserProjectionRegressionTests
                 .ToArray();
             var expectedRows = (records130.Length + columns - 1) / columns;
             var expectedEmptySlots = expectedRows * columns - records130.Length;
+            var reusableRows = Math.Min(previousRows.Length, expectedRows);
             assert(fixture.Browse.Rows.Count == expectedRows
+                   && Enumerable.Range(0, reusableRows).All(index =>
+                       ReferenceEquals(fixture.Browse.Rows[index], previousRows[index]))
                    && fixture.Browse.Rows.All(row => row.Projects.Count == columns)
                    && fixture.Browse.Rows.Last().Projects.Count(project => project is null)
                        == expectedEmptySlots
                    && flattened.SequenceEqual(fixture.Browse.VisibleProjects),
-                $"{columns}-column row projection lost order, wrappers or empty slots.");
+                $"{columns}-column row projection lost its reusable prefix, order, wrappers or empty slots.");
         }
         fixture.Browse.SearchText = "Project 012";
         fixture.Browse.SearchText = string.Empty;

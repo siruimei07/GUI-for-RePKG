@@ -432,7 +432,7 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
 
         if (SetProperty(ref _columnCount, columns, nameof(ColumnCount)))
         {
-            RebuildRows();
+            ReflowRows();
         }
     }
 
@@ -836,7 +836,7 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
             foreach (var card in snapshot.Projects)
             {
                 card.PropertyChanged += OnCardPropertyChanged;
-                _allProjects.Add(new BrowseProjectViewModel(card));
+                _allProjects.Add(new BrowseProjectViewModel(this, card));
             }
         }
 
@@ -1068,19 +1068,45 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
     private void RebuildRows()
     {
         var rows = new List<BrowseRowViewModel>();
-        for (var index = 0; index < VisibleProjects.Count; index += ColumnCount)
+        for (var rowIndex = 0; rowIndex * ColumnCount < VisibleProjects.Count; rowIndex++)
         {
-            var slots = new BrowseProjectViewModel?[ColumnCount];
-            for (var column = 0; column < ColumnCount
-                                 && index + column < VisibleProjects.Count; column++)
-            {
-                slots[column] = VisibleProjects[index + column];
-            }
-
-            rows.Add(new BrowseRowViewModel(slots));
+            rows.Add(new BrowseRowViewModel(CreateRowSlots(rowIndex)));
         }
 
         Rows.ReplaceRange(rows);
+    }
+
+    private void ReflowRows()
+    {
+        var requiredRows = (VisibleProjects.Count + ColumnCount - 1) / ColumnCount;
+        var reusableRows = Math.Min(Rows.Count, requiredRows);
+        for (var rowIndex = 0; rowIndex < reusableRows; rowIndex++)
+        {
+            Rows[rowIndex].UpdateProjects(CreateRowSlots(rowIndex));
+        }
+
+        while (Rows.Count > requiredRows)
+        {
+            Rows.RemoveAt(Rows.Count - 1);
+        }
+
+        while (Rows.Count < requiredRows)
+        {
+            Rows.Add(new BrowseRowViewModel(CreateRowSlots(Rows.Count)));
+        }
+    }
+
+    private BrowseProjectViewModel?[] CreateRowSlots(int rowIndex)
+    {
+        var slots = new BrowseProjectViewModel?[ColumnCount];
+        var projectIndex = rowIndex * ColumnCount;
+        for (var column = 0; column < ColumnCount
+                             && projectIndex + column < VisibleProjects.Count; column++)
+        {
+            slots[column] = VisibleProjects[projectIndex + column];
+        }
+
+        return slots;
     }
 
     private void OnProblemsChanged(object? sender, EventArgs e)

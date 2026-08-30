@@ -7,10 +7,15 @@ public sealed class BrowseProjectViewModel : ObservableObject
     private bool _isCurrent;
     private bool _isRovingTabStop;
 
-    public BrowseProjectViewModel(WallpaperCardViewModel card)
+    public BrowseProjectViewModel(
+        BrowsePageViewModel owner,
+        WallpaperCardViewModel card)
     {
+        Owner = owner ?? throw new ArgumentNullException(nameof(owner));
         Card = card ?? throw new ArgumentNullException(nameof(card));
     }
+
+    public BrowsePageViewModel Owner { get; }
 
     public WallpaperCardViewModel Card { get; }
 

@@ -199,11 +199,7 @@ internal static class UiStructureRegressionTests
             try
             {
                 using var bindingErrors = new WpfBindingErrorCollector();
-                application = new WallpaperField.App
-                {
-                    ShutdownMode = ShutdownMode.OnExplicitShutdown
-                };
-                application.InitializeComponent();
+                application = IsolatedWpfApplication.Create();
                 var shell = CreateShell();
                 window = new WallpaperField.MainWindow
                 {
@@ -289,6 +285,368 @@ internal static class UiStructureRegressionTests
         {
             throw new InvalidOperationException(
                 "The WPF UI structure host failed.",
+                failure);
+        }
+    }
+
+    internal static void VerifyTask7WpfWindow(Action<bool, string> assert)
+    {
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            var previousContext = SynchronizationContext.Current;
+            SynchronizationContext.SetSynchronizationContext(
+                new DispatcherSynchronizationContext(Dispatcher.CurrentDispatcher));
+            WallpaperField.App? application = null;
+            WallpaperField.MainWindow? window = null;
+            ShellViewModel? shell = null;
+            try
+            {
+                using var bindingErrors = new WpfBindingErrorCollector();
+                application = IsolatedWpfApplication.Create();
+                assert(application.ShutdownMode == ShutdownMode.OnExplicitShutdown,
+                    "The isolated Task 7 WPF host did not retain explicit shutdown after loading real App resources.");
+                shell = CreateShell();
+                window = new WallpaperField.MainWindow
+                {
+                    DataContext = shell,
+                    Width = 1600,
+                    Height = 1000,
+                    Left = -10_000,
+                    Top = -10_000,
+                    ShowInTaskbar = false,
+                    ShowActivated = false
+                };
+                window.SetReducedMotion(true);
+                window.Show();
+                window.UpdateLayout();
+                window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+                var isolatedWindows = application.Windows.Cast<Window>()
+                    .OfType<WallpaperField.MainWindow>()
+                    .ToArray();
+                assert(isolatedWindows.Length == 1
+                       && ReferenceEquals(isolatedWindows[0], window)
+                       && ReferenceEquals(application.MainWindow, window),
+                    "The isolated Task 7 WPF host launched or adopted an unexpected MainWindow.");
+                ProjectBrowserUiRegressionTests.VerifyTask7Window(window, shell, assert);
+                assert(!bindingErrors.HasErrors,
+                    $"The isolated Task 7 WPF host emitted binding errors: {bindingErrors.Summary}");
+            }
+            catch (Exception exception)
+            {
+                failure = exception;
+            }
+            finally
+            {
+                window?.Close();
+                shell?.Dispose();
+                application?.Shutdown();
+                SynchronizationContext.SetSynchronizationContext(previousContext);
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "WallpaperField.Task7WpfSmoke"
+        };
+
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        assert(thread.Join(TimeSpan.FromSeconds(360)),
+            "The isolated Task 7 WPF host did not finish in time.");
+        if (failure is not null)
+        {
+            throw new InvalidOperationException(
+                "The isolated Task 7 WPF host failed.",
+                failure);
+        }
+    }
+
+    internal static void VerifyTask7IsolatedApplicationHost(Action<bool, string> assert)
+    {
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            WallpaperField.App? application = null;
+            try
+            {
+                application = IsolatedWpfApplication.Create();
+                assert(application.ShutdownMode == ShutdownMode.OnExplicitShutdown,
+                    "The isolated Task 7 WPF host did not retain explicit shutdown after loading real App resources.");
+            }
+            catch (Exception exception)
+            {
+                failure = exception;
+            }
+            finally
+            {
+                application?.Shutdown();
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "WallpaperField.Task7IsolatedApplicationSmoke"
+        };
+
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        assert(thread.Join(TimeSpan.FromSeconds(15)),
+            "The isolated Task 7 application host did not finish in time.");
+        if (failure is not null)
+        {
+            throw new InvalidOperationException(
+                "The isolated Task 7 application host failed.",
+                failure);
+        }
+    }
+
+    internal static void VerifyTask7IsolatedApplicationFailureCleanup(
+        Action<bool, string> assert)
+    {
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                var expectedFailure = new InvalidOperationException(
+                    "Task 7 controlled isolated-application initialization failure.");
+                Exception? observedFailure = null;
+                WallpaperField.App? failedApplication = null;
+                var startupRaised = false;
+                try
+                {
+                    _ = IsolatedWpfApplication.Create(candidate =>
+                    {
+                        failedApplication = candidate;
+                        candidate.InitializeComponent();
+                        candidate.Startup += (_, _) => startupRaised = true;
+                        throw expectedFailure;
+                    });
+                }
+                catch (Exception exception)
+                {
+                    observedFailure = exception;
+                }
+
+                assert(ReferenceEquals(observedFailure, expectedFailure),
+                    "The isolated application initializer did not preserve its original exception.");
+                assert(Application.Current is null,
+                    "A failed isolated application initialization retained Application.Current.");
+                assert(!startupRaised,
+                    "A failed isolated application initialization raised Startup before cleanup.");
+                assert(failedApplication is not null
+                       && failedApplication.Dispatcher.HasShutdownStarted
+                       && failedApplication.Dispatcher.HasShutdownFinished
+                       && failedApplication.Windows.Count == 0,
+                    "A failed isolated application initialization did not finish Dispatcher/window cleanup.");
+            }
+            catch (Exception exception)
+            {
+                failure = exception;
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "WallpaperField.Task7IsolatedApplicationFailureSmoke"
+        };
+
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        assert(thread.Join(TimeSpan.FromSeconds(15)),
+            "The isolated Task 7 application failure host did not finish in time.");
+        if (failure is not null)
+        {
+            throw new InvalidOperationException(
+                "The isolated Task 7 application failure host failed.",
+                failure);
+        }
+    }
+
+    internal static void VerifyTask7VisualWpfWindow(Action<bool, string> assert)
+    {
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            var previousContext = SynchronizationContext.Current;
+            SynchronizationContext.SetSynchronizationContext(
+                new DispatcherSynchronizationContext(Dispatcher.CurrentDispatcher));
+            WallpaperField.App? application = null;
+            WallpaperField.MainWindow? window = null;
+            try
+            {
+                using var bindingErrors = new WpfBindingErrorCollector();
+                application = IsolatedWpfApplication.Create();
+                window = new WallpaperField.MainWindow
+                {
+                    Width = 1600,
+                    Height = 1000,
+                    Left = -10_000,
+                    Top = -10_000,
+                    ShowInTaskbar = false,
+                    ShowActivated = false
+                };
+                window.SetReducedMotion(true);
+                application.MainWindow = window;
+                ProjectBrowserUiRegressionTests.VerifyTask7VisualCaptureWindow(
+                    window,
+                    assert);
+                assert(!bindingErrors.HasErrors,
+                    $"The Task 7 visual capture host emitted binding errors: {bindingErrors.Summary}");
+            }
+            catch (Exception exception)
+            {
+                failure = exception;
+            }
+            finally
+            {
+                window?.Close();
+                application?.Shutdown();
+                SynchronizationContext.SetSynchronizationContext(previousContext);
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "WallpaperField.Task7VisualCaptureSmoke"
+        };
+
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        assert(thread.Join(TimeSpan.FromSeconds(90)),
+            "The isolated Task 7 visual capture host did not finish in time.");
+        if (failure is not null)
+        {
+            throw new InvalidOperationException(
+                "The isolated Task 7 visual capture host failed.",
+                failure);
+        }
+    }
+
+    internal static void VerifyTask7ReadinessWpfWindow(Action<bool, string> assert)
+    {
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            var previousContext = SynchronizationContext.Current;
+            SynchronizationContext.SetSynchronizationContext(
+                new DispatcherSynchronizationContext(Dispatcher.CurrentDispatcher));
+            WallpaperField.App? application = null;
+            WallpaperField.MainWindow? window = null;
+            ShellViewModel? shell = null;
+            try
+            {
+                using var bindingErrors = new WpfBindingErrorCollector();
+                application = IsolatedWpfApplication.Create();
+                shell = CreateShell();
+                window = new WallpaperField.MainWindow
+                {
+                    DataContext = shell,
+                    Width = 1600,
+                    Height = 1000,
+                    Left = -10_000,
+                    Top = -10_000,
+                    ShowInTaskbar = false,
+                    ShowActivated = false
+                };
+                window.SetReducedMotion(true);
+                window.Show();
+                window.UpdateLayout();
+                window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+                ProjectBrowserUiRegressionTests.VerifyTask7ReadinessWindow(
+                    window,
+                    shell,
+                    assert);
+                assert(!bindingErrors.HasErrors,
+                    $"The isolated Task 7 readiness host emitted binding errors: {bindingErrors.Summary}");
+            }
+            catch (Exception exception)
+            {
+                failure = exception;
+            }
+            finally
+            {
+                window?.Close();
+                shell?.Dispose();
+                application?.Shutdown();
+                SynchronizationContext.SetSynchronizationContext(previousContext);
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "WallpaperField.Task7ReadinessSmoke"
+        };
+
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        assert(thread.Join(TimeSpan.FromSeconds(90)),
+            "The isolated Task 7 readiness host did not finish in time.");
+        if (failure is not null)
+        {
+            throw new InvalidOperationException(
+                "The isolated Task 7 readiness host failed.",
+                failure);
+        }
+    }
+
+    internal static void VerifyTask7SnapshotCaptureWpfWindow(Action<bool, string> assert)
+    {
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            var previousContext = SynchronizationContext.Current;
+            SynchronizationContext.SetSynchronizationContext(
+                new DispatcherSynchronizationContext(Dispatcher.CurrentDispatcher));
+            WallpaperField.App? application = null;
+            WallpaperField.MainWindow? hostWindow = null;
+            ShellViewModel? hostShell = null;
+            try
+            {
+                using var bindingErrors = new WpfBindingErrorCollector();
+                application = IsolatedWpfApplication.Create();
+                hostShell = CreateShell();
+                hostWindow = new WallpaperField.MainWindow
+                {
+                    DataContext = hostShell,
+                    Width = 920,
+                    Height = 680,
+                    Left = -10_000,
+                    Top = -10_000,
+                    ShowInTaskbar = false,
+                    ShowActivated = false
+                };
+                hostWindow.SetReducedMotion(true);
+                hostWindow.Show();
+                hostWindow.UpdateLayout();
+                hostWindow.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+                ProjectBrowserUiRegressionTests.VerifyTask7SnapshotCaptureWindow(
+                    hostWindow,
+                    assert);
+                assert(!bindingErrors.HasErrors,
+                    $"The isolated Task 7 snapshot capture host emitted binding errors: {bindingErrors.Summary}");
+            }
+            catch (Exception exception)
+            {
+                failure = exception;
+            }
+            finally
+            {
+                hostWindow?.Close();
+                hostShell?.Dispose();
+                application?.Shutdown();
+                SynchronizationContext.SetSynchronizationContext(previousContext);
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "WallpaperField.Task7SnapshotCaptureSmoke"
+        };
+
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        assert(thread.Join(TimeSpan.FromSeconds(90)),
+            "The isolated Task 7 snapshot capture host did not finish in time.");
+        if (failure is not null)
+        {
+            throw new InvalidOperationException(
+                "The isolated Task 7 snapshot capture host failed.",
                 failure);
         }
     }
@@ -559,7 +917,33 @@ internal static class UiStructureRegressionTests
             "Programmatic list positioning still calls ancestor BringIntoView.");
         assert(!windowCode.Contains("ResultsList", StringComparison.Ordinal)
                && !windowCode.Contains("ProblemDetails_", StringComparison.Ordinal)
-               && pageCode.Split("PositionSnapshotAsync", StringSplitOptions.None).Length - 1 == 3
+               && new[]
+               {
+                   "WallpaperField.Views.ScanPageView",
+                   "WallpaperField.Views.LibraryPageView",
+                   "WallpaperField.Views.ProblemCenterView"
+               }.All(typeName =>
+               {
+                   var method = typeof(WallpaperField.MainWindow).Assembly
+                       .GetType(typeName, throwOnError: true)!
+                       .GetMethod(
+                           "PositionSnapshotAsync",
+                           BindingFlags.Instance | BindingFlags.NonPublic,
+                           binder: null,
+                           types:
+                           [
+                               typeof(int),
+                               typeof(Func<bool>),
+                               typeof(CancellationToken)
+                           ],
+                           modifiers: null);
+                   return method?.ReturnType.IsGenericType == true
+                          && method.ReturnType.GetGenericTypeDefinition() == typeof(Task<>)
+                          && string.Equals(
+                              method.ReturnType.GetGenericArguments()[0].FullName,
+                              "WallpaperField.Views.SnapshotPositionResult",
+                              StringComparison.Ordinal);
+               })
                && positionerCode.Contains("list.ScrollIntoView", StringComparison.Ordinal),
             "MainWindow still owns page list/detail state or a page lost internal list positioning.");
         foreach (var mutation in new[]
@@ -622,13 +1006,31 @@ internal static class UiStructureRegressionTests
             "The Scan success surface is not wired to Browse navigation.");
         VerifyOnlyCurrentPageVisible(window, "BrowseView", assert);
 
+        var browse = shell.BrowsePageViewModel;
+        var currentBeforePositioning = browse.CurrentProject;
+        var focusedKeyBeforePositioning = browse.FocusedProjectKey;
+        var visibleCountBeforePositioning = browse.VisibleProjects.Count;
         window.ConfigureSnapshot(Path.Combine(Path.GetTempPath(), "browse-positioning.png"), scrollIndex: 0);
         var positionMethod = typeof(WallpaperField.MainWindow).GetMethod(
             "PositionSnapshotListAsync",
-            BindingFlags.Instance | BindingFlags.NonPublic);
-        var positionTask = positionMethod?.Invoke(window, null) as Task<bool>;
-        assert(positionTask?.GetAwaiter().GetResult() == true,
-            "Snapshot positioning did not dispatch through BrowsePageView.");
+            BindingFlags.Instance | BindingFlags.NonPublic,
+            binder: null,
+            types: [typeof(CancellationToken)],
+            modifiers: null);
+        var positionTask = positionMethod?.Invoke(
+            window,
+            [CancellationToken.None]) as Task<bool>;
+        assert(positionTask is not null
+               && !positionTask.GetAwaiter().GetResult()
+               && !browse.HasSnapshot
+               && ReferenceEquals(browse.CurrentProject, currentBeforePositioning)
+               && string.Equals(
+                   browse.FocusedProjectKey,
+                   focusedKeyBeforePositioning,
+                   StringComparison.Ordinal)
+               && browse.VisibleProjects.Count == visibleCountBeforePositioning,
+            "Never-scanned Browse snapshot positioning did not fail closed without "
+            + "pretending to be ReadyEmpty or changing project focus.");
     }
 
     private static void VerifyOnlyCurrentPageVisible(

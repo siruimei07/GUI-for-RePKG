@@ -9,6 +9,15 @@ using WallpaperField.Services;
 
 namespace WallpaperField.Controls;
 
+internal enum ThumbnailSnapshotReadiness
+{
+    Pending,
+    Ready,
+    StablePlaceholder,
+    NoPreview,
+    Rejected
+}
+
 public sealed class ThumbnailPreviewImage : Image
 {
     public static readonly DependencyProperty ThumbnailServiceProperty = DependencyProperty.Register(
@@ -71,6 +80,7 @@ public sealed class ThumbnailPreviewImage : Image
 
     private PreviewThumbnailLease? _lease;
     private ScrollViewer? _viewport;
+    private bool _viewportRefreshPending;
     private int _requestVersion;
 
     public ThumbnailPreviewImage()
@@ -131,6 +141,59 @@ public sealed class ThumbnailPreviewImage : Image
 
     public PreviewThumbnailStatus? ThumbnailStatus
         => (PreviewThumbnailStatus?)GetValue(ThumbnailStatusProperty);
+
+    internal ThumbnailSnapshotReadiness GetSnapshotReadiness()
+    {
+        if (ThumbnailStatus is null)
+        {
+            var noPreviewFacts = string.IsNullOrWhiteSpace(SourcePath)
+                && ScanFileLength < 0
+                && ScanLastWriteTimeUtc == default
+                && string.IsNullOrWhiteSpace(PreviewFormat);
+            if (Source is null && noPreviewFacts)
+            {
+                return ThumbnailSnapshotReadiness.NoPreview;
+            }
+
+            var completeRequest = !string.IsNullOrWhiteSpace(ProjectKey)
+                                  && !string.IsNullOrWhiteSpace(SourcePath)
+                                  && ScanFileLength >= 0
+                                  && ScanLastWriteTimeUtc != default
+                                  && !string.IsNullOrWhiteSpace(PreviewFormat)
+                                  && SnapshotGeneration > 0;
+            return Source is null && completeRequest
+                ? ThumbnailSnapshotReadiness.Pending
+                : ThumbnailSnapshotReadiness.Rejected;
+        }
+
+        if (ThumbnailStatus == PreviewThumbnailStatus.Ready)
+        {
+            return Source is System.Windows.Media.Imaging.BitmapSource
+                {
+                    IsFrozen: true,
+                    PixelWidth: > 0,
+                    PixelHeight: > 0
+                }
+                ? ThumbnailSnapshotReadiness.Ready
+                : ThumbnailSnapshotReadiness.Rejected;
+        }
+
+        if (ThumbnailStatus is PreviewThumbnailStatus.Cancelled
+            or PreviewThumbnailStatus.Stale)
+        {
+            return ThumbnailSnapshotReadiness.Rejected;
+        }
+
+        var isStableFailure = ThumbnailStatus is PreviewThumbnailStatus.Missing
+            or PreviewThumbnailStatus.Corrupt
+            or PreviewThumbnailStatus.OverBudget
+            or PreviewThumbnailStatus.ReparsePoint
+            or PreviewThumbnailStatus.Changed
+            or PreviewThumbnailStatus.Unsupported;
+        return isStableFailure && Source is null
+                ? ThumbnailSnapshotReadiness.StablePlaceholder
+                : ThumbnailSnapshotReadiness.Rejected;
+    }
 
     private static void OnRequestPropertyChanged(
         DependencyObject dependencyObject,
@@ -208,14 +271,19 @@ public sealed class ThumbnailPreviewImage : Image
 
     private void QueueViewportRefresh()
     {
-        if (!IsLoaded)
+        if (!IsLoaded || _viewportRefreshPending)
         {
             return;
         }
 
+        _viewportRefreshPending = true;
         _ = Dispatcher.BeginInvoke(
             DispatcherPriority.Loaded,
-            new Action(RefreshViewportState));
+            new Action(() =>
+            {
+                _viewportRefreshPending = false;
+                RefreshViewportState();
+            }));
     }
 
     private void RefreshViewportState()
@@ -275,7 +343,12 @@ public sealed class ThumbnailPreviewImage : Image
                 -rowHeight,
                 viewportWidth,
                 viewportHeight + (2 * rowHeight));
-            return bounds.IntersectsWith(overscan);
+            // Rect.IntersectsWith includes edge-only contact. A recycled row whose
+            // top equals the overscan bottom owns no visible area and no lease.
+            return bounds.Left < overscan.Right
+                   && bounds.Right > overscan.Left
+                   && bounds.Top < overscan.Bottom
+                   && bounds.Bottom > overscan.Top;
         }
         catch (InvalidOperationException)
         {

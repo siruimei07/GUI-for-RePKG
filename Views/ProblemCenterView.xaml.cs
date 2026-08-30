@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
@@ -212,14 +213,31 @@ public sealed partial class ProblemCenterView : UserControl
         Interlocked.Increment(ref _issueFocusRequestVersion);
     }
 
-    internal Task<bool> PositionSnapshotAsync(
+    internal Task<SnapshotPositionResult> PositionSnapshotAsync(
         int requestedIndex,
-        Func<bool> isBusy)
-        => SnapshotListPositioner.PositionAsync(
+        Func<bool> isBusy,
+        CancellationToken cancellationToken = default)
+        => SnapshotListPositioner.PositionLegacyAsync(
             ProblemResultsList,
             requestedIndex,
             isBusy,
-            verifyPreview: false);
+            verifyPreview: false,
+            cancellationToken);
+
+    internal Task<SnapshotPositionResult> PositionSnapshotAsync(
+        int requestedIndex,
+        Func<bool> isBusy,
+        Stopwatch deadlineClock,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+        => SnapshotListPositioner.PositionLegacyAsync(
+            ProblemResultsList,
+            requestedIndex,
+            isBusy,
+            verifyPreview: false,
+            deadlineClock,
+            timeout,
+            cancellationToken);
 
     private void CopySelectedIssue_Click(object sender, RoutedEventArgs e)
     {

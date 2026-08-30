@@ -1,6 +1,8 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO;
 using System.Reflection;
+using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Automation;
@@ -9,9 +11,12 @@ using System.Windows.Automation.Provider;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Data;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using System.Xml.Linq;
 using WallpaperField.Application;
@@ -21,11 +26,26 @@ using WallpaperField.Models;
 using WallpaperField.Services;
 using WallpaperField.ViewModels;
 using WallpaperField.ViewModels.Sessions;
+using WallpaperField.Views;
 
 internal static class ProjectBrowserUiRegressionTests
 {
     private const string XamlNamespace = "http://schemas.microsoft.com/winfx/2006/xaml";
     private const int RuntimeProjectCount = 1_000;
+    private static readonly (
+        double Width,
+        double Height,
+        string Mode,
+        int Columns,
+        double Details)[] Task7ResponsiveCases =
+    [
+        (920d, 680d, "Compact", 3, 0d),
+        (1059d, 680d, "Compact", 3, 0d),
+        (1060d, 760d, "Regular", 4, 294d),
+        (1189d, 800d, "Regular", 4, 294d),
+        (1190d, 800d, "Wide", 5, 328d),
+        (1600d, 1000d, "Wide", 6, 328d)
+    ];
 
     internal static async Task RunAsync(Action<bool, string> assert)
     {
@@ -82,22 +102,20 @@ internal static class ProjectBrowserUiRegressionTests
         assert(traySlot is not null && Math.Abs(traySlot.ActualHeight - 72) < 0.75,
             "Browse did not preserve the fixed 72-DIP processing tray slot.");
 
-        var testRoot = Path.Combine(Path.GetTempPath(), $"wallpaper-field-task5-wpf-{Guid.NewGuid():N}");
-        var sourceRoot = Path.Combine(testRoot, "source");
-        var outputRoot = Path.Combine(testRoot, "output");
-        Directory.CreateDirectory(sourceRoot);
-        Directory.CreateDirectory(outputRoot);
-        var previewPath = Path.Combine(testRoot, "preview.png");
-        File.WriteAllBytes(previewPath, Convert.FromBase64String(
-            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="));
+        using var performanceFixture =
+            new PerformanceRegressionTests.ProjectBrowserPerformanceFixture();
+        performanceFixture.Verify(assert);
+        var sourceRoot = performanceFixture.SourceRoot;
+        var outputRoot = performanceFixture.OutputRoot;
+        var previewPath = performanceFixture.Records[0].PreviewPath!;
 
         var fixtureCoordinator = new TaskLifecycleCoordinator();
         var fixtureShell = CreateShell(
-            new BrowserScanService(sourceRoot, outputRoot, previewPath, RuntimeProjectCount),
+            performanceFixture,
             sourceRoot,
             outputRoot,
             fixtureCoordinator,
-            new ControlledFailureFolderResolver(sourceRoot));
+            performanceFixture);
         try
         {
             WaitForDispatcherTask(window, fixtureShell.ScanSession.ScanAsync());
@@ -106,6 +124,7 @@ internal static class ProjectBrowserUiRegressionTests
             window.DataContext = fixtureShell;
             fixtureShell.NavigateTo("BROWSE");
             VerifyResponsiveGeometry(window, fixtureShell, assert);
+            VerifyRealBrowseReflowPerformance(window, fixtureShell, assert);
             ProjectBrowserProcessingRegressionTests.VerifyWindow(
                 window,
                 fixtureShell,
@@ -138,26 +157,2854 @@ internal static class ProjectBrowserUiRegressionTests
             shell.NavigateTo("BROWSE");
             PumpLayout(window);
             fixtureShell.Dispose();
+        }
+    }
+
+    internal static void VerifyTask7Window(
+        WallpaperField.MainWindow window,
+        ShellViewModel originalShell,
+        Action<bool, string> assert)
+    {
+        ArgumentNullException.ThrowIfNull(window);
+        ArgumentNullException.ThrowIfNull(originalShell);
+        ArgumentNullException.ThrowIfNull(assert);
+        VerifySnapshotReadinessSurface(assert);
+
+        using var fixture = new PerformanceRegressionTests.ProjectBrowserPerformanceFixture();
+        fixture.Verify(assert);
+        var coordinator = new TaskLifecycleCoordinator();
+        var shell = CreateShell(
+            fixture,
+            fixture.SourceRoot,
+            fixture.OutputRoot,
+            coordinator,
+            fixture);
+        var previewSignals = new List<PreviewThumbnailSignalEventArgs>();
+        var rawPreviewSignals = new ConcurrentQueue<PreviewThumbnailSignalEventArgs>();
+        EventHandler<PreviewThumbnailSignalEventArgs> handler = (_, args) =>
+            previewSignals.Add(args);
+        EventHandler<PreviewThumbnailSignalEventArgs> rawHandler = (_, args) =>
+            rawPreviewSignals.Enqueue(args);
+        shell.BrowsePageViewModel.PreviewStatusChanged += handler;
+        shell.BrowsePageViewModel.ThumbnailService.StatusChanged += rawHandler;
+        Exception? primaryFailure = null;
+        try
+        {
+            window.Width = 1600;
+            window.Height = 1000;
+            window.DataContext = shell;
+            shell.NavigateTo("BROWSE");
+            PumpLayout(window);
+
+            // Keep the full Task 7 composition faithful to the CLI: the real shell is
+            // already bound to a shown Window before the scan publishes its snapshot.
+            WaitForDispatcherTask(window, shell.ScanSession.ScanAsync());
+            PumpLayout(window);
+            assert(shell.BrowsePageViewModel.TotalProjectCount == RuntimeProjectCount,
+                "The isolated Task 7 WPF host did not load the fixed 1,000-project snapshot.");
+            var visualLayout = CaptureTask7CliOrderedLayout(window, shell);
+
+            VerifyResponsiveGeometry(window, shell, assert);
+            VerifyRealBrowseReflowPerformance(window, shell, assert);
+            VerifyBrowseScrollPerformance(window, assert);
+            VerifyRecycledCardOwnerContext(window, shell, coordinator, assert);
+            VerifyPreviewResourceStabilityWithoutAnnouncements(
+                window,
+                shell,
+                fixture,
+                previewSignals,
+                rawPreviewSignals,
+                assert);
+            VerifyTask7BaseStateMatrix(
+                window,
+                originalShell,
+                shell,
+                fixture,
+                assert);
+            ProjectBrowserProcessingRegressionTests.VerifyTask7StateMatrix(
+                window,
+                shell,
+                assert);
+            VerifyTask7Accessibility(window, shell, assert);
+            VerifyRecycledRowKeepsCardVisuals(window, assert);
+            VerifyHighContrastAndMotion(window, assert);
+            VerifyBrowseSnapshotReadiness(window, shell, coordinator, assert);
+            VerifyTask7VisualSurface(window, shell, visualLayout, assert);
+        }
+        catch (Exception exception)
+        {
+            primaryFailure = exception;
+        }
+        finally
+        {
+            RunAllCleanupSteps(
+                primaryFailure,
+                () => shell.BrowsePageViewModel.PreviewStatusChanged -= handler,
+                () => shell.BrowsePageViewModel.ThumbnailService.StatusChanged -= rawHandler,
+                () => window.DataContext = originalShell,
+                () => originalShell.NavigateTo("BROWSE"),
+                () =>
+                {
+                    window.Width = 920;
+                    window.Height = 680;
+                },
+                shell.Dispose,
+                () =>
+                {
+                    if (window.IsLoaded)
+                    {
+                        window.UpdateLayout();
+                        window.Dispatcher.Invoke(() => { }, DispatcherPriority.DataBind);
+                        window.UpdateLayout();
+                        window.Dispatcher.Invoke(() => { }, DispatcherPriority.Render);
+                    }
+                });
+        }
+    }
+
+    internal static void VerifyTask7ReadinessWindow(
+        WallpaperField.MainWindow window,
+        ShellViewModel originalShell,
+        Action<bool, string> assert)
+    {
+        ArgumentNullException.ThrowIfNull(window);
+        ArgumentNullException.ThrowIfNull(originalShell);
+        ArgumentNullException.ThrowIfNull(assert);
+        VerifySnapshotReadinessSurface(assert);
+
+        using var fixture = new PerformanceRegressionTests.ProjectBrowserPerformanceFixture();
+        fixture.Verify(assert);
+        var coordinator = new TaskLifecycleCoordinator();
+        var shell = CreateShell(
+            fixture,
+            fixture.SourceRoot,
+            fixture.OutputRoot,
+            coordinator,
+            fixture);
+        try
+        {
+            WaitForDispatcherTask(window, shell.ScanSession.ScanAsync());
+            window.DataContext = shell;
+            shell.NavigateTo("BROWSE");
+            PumpLayout(window);
+            assert(shell.BrowsePageViewModel.TotalProjectCount == RuntimeProjectCount,
+                "The isolated Task 7 readiness host did not load the fixed 1,000-project snapshot.");
+            VerifyBrowseSnapshotReadiness(window, shell, coordinator, assert);
+        }
+        finally
+        {
+            window.DataContext = originalShell;
+            originalShell.NavigateTo("BROWSE");
+            window.Width = 920;
+            window.Height = 680;
+            shell.Dispose();
+            PumpLayout(window);
+        }
+    }
+
+    internal static void VerifyTask7ForcedCleanup(Action<bool, string> assert)
+    {
+        var expectedFailure = new InvalidOperationException(
+            "Task 7 controlled no-preview cleanup verifier failure.");
+        object? dataContext = new object();
+        var windowIsOpen = true;
+        var shellDisposed = false;
+        var temporaryDirectory = Path.Combine(
+            Path.GetTempPath(),
+            $"wallpaper-field-task7-cleanup-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(temporaryDirectory);
+        Exception? observedFailure = null;
+        try
+        {
+            RunAllCleanupSteps(
+                primaryFailure: null,
+                () => throw expectedFailure,
+                () => dataContext = null,
+                () => windowIsOpen = false,
+                () => shellDisposed = true,
+                () => Directory.Delete(temporaryDirectory));
+        }
+        catch (Exception exception)
+        {
+            observedFailure = exception;
+        }
+        finally
+        {
+            TryDeleteDirectory(temporaryDirectory);
+        }
+
+        assert(ReferenceEquals(observedFailure, expectedFailure),
+            "The no-preview cleanup runner did not preserve its first verifier failure.");
+        assert(dataContext is null
+               && !windowIsOpen
+               && shellDisposed
+               && !Directory.Exists(temporaryDirectory),
+            "A verifier failure skipped a forced no-preview cleanup step.");
+
+        var primaryFailure = new InvalidOperationException(
+            "Task 7 controlled full-window primary failure.");
+        var restoreFailure = new InvalidOperationException(
+            "Task 7 controlled full-window restore failure.");
+        var localShellDisposed = false;
+        Exception? preservedFailure = null;
+        try
+        {
+            RunAllCleanupSteps(
+                primaryFailure,
+                () => throw restoreFailure,
+                () => localShellDisposed = true);
+        }
+        catch (Exception exception)
+        {
+            preservedFailure = exception;
+        }
+
+        assert(ReferenceEquals(preservedFailure, primaryFailure),
+            "Task 7 full-window cleanup replaced the primary test failure with a restore failure.");
+        assert(localShellDisposed,
+            "Task 7 full-window cleanup skipped local Shell disposal after a restore failure.");
+    }
+
+    internal static void VerifyTask7VisualCaptureWindow(
+        WallpaperField.MainWindow window,
+        Action<bool, string> assert)
+    {
+        ArgumentNullException.ThrowIfNull(window);
+        ArgumentNullException.ThrowIfNull(assert);
+        assert(!window.IsLoaded && window.DataContext is null,
+            "The Task 7 visual host must bind its fixture shell before the Window is shown.");
+
+        using var fixture = new PerformanceRegressionTests.ProjectBrowserPerformanceFixture();
+        fixture.Verify(assert);
+        var coordinator = new TaskLifecycleCoordinator();
+        var shell = CreateShell(
+            fixture,
+            fixture.SourceRoot,
+            fixture.OutputRoot,
+            coordinator,
+            fixture);
+        Exception? primaryFailure = null;
+        try
+        {
+            window.Width = 1600;
+            window.Height = 1000;
+            window.DataContext = shell;
+            window.SetReducedMotion(true);
+            window.Show();
+            shell.NavigateTo("BROWSE");
+            PumpLayout(window);
+
+            // Mirror the product CLI sequence: a real Window and Shell are loaded and
+            // visible before the asynchronous scan publishes the ready Browse surface.
+            WaitForDispatcherTask(window, shell.ScanSession.ScanAsync());
+            PumpLayout(window);
+            assert(shell.BrowsePageViewModel.TotalProjectCount == RuntimeProjectCount,
+                "The Task 7 visual host did not load the fixed 1,000-project snapshot.");
+            var visualLayout = CaptureTask7CliOrderedLayout(window, shell);
+            VerifyTask7VisualSurface(window, shell, visualLayout, assert);
+        }
+        catch (Exception exception)
+        {
+            primaryFailure = exception;
+        }
+        finally
+        {
+            RunAllCleanupSteps(
+                primaryFailure,
+                () =>
+                {
+                    shell.BrowsePageViewModel.CloseDetails();
+                    shell.BrowsePageViewModel.CloseFilterLayer();
+                    if (window.IsLoaded)
+                    {
+                        RouteAwayAndVerifyPreviewShutdown(
+                            window,
+                            shell,
+                            shell.BrowsePageViewModel.ThumbnailService,
+                            assert);
+                    }
+                },
+                () => window.DataContext = null,
+                () =>
+                {
+                    if (window.IsLoaded)
+                    {
+                        window.Close();
+                    }
+                },
+                shell.Dispose);
+        }
+    }
+
+    private static Task7VisualLayoutObservation CaptureTask7CliOrderedLayout(
+        WallpaperField.MainWindow window,
+        ShellViewModel shell)
+    {
+        var browse = shell.BrowsePageViewModel;
+        var gridHost = WpfElementFinder.FindByName<FrameworkElement>(
+            window,
+            "BrowseGridHost")!;
+        var grid = WpfElementFinder.FindByName<ListBox>(window, "BrowseProjectGrid")!;
+        var realizedColumns = FindVisualDescendants<UniformGrid>(grid)
+            .Select(panel => panel.Columns)
+            .ToArray();
+        return new Task7VisualLayoutObservation(
+            window.IsLoaded
+            && window.ActualWidth >= 1599
+            && gridHost.IsVisible
+            && gridHost.ActualWidth >= 780
+            && browse.ColumnCount == 6
+            && realizedColumns.Length > 0
+            && realizedColumns.All(columns => columns == 6),
+            browse.ColumnCount,
+            gridHost.ActualWidth,
+            realizedColumns);
+    }
+
+    private static void VerifyTask7VisualSurface(
+        WallpaperField.MainWindow window,
+        ShellViewModel shell,
+        Task7VisualLayoutObservation visualLayout,
+        Action<bool, string> assert)
+    {
+        var browse = shell.BrowsePageViewModel;
+        shell.NavigateTo("BROWSE");
+        browse.CloseDetails();
+        browse.CloseFilterLayer();
+        browse.SearchText = string.Empty;
+        window.Width = 1600;
+        window.Height = 1000;
+        PumpLayout(window);
+
+        browse.KindFilter = ProjectBrowserKindFilter.Package;
+        browse.Sort = ProjectBrowserSort.WorkshopId;
+        browse.CurrentProject = browse.VisibleProjects.First(project => project.HasProblems);
+        PumpLayout(window);
+            var kind = WpfElementFinder.FindByName<ComboBox>(
+                window,
+                "BrowseKindFilterComboBox")!;
+            var sort = WpfElementFinder.FindByName<ComboBox>(
+                window,
+                "BrowseSortComboBox")!;
+            var wideLabels = ComboBoxDisplaysLabel(kind, "图片（PKG）")
+                             && ComboBoxDisplaysLabel(sort, "Workshop ID");
+            var wideLabelValues = $"kind=[{string.Join('|', CaptureComboBoxText(kind))}] "
+                                  + $"sort=[{string.Join('|', CaptureComboBoxText(sort))}]";
+
+            var persistentDetails = WpfElementFinder.FindByName<Border>(
+                window,
+                "BrowsePersistentDetails")!;
+            var persistentProblems = WpfElementFinder.FindByName<Button>(
+                window,
+                "BrowseCurrentProblemsButton")!;
+            var persistentContrast = BrushContrastRatio(
+                persistentProblems.Foreground,
+                persistentDetails.Background);
+            var persistentContrastPass = persistentProblems.IsVisible
+                                         && persistentProblems.ActualWidth > 0
+                                         && persistentProblems.ActualHeight > 0
+                                         && persistentContrast >= 4.5;
+
+            var search = WpfElementFinder.FindByName<TextBox>(
+                window,
+                "BrowseSearchTextBox")!;
+            var searchIcon = WpfElementFinder.FindByName<TextBlock>(
+                window,
+                "BrowseSearchIcon");
+            var searchWatermark = WpfElementFinder.FindByName<TextBlock>(
+                window,
+                "BrowseSearchWatermark");
+            var initialSearchAffordance = IsPositiveAreaVisible(searchIcon)
+                                          && IsPositiveAreaVisible(searchWatermark)
+                                          && string.Equals(
+                                              searchWatermark?.Text,
+                                              "搜索名称或 Workshop ID",
+                                              StringComparison.Ordinal);
+            browse.SearchText = "Task7";
+            PumpLayout(window);
+            var searchClear = WpfElementFinder.FindByName<Button>(
+                window,
+                "BrowseSearchClearButton");
+            var nonEmptyClearAffordance = IsPositiveAreaVisible(searchClear)
+                                          && searchClear!.IsEnabled
+                                          && searchClear.ActualWidth >= 44
+                                          && searchClear.ActualHeight >= 44;
+            if (searchClear is not null && searchClear.IsVisible)
+            {
+                _ = searchClear.Focus();
+                PumpLayout(window);
+                RaiseClick(searchClear);
+                PumpLayout(window);
+            }
+
+            var searchClearContract = initialSearchAffordance
+                                      && nonEmptyClearAffordance
+                                      && browse.SearchText.Length == 0
+                                      && search.Text.Length == 0
+                                      && ReferenceEquals(Keyboard.FocusedElement, search)
+                                      && IsPositiveAreaVisible(searchWatermark)
+                                      && searchClear?.Visibility == Visibility.Collapsed;
+            if (browse.SearchText.Length != 0)
+            {
+                browse.SearchText = string.Empty;
+            }
+
+            window.Width = 920;
+            window.Height = 680;
+            PumpLayout(window);
+            var filterButton = WpfElementFinder.FindByName<Button>(
+                window,
+                "BrowseFilterButton")!;
+            RaiseClick(filterButton);
+            PumpLayout(window);
+            var compactKind = WpfElementFinder.FindByName<ComboBox>(
+                window,
+                "BrowseCompactKindFilterComboBox");
+            var compactSort = WpfElementFinder.FindByName<ComboBox>(
+                window,
+                "BrowseCompactSortComboBox");
+            var compactLabels = compactKind is not null
+                                && compactSort is not null
+                                && ComboBoxDisplaysLabel(compactKind, "图片（PKG）")
+                                && ComboBoxDisplaysLabel(compactSort, "Workshop ID");
+            var compactLabelValues = $"kind=[{string.Join('|', CaptureComboBoxText(compactKind))}] "
+                                     + $"sort=[{string.Join('|', CaptureComboBoxText(compactSort))}]";
+            var filterClose = WpfElementFinder.FindByName<Button>(
+                window,
+                "BrowseFilterCloseButton")!;
+            RaiseClick(filterClose);
+            PumpLayout(window);
+
+            var openDetails = WpfElementFinder.FindByName<Button>(
+                window,
+                "BrowseCompactDetailsButton")!;
+            RaiseClick(openDetails);
+            PumpLayout(window);
+            var compactDetails = WpfElementFinder.FindByName<Border>(
+                window,
+                "BrowseCompactDetailsOverlay")!;
+            var compactProblems = WpfElementFinder.FindByName<Button>(
+                window,
+                "BrowseCompactCurrentProblemsButton")!;
+            var compactContrast = BrushContrastRatio(
+                compactProblems.Foreground,
+                compactDetails.Background);
+            var compactContrastPass = compactProblems.IsVisible
+                                      && compactProblems.ActualWidth > 0
+                                      && compactProblems.ActualHeight > 0
+                                      && compactContrast >= 4.5;
+            var detailsClose = WpfElementFinder.FindByName<Button>(
+                window,
+                "BrowseDetailCloseButton")!;
+            RaiseClick(detailsClose);
+            PumpLayout(window);
+
+            var failures = new List<string>();
+            if (!wideLabels || !compactLabels)
+            {
+                failures.Add(
+                    $"ComboBox selected labels were not exact: wide({wideLabelValues}); "
+                    + $"compact({compactLabelValues})");
+            }
+            if (!persistentContrastPass || !compactContrastPass)
+            {
+                failures.Add(
+                    $"dark details problem-button contrast was below 4.5: "
+                    + $"persistent={persistentContrast:0.###}; compact={compactContrast:0.###}");
+            }
+            if (!searchClearContract)
+            {
+                failures.Add(
+                    "Browse search lacked its visible icon/watermark/non-empty clear action "
+                    + "or exact post-clear TextBox focus");
+            }
+            if (!visualLayout.IsSixColumn)
+            {
+                failures.Add(
+                    "shown+bound-before-scan 1600px Browse did not settle at six columns: "
+                    + $"columns={visualLayout.ColumnCount}; grid={visualLayout.GridWidth:0.###}; "
+                    + $"panels=[{string.Join(',', visualLayout.RealizedColumns)}]");
+            }
+
+            Console.WriteLine(
+                "TASK7_VISUAL_CAPTURE "
+                + $"combo_labels={wideLabels && compactLabels} "
+                + $"contrast={persistentContrast:0.###}/{compactContrast:0.###} "
+                + $"search={searchClearContract} "
+                + $"cli_columns={visualLayout.ColumnCount} grid={visualLayout.GridWidth:0.###}");
+            assert(failures.Count == 0,
+                "Task 7 visual capture contracts failed: " + string.Join(" || ", failures));
+    }
+
+    private sealed record Task7VisualLayoutObservation(
+        bool IsSixColumn,
+        int ColumnCount,
+        double GridWidth,
+        int[] RealizedColumns);
+
+    private static bool ComboBoxDisplaysLabel(ComboBox comboBox, string expectedLabel)
+        => comboBox.IsVisible
+           && comboBox.ActualWidth > 0
+           && comboBox.ActualHeight > 0
+           && CaptureComboBoxText(comboBox).Contains(expectedLabel, StringComparer.Ordinal);
+
+    private static string[] CaptureComboBoxText(ComboBox? comboBox)
+        => comboBox is null
+            ? ["<missing>"]
+            : FindVisualDescendants<TextBlock>(comboBox)
+                .Where(text => text.IsVisible && text.ActualWidth > 0 && text.ActualHeight > 0)
+                .Select(text => text.Text)
+                .Where(text => !string.IsNullOrWhiteSpace(text))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+
+    private static bool IsPositiveAreaVisible(FrameworkElement? element)
+        => element is { IsVisible: true, ActualWidth: > 0, ActualHeight: > 0 };
+
+    private static double BrushContrastRatio(Brush? foreground, Brush? background)
+    {
+        if (foreground is not SolidColorBrush foregroundBrush
+            || background is not SolidColorBrush backgroundBrush
+            || foregroundBrush.Color.A == 0
+            || backgroundBrush.Color.A == 0)
+        {
+            return 0;
+        }
+
+        var lighter = Math.Max(
+            RelativeLuminance(foregroundBrush.Color),
+            RelativeLuminance(backgroundBrush.Color));
+        var darker = Math.Min(
+            RelativeLuminance(foregroundBrush.Color),
+            RelativeLuminance(backgroundBrush.Color));
+        return (lighter + 0.05) / (darker + 0.05);
+    }
+
+    private static double RelativeLuminance(Color color)
+        => 0.2126 * LinearChannel(color.R)
+           + 0.7152 * LinearChannel(color.G)
+           + 0.0722 * LinearChannel(color.B);
+
+    private static double LinearChannel(byte value)
+    {
+        var channel = value / 255d;
+        return channel <= 0.04045
+            ? channel / 12.92
+            : Math.Pow((channel + 0.055) / 1.055, 2.4);
+    }
+
+    private static void RunAllCleanupSteps(
+        Exception? primaryFailure,
+        params Action[] cleanupSteps)
+    {
+        var firstFailure = primaryFailure;
+        foreach (var cleanupStep in cleanupSteps)
+        {
+            try
+            {
+                cleanupStep();
+            }
+            catch (Exception exception)
+            {
+                firstFailure ??= exception;
+            }
+        }
+
+        if (firstFailure is not null)
+        {
+            ExceptionDispatchInfo.Capture(firstFailure).Throw();
+        }
+    }
+
+    internal static void VerifyTask7SnapshotCaptureWindow(
+        WallpaperField.MainWindow hostWindow,
+        Action<bool, string> assert)
+    {
+        ArgumentNullException.ThrowIfNull(hostWindow);
+        ArgumentNullException.ThrowIfNull(assert);
+        var testRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"wallpaper-field-task7-main-snapshot-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(testRoot);
+        using var fixture = new PerformanceRegressionTests.ProjectBrowserPerformanceFixture();
+        fixture.Verify(assert);
+        try
+        {
+            Console.WriteLine("SNAPSHOT_CAPTURE_STAGE legacy-positioning.start");
+            VerifyLegacySnapshotPositioningPolicy(hostWindow, assert);
+            Console.WriteLine("SNAPSHOT_CAPTURE_STAGE legacy-positioning.end");
+            Console.WriteLine("SNAPSHOT_CAPTURE_STAGE loaded-success.start");
+            VerifyLoadedSnapshotCaptureSuccess(hostWindow, fixture, testRoot, assert);
+            Console.WriteLine("SNAPSHOT_CAPTURE_STAGE loaded-success.end");
+            Console.WriteLine("SNAPSHOT_CAPTURE_STAGE controlled-failure.start");
+            VerifyLoadedSnapshotCaptureFailure(hostWindow, fixture, testRoot, assert);
+            Console.WriteLine("SNAPSHOT_CAPTURE_STAGE controlled-failure.end");
+            Console.WriteLine("SNAPSHOT_CAPTURE_STAGE close-during-write.start");
+            VerifySnapshotCloseDuringBlockedWrite(hostWindow, fixture, testRoot, assert);
+            Console.WriteLine("SNAPSHOT_CAPTURE_STAGE close-during-write.end");
+            Console.WriteLine("SNAPSHOT_CAPTURE_STAGE close-during-commit-success.start");
+            VerifySnapshotCloseDuringCommittedWrite(hostWindow, fixture, testRoot, assert);
+            Console.WriteLine("SNAPSHOT_CAPTURE_STAGE close-during-commit-success.end");
+        }
+        finally
+        {
             TryDeleteDirectory(testRoot);
         }
     }
+
+    private static void VerifyLegacySnapshotPositioningPolicy(
+        WallpaperField.MainWindow hostWindow,
+        Action<bool, string> assert)
+    {
+        const int itemCount = 64;
+        const int requestedIndex = 256;
+        var results = new List<(string Page, SnapshotPositionResult Result, bool LastRealized)>();
+
+        var scan = new ScanPageView();
+        results.Add(VerifyLegacySnapshotPage(
+            hostWindow,
+            scan,
+            "ScanResultsList",
+            (clock, timeout, token) => scan.PositionSnapshotAsync(
+                requestedIndex,
+                static () => false,
+                clock,
+                timeout,
+                token),
+            "Scan",
+            itemCount));
+
+        var library = new LibraryPageView();
+        results.Add(VerifyLegacySnapshotPage(
+            hostWindow,
+            library,
+            "LibraryResultsList",
+            (clock, timeout, token) => library.PositionSnapshotAsync(
+                requestedIndex,
+                static () => false,
+                clock,
+                timeout,
+                token),
+            "Library",
+            itemCount));
+
+        var problems = new ProblemCenterView();
+        results.Add(VerifyLegacySnapshotPage(
+            hostWindow,
+            problems,
+            "ProblemResultsList",
+            (clock, timeout, token) => problems.PositionSnapshotAsync(
+                requestedIndex,
+                static () => false,
+                clock,
+                timeout,
+                token),
+            "Problems",
+            itemCount));
+
+        var strictList = new ListBox();
+        for (var index = 0; index < itemCount; index++)
+        {
+            strictList.Items.Add($"strict-{index:000}");
+        }
+
+        var strictTask = SnapshotListPositioner.PositionWithoutLoggingAsync(
+            strictList,
+            requestedIndex,
+            static () => false,
+            verifyPreview: false,
+            Stopwatch.StartNew(),
+            TimeSpan.FromMilliseconds(5),
+            CancellationToken.None);
+        WaitForDispatcherTaskWithoutLayout(hostWindow, strictTask);
+        var strictResult = strictTask.GetAwaiter().GetResult();
+
+        var emptyList = new ListBox();
+        var emptyTask = SnapshotListPositioner.PositionLegacyAsync(
+            emptyList,
+            requestedIndex,
+            static () => false,
+            verifyPreview: false,
+            Stopwatch.StartNew(),
+            TimeSpan.FromMilliseconds(5),
+            CancellationToken.None);
+        WaitForDispatcherTaskWithoutLayout(hostWindow, emptyTask);
+        var emptyResult = emptyTask.GetAwaiter().GetResult();
+
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        var canceled = false;
+        try
+        {
+            SnapshotListPositioner.PositionWithoutLoggingAsync(
+                    strictList,
+                    requestedIndex,
+                    static () => false,
+                    verifyPreview: false,
+                    Stopwatch.StartNew(),
+                    TimeSpan.FromSeconds(1),
+                    cancellation.Token)
+                .GetAwaiter()
+                .GetResult();
+        }
+        catch (OperationCanceledException)
+        {
+            canceled = true;
+        }
+
+        var legacyCanceled = false;
+        try
+        {
+            SnapshotListPositioner.PositionLegacyAsync(
+                    strictList,
+                    requestedIndex,
+                    static () => false,
+                    verifyPreview: false,
+                    Stopwatch.StartNew(),
+                    TimeSpan.FromSeconds(1),
+                    cancellation.Token)
+                .GetAwaiter()
+                .GetResult();
+        }
+        catch (OperationCanceledException)
+        {
+            legacyCanceled = true;
+        }
+
+        Console.WriteLine(
+            "SNAPSHOT_LEGACY "
+            + string.Join(
+                "; ",
+                results.Select(item =>
+                    $"{item.Page}=success:{item.Result.Succeeded},"
+                    + $"index:{item.Result.PositionedIndex?.ToString() ?? "null"},"
+                    + $"last:{item.LastRealized},diag:{item.Result.Diagnostic}"))
+            + $"; strict={strictResult}; empty={emptyResult}; "
+            + $"strictCanceled={canceled}; legacyCanceled={legacyCanceled}");
+        assert(results.All(item =>
+                   item.Result.Succeeded
+                   && item.Result.PositionedIndex == itemCount - 1
+                   && item.LastRealized
+                   && item.Result.Diagnostic.Contains(
+                       $"index={itemCount - 1}",
+                       StringComparison.Ordinal))
+               && !strictResult
+               && !emptyResult.Succeeded
+               && emptyResult.PositionedIndex is null
+               && emptyResult.Diagnostic.Contains("list is empty", StringComparison.Ordinal)
+               && canceled
+               && legacyCanceled,
+            "Legacy Scan/Library/Problems snapshot positioning did not clamp a nonempty "
+            + "out-of-range request to the last item with a diagnostic while strict/cancel stayed exact.");
+
+        VerifyMainLegacySnapshotDiagnosticBoundary(hostWindow, assert);
+    }
+
+    private static void VerifyMainLegacySnapshotDiagnosticBoundary(
+        WallpaperField.MainWindow hostWindow,
+        Action<bool, string> assert)
+    {
+        if (hostWindow.DataContext is not ShellViewModel shell)
+        {
+            assert(false, "The legacy diagnostic regression host has no ShellViewModel.");
+            return;
+        }
+
+        var originalRoute = shell.IsBrowsePage
+            ? "BROWSE"
+            : shell.IsLibraryPage
+                ? "LIBRARY"
+                : shell.IsProblemsPage
+                    ? "PROBLEMS"
+                    : "SCAN";
+        WallpaperField.MainWindow? captureWindow = null;
+        try
+        {
+            shell.NavigateTo("SCAN");
+            captureWindow = new WallpaperField.MainWindow
+            {
+                DataContext = shell,
+                Width = 920,
+                Height = 680,
+                Left = -10_000,
+                Top = -10_000,
+                ShowInTaskbar = false,
+                ShowActivated = false
+            };
+            captureWindow.SetReducedMotion(true);
+            captureWindow.Show();
+            captureWindow.UpdateLayout();
+
+            var list = WpfElementFinder.FindByName<ListBox>(
+                captureWindow,
+                "ScanResultsList");
+            assert(list is not null,
+                "The Main snapshot diagnostic regression could not find ScanResultsList.");
+            if (list is null)
+            {
+                return;
+            }
+
+            list.ClearValue(ItemsControl.ItemsSourceProperty);
+            list.ItemTemplate = null;
+            list.Items.Add(new TextBlock { Text = "diagnostic-boundary", Height = 40 });
+            captureWindow.UpdateLayout();
+
+            var diagnosticWriter = new RecordingSnapshotDiagnosticWriter(
+                new IOException("Controlled best-effort snapshot diagnostic failure."));
+            captureWindow.ConfigureSnapshotRuntimeForTests(
+                new RecordingSnapshotPngWriter(static () => true),
+                static _ => { },
+                diagnosticWriter);
+            captureWindow.ConfigureSnapshot(
+                Path.Combine(Path.GetTempPath(), "task7-legacy-diagnostic.png"),
+                scrollIndex: 0);
+            var positionMethod = typeof(WallpaperField.MainWindow).GetMethod(
+                "PositionSnapshotListAsync",
+                BindingFlags.Instance | BindingFlags.NonPublic,
+                binder: null,
+                types: [typeof(CancellationToken)],
+                modifiers: null)
+                ?? throw new InvalidOperationException(
+                    "Missing MainWindow.PositionSnapshotListAsync(CancellationToken).");
+            var positionTask = (Task<bool>)positionMethod.Invoke(
+                captureWindow,
+                [CancellationToken.None])!;
+            WaitForDispatcherTask(captureWindow, positionTask);
+            assert(positionTask.Result
+                   && diagnosticWriter.CallCount == 1,
+                "Main did not deliver a successful legacy positioning diagnostic through its writer boundary.");
+
+            var hiddenStyle = new Style(typeof(ListBoxItem));
+            hiddenStyle.Setters.Add(new Setter(UIElement.OpacityProperty, 0d));
+            list.ItemContainerStyle = hiddenStyle;
+            list.Items.Clear();
+            list.Items.Add(new TextBlock { Text = "diagnostic-failure", Height = 40 });
+            captureWindow.UpdateLayout();
+            var failedPositionTask = (Task<bool>)positionMethod.Invoke(
+                captureWindow,
+                [CancellationToken.None])!;
+            WaitForDispatcherTask(captureWindow, failedPositionTask);
+
+            assert(!failedPositionTask.Result
+                   && diagnosticWriter.CallCount == 2
+                   && diagnosticWriter.Diagnostics.Count == 2
+                   && diagnosticWriter.Diagnostics[0].Contains("index=0", StringComparison.Ordinal)
+                   && diagnosticWriter.Diagnostics[1].Contains("opacity=0", StringComparison.Ordinal)
+                   && diagnosticWriter.CallerThreadId == captureWindow.Dispatcher.Thread.ManagedThreadId
+                   && !diagnosticWriter.CancellationToken.IsCancellationRequested,
+                "Main did not deliver the legacy positioning diagnostic through its exact "
+                + "best-effort async writer boundary for both success and failure without "
+                + "reversing the positioned result.");
+
+            var visibleStyle = new Style(typeof(ListBoxItem));
+            visibleStyle.Setters.Add(new Setter(UIElement.OpacityProperty, 1d));
+            list.ItemContainerStyle = visibleStyle;
+            list.Items.Clear();
+            list.Items.Add(new TextBlock { Text = "diagnostic-cancel", Height = 40 });
+            captureWindow.UpdateLayout();
+            using var cancellation = new CancellationTokenSource();
+            var cancelingWriter = new CancelingSnapshotDiagnosticWriter(cancellation);
+            captureWindow.ConfigureSnapshotRuntimeForTests(
+                new RecordingSnapshotPngWriter(static () => true),
+                static _ => { },
+                cancelingWriter);
+            var canceledTask = (Task<bool>)positionMethod.Invoke(
+                captureWindow,
+                [cancellation.Token])!;
+            WaitForDispatcherTaskWithoutLayout(captureWindow, canceledTask);
+            var cancellationPropagated = false;
+            try
+            {
+                canceledTask.GetAwaiter().GetResult();
+            }
+            catch (OperationCanceledException)
+            {
+                cancellationPropagated = true;
+            }
+
+            assert(cancellationPropagated
+                   && cancellation.IsCancellationRequested
+                   && cancelingWriter.CallCount == 1,
+                "Main best-effort diagnostic handling swallowed cancellation instead of propagating it.");
+        }
+        finally
+        {
+            try
+            {
+                if (captureWindow is not null)
+                {
+                    captureWindow.DataContext = null;
+                    captureWindow.Close();
+                }
+            }
+            finally
+            {
+                shell.NavigateTo(originalRoute);
+                PumpLayout(hostWindow);
+            }
+        }
+    }
+
+    private static (string Page, SnapshotPositionResult Result, bool LastRealized)
+        VerifyLegacySnapshotPage(
+            Window hostWindow,
+            UserControl page,
+            string listName,
+            Func<Stopwatch, TimeSpan, CancellationToken, Task<SnapshotPositionResult>> position,
+            string pageName,
+            int itemCount)
+    {
+        var fixtureWindow = new Window
+        {
+            Content = page,
+            Width = 920,
+            Height = 680,
+            Left = -10_000,
+            Top = -10_000,
+            ShowInTaskbar = false,
+            ShowActivated = false
+        };
+        try
+        {
+            page.DataContext = null;
+            var pageSurface = page.FindName($"{pageName}View") as FrameworkElement
+                ?? throw new InvalidOperationException(
+                    $"Missing legacy snapshot page surface {pageName}View.");
+            pageSurface.Visibility = Visibility.Visible;
+            var list = page.FindName(listName) as ListBox
+                ?? throw new InvalidOperationException(
+                    $"Missing legacy snapshot list {listName}.");
+            list.ClearValue(ItemsControl.ItemsSourceProperty);
+            list.ItemTemplate = null;
+            for (var index = 0; index < itemCount; index++)
+            {
+                list.Items.Add(new TextBlock
+                {
+                    Text = $"{pageName}-{index:000}",
+                    Height = 40
+                });
+            }
+
+            fixtureWindow.Show();
+            fixtureWindow.UpdateLayout();
+            var task = position(
+                Stopwatch.StartNew(),
+                TimeSpan.FromMilliseconds(5),
+                CancellationToken.None);
+            WaitForDispatcherTask(fixtureWindow, task);
+            var result = task.GetAwaiter().GetResult();
+            var lastContainer = list.ItemContainerGenerator.ContainerFromIndex(itemCount - 1)
+                as FrameworkElement;
+            return (pageName, result, lastContainer is { IsVisible: true, ActualHeight: > 0 });
+        }
+        finally
+        {
+            fixtureWindow.Close();
+            PumpDispatcher(hostWindow.Dispatcher);
+        }
+    }
+
+    private static void VerifyLoadedSnapshotCaptureSuccess(
+        WallpaperField.MainWindow hostWindow,
+        PerformanceRegressionTests.ProjectBrowserPerformanceFixture fixture,
+        string testRoot,
+        Action<bool, string> assert)
+    {
+        var coordinator = new TaskLifecycleCoordinator();
+        var shell = CreateShell(
+            fixture,
+            fixture.SourceRoot,
+            fixture.OutputRoot,
+            coordinator,
+            fixture);
+        WallpaperField.MainWindow? captureWindow = null;
+        var writer = new RecordingSnapshotPngWriter(
+            () => captureWindow is not null && InvokePreparedSnapshotCurrent(captureWindow));
+        var exitCodes = new List<int>();
+        var target = Path.Combine(testRoot, "loaded-success.png");
+        var closed = false;
+        try
+        {
+            WaitForDispatcherTask(hostWindow, shell.ScanSession.ScanAsync());
+            shell.NavigateTo("BROWSE");
+            captureWindow = CreateSnapshotCaptureWindow(
+                shell,
+                writer,
+                exitCodes.Add,
+                target,
+                Path.Combine(testRoot, "success-settings.json"));
+            captureWindow.Closed += (_, _) => closed = true;
+            captureWindow.Show();
+            assert(PumpUntil(
+                       captureWindow.Dispatcher,
+                       () => exitCodes.Count > 0,
+                       TimeSpan.FromSeconds(15))
+                   && exitCodes.SequenceEqual([0])
+                   && writer.CallCount == 1
+                   && writer.Bitmap is
+                   {
+                       IsFrozen: true,
+                       PixelWidth: > 0,
+                       PixelHeight: > 0
+                   }
+                   && string.Equals(writer.DestinationPath, target, StringComparison.OrdinalIgnoreCase)
+                   && writer.FinalBrowseLeaseCurrent
+                   && writer.CallerThreadId == captureWindow.Dispatcher.Thread.ManagedThreadId
+                   && !writer.CancellationToken.IsCancellationRequested
+                   && !captureWindow.IsSnapshotCaptureInFlight,
+                "Loaded Main snapshot capture did not gate readiness, freeze on UI, call its writer once, and map committed success to exit 0.");
+
+            captureWindow.RaiseEvent(new RoutedEventArgs(FrameworkElement.LoadedEvent));
+            PumpDispatcher(captureWindow.Dispatcher);
+            assert(writer.CallCount == 1 && exitCodes.Count == 1,
+                "A repeated Loaded event started a duplicate snapshot capture.");
+
+            captureWindow.Close();
+            PumpDispatcher(hostWindow.Dispatcher);
+            assert(closed && IsShellDisposed(shell),
+                "A completed snapshot window did not close and dispose through its prepared lifecycle.");
+        }
+        finally
+        {
+            if (captureWindow?.IsLoaded == true)
+            {
+                captureWindow.Close();
+            }
+
+            if (!IsShellDisposed(shell))
+            {
+                shell.Dispose();
+            }
+        }
+    }
+
+    private static void VerifyLoadedSnapshotCaptureFailure(
+        WallpaperField.MainWindow hostWindow,
+        PerformanceRegressionTests.ProjectBrowserPerformanceFixture fixture,
+        string testRoot,
+        Action<bool, string> assert)
+    {
+        var coordinator = new TaskLifecycleCoordinator();
+        var shell = CreateShell(
+            fixture,
+            fixture.SourceRoot,
+            fixture.OutputRoot,
+            coordinator,
+            fixture);
+        WallpaperField.MainWindow? captureWindow = null;
+        var writer = new RecordingSnapshotPngWriter(
+            static () => true,
+            new IOException("Controlled loaded snapshot writer failure."));
+        var exitCodes = new List<int>();
+        try
+        {
+            WaitForDispatcherTask(hostWindow, shell.ScanSession.ScanAsync());
+            shell.NavigateTo("BROWSE");
+            captureWindow = CreateSnapshotCaptureWindow(
+                shell,
+                writer,
+                exitCodes.Add,
+                Path.Combine(testRoot, "loaded-failure.png"),
+                Path.Combine(testRoot, "failure-settings.json"));
+            captureWindow.Show();
+            assert(PumpUntil(
+                       captureWindow.Dispatcher,
+                       () => exitCodes.Count > 0,
+                       TimeSpan.FromSeconds(15))
+                   && exitCodes.SequenceEqual([-2])
+                   && writer.CallCount == 1
+                   && writer.Bitmap?.IsFrozen == true
+                   && !captureWindow.IsSnapshotCaptureInFlight,
+                "An ordinary snapshot writer failure escaped the core or did not map to controlled exit -2.");
+            captureWindow.Close();
+            PumpDispatcher(hostWindow.Dispatcher);
+            assert(IsShellDisposed(shell),
+                "The controlled-failure snapshot window did not dispose after its wrapper completed.");
+        }
+        finally
+        {
+            if (captureWindow?.IsLoaded == true)
+            {
+                captureWindow.Close();
+            }
+
+            if (!IsShellDisposed(shell))
+            {
+                shell.Dispose();
+            }
+        }
+    }
+
+    private static void VerifySnapshotCloseDuringBlockedWrite(
+        WallpaperField.MainWindow hostWindow,
+        PerformanceRegressionTests.ProjectBrowserPerformanceFixture fixture,
+        string testRoot,
+        Action<bool, string> assert)
+    {
+        var coordinator = new TaskLifecycleCoordinator();
+        var shell = CreateShell(
+            fixture,
+            fixture.SourceRoot,
+            fixture.OutputRoot,
+            coordinator,
+            fixture);
+        var writer = new BlockingSnapshotPngWriter();
+        var exitCodes = new List<int>();
+        WallpaperField.MainWindow? captureWindow = null;
+        var closed = false;
+        try
+        {
+            WaitForDispatcherTask(hostWindow, shell.ScanSession.ScanAsync());
+            shell.NavigateTo("BROWSE");
+            captureWindow = CreateSnapshotCaptureWindow(
+                shell,
+                writer,
+                exitCodes.Add,
+                Path.Combine(testRoot, "blocked-close.png"),
+                Path.Combine(testRoot, "blocked-settings.json"));
+            captureWindow.Closed += (_, _) => closed = true;
+            captureWindow.Show();
+            assert(PumpUntil(
+                       captureWindow.Dispatcher,
+                       () => writer.HasEntered,
+                       TimeSpan.FromSeconds(15))
+                   && writer.Bitmap?.IsFrozen == true
+                   && captureWindow.IsSnapshotCaptureInFlight,
+                "The blocked snapshot writer was not entered with a frozen bitmap and live capture owner.");
+
+            captureWindow.Close();
+            PumpDispatcher(captureWindow.Dispatcher);
+            assert(!closed
+                   && captureWindow.IsLoaded
+                   && captureWindow.IsSnapshotCaptureInFlight
+                   && writer.CancellationToken.IsCancellationRequested
+                   && !IsShellDisposed(shell)
+                   && exitCodes.Count == 0,
+                "Closing disposed the window/shell before the blocked writer crossed cleanup or commit.");
+
+            writer.Release();
+            assert(PumpUntil(
+                       captureWindow.Dispatcher,
+                       () => exitCodes.Count > 0,
+                       TimeSpan.FromSeconds(5))
+                   && exitCodes.SequenceEqual([-2])
+                   && captureWindow.IsLoaded
+                   && !closed
+                   && !captureWindow.IsSnapshotCaptureInFlight,
+                "Releasing a canceled blocked writer did not finish cleanup and map to exit -2.");
+
+            captureWindow.Close();
+            PumpDispatcher(hostWindow.Dispatcher);
+            assert(closed && IsShellDisposed(shell),
+                "The snapshot window did not close/dispose after writer cleanup completed.");
+        }
+        finally
+        {
+            writer.Release();
+            if (captureWindow?.IsLoaded == true)
+            {
+                captureWindow.Close();
+            }
+
+            if (!IsShellDisposed(shell))
+            {
+                shell.Dispose();
+            }
+        }
+    }
+
+    private static void VerifySnapshotCloseDuringCommittedWrite(
+        WallpaperField.MainWindow hostWindow,
+        PerformanceRegressionTests.ProjectBrowserPerformanceFixture fixture,
+        string testRoot,
+        Action<bool, string> assert)
+    {
+        var coordinator = new TaskLifecycleCoordinator();
+        var shell = CreateShell(
+            fixture,
+            fixture.SourceRoot,
+            fixture.OutputRoot,
+            coordinator,
+            fixture);
+        var writer = new CommittedBlockingSnapshotPngWriter();
+        var exitCodes = new List<int>();
+        WallpaperField.MainWindow? captureWindow = null;
+        var closed = false;
+        try
+        {
+            WaitForDispatcherTask(hostWindow, shell.ScanSession.ScanAsync());
+            shell.NavigateTo("BROWSE");
+            captureWindow = CreateSnapshotCaptureWindow(
+                shell,
+                writer,
+                exitCodes.Add,
+                Path.Combine(testRoot, "committed-close.png"),
+                Path.Combine(testRoot, "committed-settings.json"));
+            captureWindow.Closed += (_, _) => closed = true;
+            captureWindow.Show();
+            assert(PumpUntil(
+                       captureWindow.Dispatcher,
+                       () => writer.HasEntered,
+                       TimeSpan.FromSeconds(15))
+                   && captureWindow.IsSnapshotCaptureInFlight,
+                "The commit-success writer was not entered with a live capture owner.");
+
+            captureWindow.Close();
+            PumpDispatcher(captureWindow.Dispatcher);
+            assert(!closed
+                   && captureWindow.IsLoaded
+                   && captureWindow.IsSnapshotCaptureInFlight
+                   && writer.CancellationToken.IsCancellationRequested
+                   && !IsShellDisposed(shell)
+                   && exitCodes.Count == 0,
+                "Closing escaped capture ownership before a commit-success writer returned.");
+
+            writer.ReleaseCommittedSuccess();
+            assert(PumpUntil(
+                       captureWindow.Dispatcher,
+                       () => exitCodes.Count > 0,
+                       TimeSpan.FromSeconds(5))
+                   && writer.Committed
+                   && exitCodes.SequenceEqual([0])
+                   && captureWindow.IsLoaded
+                   && !closed
+                   && !captureWindow.IsSnapshotCaptureInFlight,
+                "A committed writer success was reversed by close cancellation or retained its owner.");
+
+            captureWindow.Close();
+            PumpDispatcher(hostWindow.Dispatcher);
+            assert(closed && IsShellDisposed(shell),
+                "The committed snapshot window did not close/dispose after success was reported.");
+        }
+        finally
+        {
+            writer.ReleaseCommittedSuccess();
+            if (captureWindow?.IsLoaded == true)
+            {
+                captureWindow.Close();
+            }
+
+            if (!IsShellDisposed(shell))
+            {
+                shell.Dispose();
+            }
+        }
+    }
+
+    private static WallpaperField.MainWindow CreateSnapshotCaptureWindow(
+        ShellViewModel shell,
+        ISnapshotPngWriter writer,
+        Action<int> shutdown,
+        string destinationPath,
+        string settingsPath)
+    {
+        var window = new WallpaperField.MainWindow
+        {
+            DataContext = shell,
+            Width = 1600,
+            Height = 1000,
+            Left = -10_000,
+            Top = -10_000,
+            ShowInTaskbar = false,
+            ShowActivated = false
+        };
+        window.SetReducedMotion(true);
+        window.ConfigureSnapshotRuntimeForTests(writer, shutdown);
+        window.ConfigureSnapshot(destinationPath, delayMilliseconds: 250, scrollIndex: 0);
+        window.ConfigureCloseWorkflow(
+            new UserSettingsStore(settingsPath),
+            persistSettings: false);
+        return window;
+    }
+
+    private static bool PumpUntil(
+        Dispatcher dispatcher,
+        Func<bool> predicate,
+        TimeSpan timeout)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        while (!predicate() && stopwatch.Elapsed < timeout)
+        {
+            PumpDispatcher(dispatcher);
+        }
+
+        return predicate();
+    }
+
+    private static bool IsShellDisposed(ShellViewModel shell)
+        => (bool)typeof(ShellViewModel).GetField(
+            "_disposed",
+            BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(shell)!;
+
+    private static void VerifySnapshotReadinessSurface(Action<bool, string> assert)
+    {
+        var assembly = typeof(ThumbnailPreviewImage).Assembly;
+        var readinessType = assembly.GetType(
+            "WallpaperField.Controls.ThumbnailSnapshotReadiness",
+            throwOnError: false,
+            ignoreCase: false);
+        var readinessObserver = typeof(ThumbnailPreviewImage).GetMethod(
+            "GetSnapshotReadiness",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        var boundedPosition = typeof(WallpaperField.Views.BrowsePageView).GetMethod(
+            "PrepareSnapshotAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic,
+            binder: null,
+            types: [typeof(int), typeof(Func<bool>), typeof(CancellationToken)],
+            modifiers: null);
+        var currentLease = typeof(WallpaperField.Views.BrowsePageView).GetMethod(
+            "IsPreparedSnapshotCurrent",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        assert(readinessType?.IsEnum == true
+               && readinessObserver?.ReturnType == readinessType
+               && boundedPosition?.ReturnType == typeof(Task<bool>)
+               && currentLease?.ReturnType == typeof(bool),
+            "Task 7 snapshot readiness is missing its pure thumbnail observation, "
+            + "or bounded Browse snapshot preparation contract.");
+    }
+
+    private static void VerifyTask7BaseStateMatrix(
+        WallpaperField.MainWindow window,
+        ShellViewModel originalShell,
+        ShellViewModel fixtureShell,
+        PerformanceRegressionTests.ProjectBrowserPerformanceFixture fixture,
+        Action<bool, string> assert)
+    {
+        originalShell.SourcePath = fixture.SourceRoot;
+        originalShell.OutputPath = fixture.OutputRoot;
+        window.DataContext = originalShell;
+        originalShell.NavigateTo("BROWSE");
+        PumpLayout(window);
+        assert(!originalShell.BrowsePageViewModel.HasSnapshot
+               && originalShell.BrowsePageViewModel.EmptyTitle == "尚无可浏览项目",
+            "The Task 7 never-scanned fixture did not expose the truthful empty state.");
+        assert(!InvokeBrowseSnapshotPreparation(
+                window,
+                requestedIndex: 0,
+                static () => false,
+                CancellationToken.None),
+            "A never-scanned Browse page was accepted as a successful empty snapshot.");
+        VerifyTask7PageStateAcrossSizes(
+            window,
+            originalShell,
+            "never-scanned",
+            openCompactDetails: false,
+            assert);
+
+        WaitForDispatcherTask(window, originalShell.ScanSession.ScanAsync());
+        assert(originalShell.BrowsePageViewModel.HasSnapshot
+               && originalShell.BrowsePageViewModel.TotalProjectCount == 0
+               && originalShell.BrowsePageViewModel.EmptyTitle == "扫描结果为空",
+            "The Task 7 successful-empty fixture did not publish an empty success snapshot.");
+        assert(InvokeBrowseSnapshotPreparation(
+                window,
+                requestedIndex: 0,
+                static () => false,
+                CancellationToken.None),
+            "A source-current successful empty Browse snapshot did not reach ReadyEmpty.");
+        VerifyTask7PageStateAcrossSizes(
+            window,
+            originalShell,
+            "successful-empty",
+            openCompactDetails: false,
+            assert);
+
+        window.DataContext = fixtureShell;
+        fixtureShell.NavigateTo("BROWSE");
+        var browse = fixtureShell.BrowsePageViewModel;
+        browse.SearchText = string.Empty;
+        browse.KindFilter = ProjectBrowserKindFilter.All;
+        browse.ShowOnlyProcessable = false;
+        browse.ShowOnlyProblems = false;
+        browse.TryClearSelection();
+        PumpLayout(window);
+        VerifyTask7PageStateAcrossSizes(
+            window,
+            fixtureShell,
+            "ready-1000",
+            openCompactDetails: false,
+            assert);
+
+        browse.KindFilter = ProjectBrowserKindFilter.Website;
+        browse.ShowOnlyProcessable = true;
+        PumpLayout(window);
+        assert(browse.HasSnapshot
+               && browse.TotalProjectCount == RuntimeProjectCount
+               && browse.MatchCount == 0
+               && browse.EmptyTitle == "当前筛选无结果",
+            "The Task 7 combined kind/processability filter did not create a truthful no-match state.");
+        VerifyTask7PageStateAcrossSizes(
+            window,
+            fixtureShell,
+            "combined-no-match",
+            openCompactDetails: false,
+            assert);
+
+        browse.KindFilter = ProjectBrowserKindFilter.All;
+        browse.ShowOnlyProcessable = false;
+        var hiddenSelection = browse.VisibleProjects.First(project =>
+            project.ProjectKind == WallpaperProjectKind.Video && project.IsProcessable);
+        assert(browse.TrySetSelection(hiddenSelection, true),
+            "The Task 7 hidden-selection fixture could not select a processable video.");
+        browse.KindFilter = ProjectBrowserKindFilter.Package;
+        PumpLayout(window);
+        assert(browse.SelectedCount == 1
+               && browse.VisibleSelectedCount == 0
+               && browse.HiddenSelectedCount == 1
+               && browse.SelectionTraySummaryText.Contains("隐藏 1", StringComparison.Ordinal),
+            "The Task 7 hidden-selection state lost its shared off-filter selection fact.");
+        VerifyTask7PageStateAcrossSizes(
+            window,
+            fixtureShell,
+            "hidden-selection",
+            openCompactDetails: false,
+            assert);
+
+        browse.KindFilter = ProjectBrowserKindFilter.All;
+        browse.TryClearSelection();
+        var longTitleCurrent = browse.VisibleProjects.First(project =>
+            project.IsProcessable
+            && project.Title.Contains("超长标题", StringComparison.Ordinal));
+        browse.CurrentProject = longTitleCurrent;
+        browse.FocusedProjectKey = longTitleCurrent.ProjectKey;
+        PumpLayout(window);
+        VerifyTask7PageStateAcrossSizes(
+            window,
+            fixtureShell,
+            "current-details",
+            openCompactDetails: true,
+            assert);
+
+        browse.CloseDetails();
+        PumpLayout(window);
+        assert(browse.TrySetSelection(longTitleCurrent, true),
+            "The Task 7 selection-tray fixture could not select its visible current project.");
+        PumpLayout(window);
+        VerifyTask7PageStateAcrossSizes(
+            window,
+            fixtureShell,
+            "selection-tray",
+            openCompactDetails: false,
+            assert);
+    }
+
+    private static void VerifyBrowseSnapshotReadiness(
+        WallpaperField.MainWindow window,
+        ShellViewModel shell,
+        TaskLifecycleCoordinator coordinator,
+        Action<bool, string> assert)
+    {
+        VerifyThumbnailSnapshotReadinessClassification(assert);
+        VerifyConsecutiveSnapshotFingerprintGate(assert);
+        shell.NavigateTo("BROWSE");
+        shell.BrowsePageViewModel.SearchText = string.Empty;
+        shell.BrowsePageViewModel.KindFilter = ProjectBrowserKindFilter.All;
+        shell.BrowsePageViewModel.ShowOnlyProcessable = false;
+        shell.BrowsePageViewModel.ShowOnlyProblems = false;
+        shell.BrowsePageViewModel.CloseDetails();
+        window.Width = 1600;
+        window.Height = 1000;
+        PumpLayout(window);
+
+        var browse = shell.BrowsePageViewModel;
+        var grid = WpfElementFinder.FindByName<ListBox>(window, "BrowseProjectGrid")!;
+        var scrollViewer = FindVisualDescendants<ScrollViewer>(grid).First();
+        scrollViewer.ScrollToEnd();
+        PumpLayout(window);
+        browse.CurrentProject = browse.VisibleProjects[^1];
+        browse.FocusedProjectKey = browse.VisibleProjects[^1].ProjectKey;
+        window.ConfigureSnapshot(
+            Path.Combine(Path.GetTempPath(), "task7-default-index-readiness.png"),
+            scrollIndex: null);
+        var positionMethod = typeof(WallpaperField.MainWindow).GetMethod(
+            "PositionSnapshotListAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic,
+            binder: null,
+            types: [typeof(CancellationToken)],
+            modifiers: null)!;
+        var defaultIndexTask = (Task<bool>)positionMethod.Invoke(
+            window,
+            [CancellationToken.None])!;
+        WaitForDispatcherTask(window, defaultIndexTask);
+        grid = WpfElementFinder.FindByName<ListBox>(window, "BrowseProjectGrid")!;
+        scrollViewer = FindVisualDescendants<ScrollViewer>(grid).First();
+        var visible = CaptureVisibleCardPreviews(grid, scrollViewer);
+        var defaultTarget = visible.SingleOrDefault(item =>
+            ReferenceEquals(item.Project, browse.VisibleProjects[0]));
+        var defaultTargetButton = defaultTarget == default
+            ? null
+            : FindVisualAncestor<Button>(defaultTarget.Image);
+        assert(defaultIndexTask.GetAwaiter().GetResult()
+               && ReferenceEquals(browse.CurrentProject, browse.VisibleProjects[0])
+               && string.Equals(
+                   browse.FocusedProjectKey,
+                   browse.VisibleProjects[0].ProjectKey,
+                   StringComparison.Ordinal)
+               && defaultTargetButton?.IsKeyboardFocusWithin == true
+               && IsVisualDescendantOf(
+                   Keyboard.FocusedElement as DependencyObject,
+                   defaultTargetButton),
+            "Browse snapshot capture without --scroll-index bypassed the default index-0 readiness gate.");
+
+        assert(visible.Count > 0
+               && visible.Any(item => ReferenceEquals(item.Project, browse.VisibleProjects[0])),
+            "The snapshot readiness fixture did not realize its exact index-0 target card.");
+        var target = visible.Single(item => ReferenceEquals(item.Project, browse.VisibleProjects[0]));
+
+        using (var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(200)))
+        {
+            assert(!InvokeBrowseSnapshotPreparation(
+                    window,
+                    requestedIndex: 0,
+                    static () => true,
+                    cancellation.Token),
+                "A continuously busy Browse page crossed the snapshot deadline as ready.");
+        }
+        var releaseLifecycle = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var activeLifecycle = coordinator.RunAsync(
+            ForegroundOperationKind.LibraryRefresh,
+            async (_, cancellationToken) =>
+                await releaseLifecycle.Task.WaitAsync(cancellationToken).ConfigureAwait(true));
+        PumpLayout(window);
+        using (var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(200)))
+        {
+            assert(!InvokeBrowseSnapshotPreparation(
+                    window,
+                    requestedIndex: 0,
+                    static () => false,
+                    cancellation.Token),
+                "An active foreground lifecycle was accepted as snapshot-ready.");
+        }
+        releaseLifecycle.TrySetResult(true);
+        WaitForDispatcherTask(window, activeLifecycle);
+        var lifecycleBeforeTransient = shell.TaskLifecycle;
+        Task? transientLifecycle = null;
+        var transientRenderCount = 0;
+        EventHandler transientLifecycleHandler = (_, _) =>
+        {
+            transientRenderCount++;
+            if (transientLifecycle is null)
+            {
+                transientLifecycle = coordinator.RunAsync(
+                    ForegroundOperationKind.LibraryRefresh,
+                    static (_, _) => Task.CompletedTask);
+            }
+        };
+        CompositionTarget.Rendering += transientLifecycleHandler;
+        bool transientLifecycleAccepted;
+        try
+        {
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
+            transientLifecycleAccepted = InvokeBrowseSnapshotPreparation(
+                window,
+                requestedIndex: 0,
+                static () => false,
+                cancellation.Token);
+        }
+        finally
+        {
+            CompositionTarget.Rendering -= transientLifecycleHandler;
+        }
+
+        if (transientLifecycle is not null)
+        {
+            WaitForDispatcherTask(window, transientLifecycle);
+        }
+        assert(!transientLifecycleAccepted
+               && transientRenderCount > 0
+               && shell.TaskLifecycle != lifecycleBeforeTransient,
+            "An idle-to-terminal lifecycle transition between snapshot frames escaped the frozen epoch.");
+
+        var allRealized = FindVisualDescendants<Button>(grid)
+            .Where(button => button.Name == "BrowseProjectCardButton"
+                             && button.DataContext is BrowseProjectViewModel)
+            .Select(button => new
+            {
+                Button = button,
+                Project = (BrowseProjectViewModel)button.DataContext,
+                Image = FindVisualDescendants<ThumbnailPreviewImage>(button).Single()
+            })
+            .ToArray();
+        var visibleKeys = visible.Select(item => item.Project.ProjectKey)
+            .ToHashSet(StringComparer.Ordinal);
+        var hidden = allRealized.FirstOrDefault(item =>
+            !visibleKeys.Contains(item.Project.ProjectKey));
+        assert(hidden is not null,
+            "The snapshot readiness fixture did not realize an off-viewport cached card.");
+        if (hidden is not null)
+        {
+            var hiddenState = CaptureThumbnailState(hidden.Image);
+            SetThumbnailState(hidden.Image, status: null, source: null);
+            assert(InvokeBrowseSnapshotPreparation(
+                    window,
+                    requestedIndex: 0,
+                    static () => false,
+                    CancellationToken.None),
+                "An off-viewport cached card with pending preview state blocked Browse capture.");
+            RestoreThumbnailState(hidden.Image, hiddenState);
+        }
+        grid = WpfElementFinder.FindByName<ListBox>(window, "BrowseProjectGrid")!;
+        scrollViewer = FindVisualDescendants<ScrollViewer>(grid).First();
+        target = CaptureVisibleCardPreviews(grid, scrollViewer)
+            .Single(item => ReferenceEquals(item.Project, browse.VisibleProjects[0]));
+        var targetState = CaptureThumbnailState(target.Image);
+        SetThumbnailState(target.Image, status: null, source: null);
+        using (var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(150)))
+        {
+            assert(!InvokeBrowseSnapshotPreparation(
+                    window,
+                    requestedIndex: 0,
+                    static () => false,
+                    cancellation.Token),
+                "A positive-area card with pending preview state was accepted for capture.");
+        }
+        RestoreThumbnailState(target.Image, targetState);
+        grid = WpfElementFinder.FindByName<ListBox>(window, "BrowseProjectGrid")!;
+        scrollViewer = FindVisualDescendants<ScrollViewer>(grid).First();
+        var stableVisible = CaptureVisibleCardPreviews(grid, scrollViewer);
+        var mutablePreview = stableVisible.First(item =>
+            item.Image.ThumbnailStatus == PreviewThumbnailStatus.Ready
+            && item.Image.Source is System.Windows.Media.Imaging.BitmapSource
+            {
+                IsFrozen: true,
+                PixelWidth: > 0,
+                PixelHeight: > 0
+            });
+        var mutableState = CaptureThumbnailState(mutablePreview.Image);
+        var alternateSource = CreateFrozenSnapshotBitmap(0xC7);
+        var singleMutationRenderCount = 0;
+        var singleMutationApplied = false;
+        DispatcherHookEventHandler singleMutationHandler = (_, args) =>
+        {
+            if (args.Operation.Priority != DispatcherPriority.Render)
+            {
+                return;
+            }
+
+            singleMutationRenderCount++;
+            if (!singleMutationApplied && singleMutationRenderCount == 3)
+            {
+                singleMutationApplied = true;
+                SetThumbnailState(
+                    mutablePreview.Image,
+                    PreviewThumbnailStatus.Ready,
+                    alternateSource);
+            }
+        };
+        window.Dispatcher.Hooks.OperationStarted += singleMutationHandler;
+        bool singleMutationReady;
+        try
+        {
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+            var preparation = StartBrowseSnapshotPreparation(
+                window,
+                requestedIndex: 0,
+                static () => false,
+                cancellation.Token);
+            WaitForDispatcherTaskWithoutLayout(window, preparation);
+            singleMutationReady = preparation.GetAwaiter().GetResult();
+        }
+        finally
+        {
+            window.Dispatcher.Hooks.OperationStarted -= singleMutationHandler;
+        }
+        assert(singleMutationReady
+               && singleMutationApplied
+               && singleMutationRenderCount >= 4,
+            "A visible preview change between snapshot frames did not force a new consecutive stable pair. "
+            + $"ready={singleMutationReady}; applied={singleMutationApplied}; "
+            + $"renders={singleMutationRenderCount}.");
+        RestoreThumbnailState(mutablePreview.Image, mutableState);
+        PumpLayout(window);
+
+        RestoreThumbnailState(mutablePreview.Image, mutableState);
+        PumpLayout(window);
+        var search = WpfElementFinder.FindByName<TextBox>(window, "BrowseSearchTextBox");
+        assert(search is not null,
+            "The focus-drift fixture could not find the live Browse search text box.");
+        if (search is null)
+        {
+            return;
+        }
+
+        var initialSearchScope = FocusManager.GetFocusScope(search);
+        FocusManager.SetFocusedElement(initialSearchScope, search);
+        assert(search.Focus() && search.IsKeyboardFocusWithin,
+            "The focus-drift fixture could not establish its pre-position search focus.");
+        var focusDriftTarget = browse.VisibleProjects[0];
+        var focusDriftTargetCalls = 0;
+        var focusDriftApplied = false;
+        var focusDriftAttempted = false;
+        Exception? focusDriftProbeFailure = null;
+        bool FocusDriftProbe()
+        {
+            if (focusDriftAttempted)
+            {
+                return false;
+            }
+
+            try
+            {
+                var liveTarget = FindVisualDescendants<Button>(window)
+                    .SingleOrDefault(button =>
+                        button.Name == "BrowseProjectCardButton"
+                        && ReferenceEquals(button.DataContext, focusDriftTarget));
+                if (liveTarget is null
+                    || Keyboard.FocusedElement is not DependencyObject focused
+                    || !IsVisualDescendantOf(focused, liveTarget))
+                {
+                    return false;
+                }
+
+                focusDriftTargetCalls++;
+                if (focusDriftTargetCalls == 3)
+                {
+                    focusDriftAttempted = true;
+                    var scope = FocusManager.GetFocusScope(search);
+                    FocusManager.SetFocusedElement(scope, search);
+                    focusDriftApplied = search.Focus();
+                }
+            }
+            catch (Exception exception)
+            {
+                focusDriftAttempted = true;
+                focusDriftProbeFailure = exception;
+            }
+
+            return false;
+        }
+
+        bool focusDriftReady;
+        var focusDriftElapsed = Stopwatch.StartNew();
+        using (var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(500)))
+        {
+            var preparation = StartBrowseSnapshotPreparation(
+                window,
+                requestedIndex: 0,
+                FocusDriftProbe,
+                cancellation.Token);
+            WaitForDispatcherTaskWithoutLayout(window, preparation);
+            focusDriftReady = preparation.GetAwaiter().GetResult();
+        }
+        assert(!focusDriftReady
+               && focusDriftApplied
+               && focusDriftTargetCalls >= 3
+               && focusDriftProbeFailure is null
+               && focusDriftElapsed.Elapsed < TimeSpan.FromSeconds(2)
+               && search.IsKeyboardFocusWithin
+               && IsVisualDescendantOf(
+                   Keyboard.FocusedElement as DependencyObject,
+                   search),
+            "Keyboard focus drifting away from the exact target card between frames was accepted or did not finish within its bounded token. "
+            + $"ready={focusDriftReady}; applied={focusDriftApplied}; "
+            + $"target_calls={focusDriftTargetCalls}; "
+            + $"probe_failure={focusDriftProbeFailure?.GetType().Name ?? "none"}; "
+            + $"elapsed_ms={focusDriftElapsed.Elapsed.TotalMilliseconds:F3}.");
+        browse.CurrentProject = browse.VisibleProjects[0];
+        browse.FocusedProjectKey = browse.VisibleProjects[0].ProjectKey;
+        PumpLayout(window);
+        var details = WpfElementFinder.FindByName<FrameworkElement>(
+            window,
+            "BrowsePersistentDetails")!;
+        var detailImage = FindVisualDescendants<ThumbnailPreviewImage>(details).Single();
+        var detailState = CaptureThumbnailState(detailImage);
+        SetThumbnailState(detailImage, status: null, source: null);
+        using (var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(150)))
+        {
+            assert(!InvokeBrowseSnapshotPreparation(
+                    window,
+                    requestedIndex: 0,
+                    static () => false,
+                    cancellation.Token),
+                "A truly visible details preview with pending state was accepted for capture.");
+        }
+        RestoreThumbnailState(detailImage, detailState);
+        grid = WpfElementFinder.FindByName<ListBox>(window, "BrowseProjectGrid")!;
+        scrollViewer = FindVisualDescendants<ScrollViewer>(grid).First();
+        target = CaptureVisibleCardPreviews(grid, scrollViewer)
+            .Single(item => ReferenceEquals(item.Project, browse.VisibleProjects[0]));
+        targetState = CaptureThumbnailState(target.Image);
+        var originalProjectKey = target.Image.ProjectKey;
+        target.Image.ProjectKey = "task7-controlled-mismatched-key";
+        assert(!InvokeBrowseSnapshotPreparation(
+                window,
+                requestedIndex: 0,
+                static () => false,
+                CancellationToken.None),
+            "A visible preview whose ProjectKey diverged from its card was accepted for capture.");
+        target.Image.ProjectKey = originalProjectKey;
+        RestoreThumbnailState(target.Image, targetState);
+
+        var originalGeneration = target.Image.SnapshotGeneration;
+        target.Image.SnapshotGeneration = originalGeneration + 1;
+        assert(!InvokeBrowseSnapshotPreparation(
+                window,
+                requestedIndex: 0,
+                static () => false,
+                CancellationToken.None),
+            "A visible preview from the wrong snapshot generation was accepted for capture.");
+        target.Image.SnapshotGeneration = originalGeneration;
+        RestoreThumbnailState(target.Image, targetState);
+        var identityBeforePathDrift = shell.ScanSession.ProjectSnapshot!.Identity;
+        var originalSourcePath = shell.SourcePath;
+        var originalOutputPath = shell.OutputPath;
+        var pathDriftRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"wallpaper-field-task7-snapshot-identity-{Guid.NewGuid():N}");
+        var alternateSourcePath = Path.Combine(pathDriftRoot, "source");
+        var alternateOutputPath = Path.Combine(pathDriftRoot, "output");
+        Directory.CreateDirectory(alternateSourcePath);
+        Directory.CreateDirectory(alternateOutputPath);
+        try
+        {
+            shell.OutputPath = alternateOutputPath;
+            assert(!InvokeBrowseSnapshotPreparation(
+                    window,
+                    requestedIndex: 0,
+                    static () => false,
+                    CancellationToken.None),
+                "A pre-call output identity drift was accepted against the previous scan snapshot.");
+            shell.OutputPath = originalOutputPath;
+            PumpLayout(window);
+
+            var sourceDriftRenderCount = 0;
+            EventHandler sourceDriftHandler = (_, _) =>
+            {
+                sourceDriftRenderCount++;
+                if (sourceDriftRenderCount == 1)
+                {
+                    shell.SourcePath = alternateSourcePath;
+                }
+            };
+            CompositionTarget.Rendering += sourceDriftHandler;
+            bool sourceDriftReady;
+            try
+            {
+                using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
+                sourceDriftReady = InvokeBrowseSnapshotPreparation(
+                    window,
+                    requestedIndex: 0,
+                    static () => false,
+                    cancellation.Token);
+            }
+            finally
+            {
+                CompositionTarget.Rendering -= sourceDriftHandler;
+                shell.SourcePath = originalSourcePath;
+                PumpLayout(window);
+            }
+            assert(!sourceDriftReady && sourceDriftRenderCount > 0,
+                "A source identity change while snapshot preparation was pending was accepted.");
+
+            var outputDriftRenderCount = 0;
+            EventHandler outputDriftHandler = (_, _) =>
+            {
+                outputDriftRenderCount++;
+                if (outputDriftRenderCount == 1)
+                {
+                    shell.OutputPath = alternateOutputPath;
+                }
+            };
+            CompositionTarget.Rendering += outputDriftHandler;
+            bool outputDriftReady;
+            try
+            {
+                using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
+                outputDriftReady = InvokeBrowseSnapshotPreparation(
+                    window,
+                    requestedIndex: 0,
+                    static () => false,
+                    cancellation.Token);
+            }
+            finally
+            {
+                CompositionTarget.Rendering -= outputDriftHandler;
+                shell.OutputPath = originalOutputPath;
+                PumpLayout(window);
+            }
+            assert(!outputDriftReady
+                   && outputDriftRenderCount > 0
+                   && shell.ScanSession.IsCurrentIdentity
+                   && shell.ScanSession.ProjectSnapshot!.Identity == identityBeforePathDrift,
+                "An output identity change while snapshot preparation was pending escaped the frozen identity.");
+        }
+        finally
+        {
+            shell.SourcePath = originalSourcePath;
+            shell.OutputPath = originalOutputPath;
+            TryDeleteDirectory(pathDriftRoot);
+            PumpLayout(window);
+        }
+
+        VerifyNoPreviewSnapshotReadiness(window, shell, assert);
+
+        var snapshotBeforeReplacement = shell.ScanSession.ProjectSnapshot!;
+        Task? replacementScan = null;
+        var replacementRenderCount = 0;
+        EventHandler replacementHandler = (_, _) =>
+        {
+            replacementRenderCount++;
+            if (replacementScan is null)
+            {
+                replacementScan = shell.ScanSession.ScanAsync();
+            }
+        };
+        CompositionTarget.Rendering += replacementHandler;
+        bool replacementReady;
+        try
+        {
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+            replacementReady = InvokeBrowseSnapshotPreparation(
+                window,
+                requestedIndex: 0,
+                static () => false,
+                cancellation.Token);
+        }
+        finally
+        {
+            CompositionTarget.Rendering -= replacementHandler;
+        }
+        if (replacementScan is not null)
+        {
+            WaitForDispatcherTask(window, replacementScan);
+        }
+        assert(!replacementReady
+               && replacementRenderCount > 0
+               && replacementScan is not null
+               && !ReferenceEquals(shell.ScanSession.ProjectSnapshot, snapshotBeforeReplacement)
+               && shell.ScanSession.ProjectSnapshot!.Revision > snapshotBeforeReplacement.Revision,
+            "A replacement ProjectSnapshot reference/revision during preparation escaped the frozen lease.");
+        shell.NavigateTo("BROWSE");
+        PumpLayout(window);
+        var routeLeaseTask = (Task<bool>)positionMethod.Invoke(
+            window,
+            [CancellationToken.None])!;
+        WaitForDispatcherTask(window, routeLeaseTask);
+        assert(routeLeaseTask.GetAwaiter().GetResult(),
+            "The Main snapshot route could not establish its Browse lease before route-drift testing.");
+        shell.NavigateTo("SCAN");
+        var browseLeaseRequired = (bool)typeof(WallpaperField.MainWindow).GetField(
+            "_snapshotRequiresBrowseLease",
+            BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+        assert(browseLeaseRequired && !InvokePreparedSnapshotCurrent(window),
+            "Main dropped its frozen Browse lease requirement after the live route changed.");
+
+        assert(!InvokeBrowseSnapshotPreparation(
+                window,
+                requestedIndex: 0,
+                static () => false,
+                CancellationToken.None),
+            "Browse readiness succeeded after the expected route changed.");
+        shell.NavigateTo("BROWSE");
+        PumpLayout(window);
+        shell.BeginClosePreparation();
+        assert(shell.IsClosing
+               && !InvokeBrowseSnapshotPreparation(
+                   window,
+                   requestedIndex: 0,
+                   static () => false,
+                   CancellationToken.None),
+            "A closing Shell was accepted as snapshot-ready.");
+        shell.ResumeAfterBlockedClose("Task 7 controlled close-readiness reset.");
+        shell.NavigateTo("BROWSE");
+        PumpLayout(window);
+        Console.WriteLine(
+            "SNAPSHOT_READINESS default_index=0 pending_card=blocked pending_details=blocked "
+            + "hidden_pending=ignored identity_generation=exact terminal_matrix=complete renders=2");
+    }
+
+    private static void VerifyConsecutiveSnapshotFingerprintGate(
+        Action<bool, string> assert)
+    {
+        var gate = new WallpaperField.Views.ConsecutiveFingerprintGate<string>(
+            static (left, right) => StringComparer.Ordinal.Equals(left, right),
+            requiredConsecutive: 2);
+        assert(!gate.Observe("A") && gate.Observe("A"),
+            "The snapshot fingerprint gate did not accept A,A on the second observation.");
+
+        gate.Reset();
+        assert(!gate.Observe("A")
+               && !gate.Observe("B")
+               && gate.Observe("B"),
+            "The snapshot fingerprint gate did not reset A,B,B until the third observation.");
+
+        gate.Reset();
+        assert(!new[] { "A", "B", "C", "D" }.Any(gate.Observe),
+            "The snapshot fingerprint gate accepted a continuously changing A,B,C,D sequence.");
+    }
+
+    private static void VerifyNoPreviewSnapshotReadiness(
+        WallpaperField.MainWindow mainWindow,
+        ShellViewModel mainShell,
+        Action<bool, string> assert)
+    {
+        var testRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"wallpaper-field-task7-no-preview-{Guid.NewGuid():N}");
+        var sourceRoot = Path.Combine(testRoot, "source");
+        var outputRoot = Path.Combine(testRoot, "output");
+        Directory.CreateDirectory(sourceRoot);
+        Directory.CreateDirectory(outputRoot);
+        var resolver = new BlockingFolderResolver(sourceRoot);
+        var coordinator = new TaskLifecycleCoordinator();
+        var shell = CreateShell(
+            new BrowserScanService(sourceRoot, outputRoot, previewPath: null, projectCount: 10),
+            sourceRoot,
+            outputRoot,
+            coordinator,
+            resolver);
+        WallpaperField.MainWindow? fixtureWindow = null;
+        Exception? primaryFailure = null;
+        try
+        {
+            fixtureWindow = new WallpaperField.MainWindow
+            {
+                DataContext = shell,
+                Width = 1600,
+                Height = 1000,
+                Left = SystemParameters.VirtualScreenLeft + 80,
+                Top = SystemParameters.VirtualScreenTop + 80,
+                ShowInTaskbar = false,
+                ShowActivated = true,
+                Topmost = true
+            };
+            fixtureWindow.SetReducedMotion(true);
+            fixtureWindow.Show();
+            fixtureWindow.Activate();
+            SetForegroundWindow(new WindowInteropHelper(fixtureWindow).Handle);
+            PumpLayout(fixtureWindow);
+            assert(ReferenceEquals(mainWindow.DataContext, mainShell)
+                   && ReferenceEquals(Application.Current?.MainWindow, mainWindow),
+                "The isolated no-preview fixture replaced the primary test window or its shell.");
+
+            var window = fixtureWindow;
+
+            WaitForDispatcherTask(window, shell.ScanSession.ScanAsync());
+
+            shell.NavigateTo("BROWSE");
+            window.Width = 1600;
+            window.Height = 1000;
+            PumpLayout(window);
+            var target = shell.BrowsePageViewModel.VisibleProjects[0];
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+            var pending = StartBrowseSnapshotPreparation(
+                window,
+                requestedIndex: 0,
+                static () => false,
+                cancellation.Token);
+            var wait = Stopwatch.StartNew();
+            while (!resolver.HasEntered(target.ProjectKey)
+                   && !pending.IsCompleted
+                   && wait.Elapsed < TimeSpan.FromSeconds(1))
+            {
+                PumpDispatcher(window.Dispatcher);
+            }
+
+            for (var index = 0; index < 3 && !pending.IsCompleted; index++)
+            {
+                window.Dispatcher.Invoke(() => { }, DispatcherPriority.Render);
+            }
+            assert(resolver.HasEntered(target.ProjectKey)
+                   && shell.BrowsePageViewModel.IsFolderTargetResolving
+                   && !pending.IsCompleted,
+                "Visible details were accepted while their folder target still displayed a resolving placeholder.");
+
+            resolver.Release(target.ProjectKey);
+            WaitForDispatcherTask(window, pending);
+            var openFolder = WpfElementFinder.FindByName<Button>(
+                window,
+                "BrowseOpenFolderButton")!;
+            assert(pending.GetAwaiter().GetResult()
+                   && !shell.BrowsePageViewModel.IsFolderTargetResolving
+                   && shell.BrowsePageViewModel.CurrentFolderTarget is { } folderTarget
+                   && string.Equals(folderTarget.ProjectKey, target.ProjectKey, StringComparison.Ordinal)
+                   && string.Equals(folderTarget.Path, sourceRoot, StringComparison.OrdinalIgnoreCase)
+                   && openFolder.IsVisible
+                   && openFolder.IsEnabled
+                   && InvokePreparedSnapshotCurrent(window),
+                "Snapshot readiness did not wait for and fingerprint the exact terminal folder target surface.");
+
+            var grid = WpfElementFinder.FindByName<ListBox>(window, "BrowseProjectGrid")!;
+            var scrollViewer = FindVisualDescendants<ScrollViewer>(grid).First();
+            var visibleTarget = CaptureVisibleCardPreviews(grid, scrollViewer)
+                .Single(item => ReferenceEquals(item.Project, target));
+            assert(!string.IsNullOrWhiteSpace(visibleTarget.Image.ProjectKey)
+                   && visibleTarget.Image.SnapshotGeneration
+                       == shell.BrowsePageViewModel.ThumbnailGeneration
+                   && string.IsNullOrWhiteSpace(visibleTarget.Image.SourcePath)
+                   && visibleTarget.Image.ScanFileLength < 0
+                   && visibleTarget.Image.ScanLastWriteTimeUtc == default
+                   && string.IsNullOrWhiteSpace(visibleTarget.Image.PreviewFormat)
+                   && visibleTarget.Image.ThumbnailStatus is null
+                   && visibleTarget.Image.Source is null,
+                "The real no-preview card did not retain its key/generation with an otherwise empty request envelope.");
+
+            visibleTarget.Image.ScanFileLength = 4;
+            assert(!InvokeBrowseSnapshotPreparation(
+                    window,
+                    requestedIndex: 0,
+                    static () => false,
+                    CancellationToken.None),
+                "A partial no-preview request envelope was accepted as terminal NoPreview.");
+            visibleTarget.Image.ScanFileLength = -1;
+            assert(InvokeBrowseSnapshotPreparation(
+                    window,
+                    requestedIndex: 0,
+                    static () => false,
+                    CancellationToken.None),
+                "A complete real no-preview envelope did not recover snapshot readiness.");
+        }
+        catch (Exception exception)
+        {
+            primaryFailure = exception;
+        }
+        finally
+        {
+            RunAllCleanupSteps(
+                primaryFailure,
+                resolver.ReleaseAll,
+                () =>
+                {
+                    if (fixtureWindow?.IsLoaded == true)
+                    {
+                        shell.NavigateTo("SCAN");
+                        RouteAwayAndVerifyPreviewShutdown(
+                            fixtureWindow,
+                            shell,
+                            shell.BrowsePageViewModel.ThumbnailService,
+                            assert);
+                    }
+                },
+                () =>
+                {
+                    if (fixtureWindow is not null)
+                    {
+                        fixtureWindow.DataContext = null;
+                    }
+                },
+                () =>
+                {
+                    if (fixtureWindow?.IsLoaded == true)
+                    {
+                        fixtureWindow.Close();
+                    }
+                },
+                () =>
+                {
+                    if (mainWindow.IsLoaded)
+                    {
+                        PumpLayout(mainWindow);
+                    }
+                },
+                () => assert(
+                    fixtureWindow is null
+                    || (!fixtureWindow.IsLoaded
+                        && !fixtureWindow.IsVisible
+                        && (Application.Current?.Windows
+                                .Cast<Window>()
+                                .Contains(fixtureWindow)
+                            ?? false) == false),
+                    "The isolated no-preview fixture window remained live after cleanup."),
+                shell.Dispose,
+                () =>
+                {
+                    if (mainWindow.IsLoaded)
+                    {
+                        mainWindow.Activate();
+                        SetForegroundWindow(new WindowInteropHelper(mainWindow).Handle);
+                    }
+                },
+                () => assert(
+                    ReferenceEquals(mainWindow.DataContext, mainShell)
+                    && ReferenceEquals(Application.Current?.MainWindow, mainWindow),
+                    "The no-preview fixture cleanup changed the primary test window or its shell."),
+                () =>
+                {
+                    TryDeleteDirectory(testRoot);
+                    assert(!Directory.Exists(testRoot),
+                        "The no-preview fixture retained its temporary directory after cleanup.");
+                });
+        }
+    }
+
+    private static void VerifyThumbnailSnapshotReadinessClassification(
+        Action<bool, string> assert)
+    {
+        var observer = typeof(ThumbnailPreviewImage).GetMethod(
+            "GetSnapshotReadiness",
+            BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var image = new ThumbnailPreviewImage
+        {
+            ProjectKey = "snapshot-classification",
+            SourcePath = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "preview.png")),
+            ScanFileLength = 4,
+            ScanLastWriteTimeUtc = DateTimeOffset.UnixEpoch,
+            PreviewFormat = "png",
+            SnapshotGeneration = 1
+        };
+        var writable = new System.Windows.Media.Imaging.WriteableBitmap(
+            2,
+            2,
+            96,
+            96,
+            PixelFormats.Bgra32,
+            null);
+        var frozen = writable.Clone();
+        frozen.Freeze();
+
+        AssertReadiness(image, observer, null, null, "Pending", assert);
+        AssertReadiness(image, observer, PreviewThumbnailStatus.Ready, frozen, "Ready", assert);
+        AssertReadiness(image, observer, PreviewThumbnailStatus.Ready, writable, "Rejected", assert);
+        foreach (var status in new[]
+                 {
+                     PreviewThumbnailStatus.Missing,
+                     PreviewThumbnailStatus.Corrupt,
+                     PreviewThumbnailStatus.OverBudget,
+                     PreviewThumbnailStatus.ReparsePoint,
+                     PreviewThumbnailStatus.Changed,
+                     PreviewThumbnailStatus.Unsupported
+                 })
+        {
+            AssertReadiness(image, observer, status, null, "StablePlaceholder", assert);
+            AssertReadiness(image, observer, status, frozen, "Rejected", assert);
+        }
+
+        AssertReadiness(image, observer, PreviewThumbnailStatus.Cancelled, null, "Rejected", assert);
+        AssertReadiness(image, observer, PreviewThumbnailStatus.Stale, null, "Rejected", assert);
+        image.SourcePath = null;
+        image.ScanFileLength = -1;
+        image.ScanLastWriteTimeUtc = default;
+        image.PreviewFormat = null;
+        image.SnapshotGeneration = 1;
+        AssertReadiness(image, observer, null, null, "NoPreview", assert);
+        image.ScanFileLength = 4;
+        AssertReadiness(image, observer, null, null, "Rejected", assert);
+        image.ScanFileLength = -1;
+        image.ScanLastWriteTimeUtc = DateTimeOffset.UnixEpoch;
+        AssertReadiness(image, observer, null, null, "Rejected", assert);
+        image.ScanLastWriteTimeUtc = default;
+        image.PreviewFormat = "png";
+        AssertReadiness(image, observer, null, null, "Rejected", assert);
+        image.PreviewFormat = null;
+        AssertReadiness(image, observer, null, frozen, "Rejected", assert);
+    }
+
+    private static void AssertReadiness(
+        ThumbnailPreviewImage image,
+        MethodInfo observer,
+        PreviewThumbnailStatus? status,
+        ImageSource? source,
+        string expected,
+        Action<bool, string> assert)
+    {
+        SetThumbnailState(image, status, source);
+        var actual = observer.Invoke(image, null)?.ToString();
+        assert(string.Equals(actual, expected, StringComparison.Ordinal),
+            $"Thumbnail snapshot readiness classified {status?.ToString() ?? "null"}/"
+            + $"{source?.GetType().Name ?? "null"} as {actual ?? "null"}, expected {expected}.");
+    }
+
+    private static bool InvokeBrowseSnapshotPreparation(
+        WallpaperField.MainWindow window,
+        int requestedIndex,
+        Func<bool> isBusy,
+        CancellationToken cancellationToken)
+    {
+        var task = StartBrowseSnapshotPreparation(
+            window,
+            requestedIndex,
+            isBusy,
+            cancellationToken);
+        WaitForDispatcherTask(window, task);
+        return task.GetAwaiter().GetResult();
+    }
+
+    private static Task<bool> StartBrowseSnapshotPreparation(
+        WallpaperField.MainWindow window,
+        int requestedIndex,
+        Func<bool> isBusy,
+        CancellationToken cancellationToken)
+    {
+        var page = FindVisualDescendants<WallpaperField.Views.BrowsePageView>(window).Single();
+        var method = typeof(WallpaperField.Views.BrowsePageView).GetMethod(
+            "PrepareSnapshotAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic,
+            binder: null,
+            types: [typeof(int), typeof(Func<bool>), typeof(CancellationToken)],
+            modifiers: null)!;
+        return (Task<bool>)method.Invoke(
+            page,
+            [requestedIndex, isBusy, cancellationToken])!;
+    }
+
+    private static bool InvokePreparedSnapshotCurrent(WallpaperField.MainWindow window)
+    {
+        var page = FindVisualDescendants<WallpaperField.Views.BrowsePageView>(window).Single();
+        var method = typeof(WallpaperField.Views.BrowsePageView).GetMethod(
+            "IsPreparedSnapshotCurrent",
+            BindingFlags.Instance | BindingFlags.NonPublic)!;
+        return (bool)method.Invoke(page, null)!;
+    }
+
+    private static ImageSource CreateFrozenSnapshotBitmap(byte marker)
+    {
+        var writable = new System.Windows.Media.Imaging.WriteableBitmap(
+            2,
+            2,
+            96,
+            96,
+            PixelFormats.Bgra32,
+            null);
+        var pixels = new byte[]
+        {
+            marker, 0x11, 0x22, 0xFF,
+            marker, 0x33, 0x44, 0xFF,
+            marker, 0x55, 0x66, 0xFF,
+            marker, 0x77, 0x88, 0xFF
+        };
+        writable.WritePixels(new Int32Rect(0, 0, 2, 2), pixels, 8, 0);
+        var frozen = writable.Clone();
+        frozen.Freeze();
+        return frozen;
+    }
+
+    private static (PreviewThumbnailStatus? Status, ImageSource? Source)
+        CaptureThumbnailState(ThumbnailPreviewImage image)
+        => (image.ThumbnailStatus, image.Source);
+
+    private static void RestoreThumbnailState(
+        ThumbnailPreviewImage image,
+        (PreviewThumbnailStatus? Status, ImageSource? Source) state)
+        => SetThumbnailState(image, state.Status, state.Source);
+
+    private static void SetThumbnailState(
+        ThumbnailPreviewImage image,
+        PreviewThumbnailStatus? status,
+        ImageSource? source)
+    {
+        var key = (DependencyPropertyKey)typeof(ThumbnailPreviewImage).GetField(
+            "ThumbnailStatusPropertyKey",
+            BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
+        image.Source = source;
+        image.SetValue(key, status);
+    }
+
+    internal static void VerifyTask7PageStateAcrossSizes(
+        WallpaperField.MainWindow window,
+        ShellViewModel shell,
+        string state,
+        bool openCompactDetails,
+        Action<bool, string> assert)
+    {
+        shell.NavigateTo("BROWSE");
+        foreach (var item in Task7ResponsiveCases)
+        {
+            window.Width = item.Width;
+            window.Height = item.Height;
+            PumpLayout(window);
+            var browse = shell.BrowsePageViewModel;
+            if (openCompactDetails && item.Mode == "Compact")
+            {
+                var openDetails = WpfElementFinder.FindByName<Button>(
+                    window,
+                    "BrowseCompactDetailsButton")!;
+                assert(openDetails.IsVisible && openDetails.IsEnabled,
+                    $"Task 7 current-details could not invoke the live Compact details action "
+                    + $"at {item.Width:0} DIP.");
+                RaiseClick(openDetails);
+                PumpLayout(window);
+            }
+
+            var root = WpfElementFinder.FindByName<FrameworkElement>(window, "BrowseView")!;
+            var header = WpfElementFinder.FindByName<FrameworkElement>(window, "BrowsePageHeader")!;
+            var toolbar = WpfElementFinder.FindByName<FrameworkElement>(window, "BrowseToolbar")!;
+            var empty = WpfElementFinder.FindByName<FrameworkElement>(window, "BrowseEmptyState")!;
+            var ready = WpfElementFinder.FindByName<FrameworkElement>(window, "BrowseReadyState")!;
+            var grid = WpfElementFinder.FindByName<ListBox>(window, "BrowseProjectGrid")!;
+            var details = WpfElementFinder.FindByName<FrameworkElement>(window, "BrowsePersistentDetails")!;
+            var compactDetails = WpfElementFinder.FindByName<FrameworkElement>(
+                window,
+                "BrowseCompactDetailsOverlay")!;
+            var backdrop = WpfElementFinder.FindByName<FrameworkElement>(
+                window,
+                "BrowseCompactModalBackdrop")!;
+            var tray = WpfElementFinder.FindByName<Border>(window, "BrowseProcessingTraySlot")!;
+            var selectionTray = WpfElementFinder.FindByName<FrameworkElement>(
+                window,
+                "BrowseSelectionTray")!;
+            var activeTray = WpfElementFinder.FindByName<FrameworkElement>(
+                window,
+                "BrowseActiveProcessingTray")!;
+            var completionTray = WpfElementFinder.FindByName<FrameworkElement>(
+                window,
+                "BrowseCompletionTray")!;
+            var expectedEmpty = !browse.HasVisibleProjects;
+            var expectedReady = browse.HasVisibleProjects
+                                || browse.IsDetailsOpen
+                                || browse.IsFilterLayerOpen;
+            var expectedTray = browse.HasSelection
+                               || shell.UnpackSession.HasActiveScope
+                               || shell.UnpackSession.HasCompletionSummary;
+            var expectedSelectionTray = browse.HasSelection
+                                        && !shell.UnpackSession.HasActiveScope
+                                        && !shell.UnpackSession.HasCompletionSummary;
+            var expectedActiveTray = shell.UnpackSession.HasActiveScope;
+            var expectedCompletionTray = !shell.UnpackSession.HasActiveScope
+                                            && shell.UnpackSession.HasCompletionSummary;
+
+            assert(window.LayoutMode.ToString() == item.Mode
+                   && (!expectedReady || browse.ColumnCount == item.Columns),
+                $"Task 7 state {state} lost responsive mode/columns at {item.Width:0} DIP: "
+                + $"requested={window.Width:0.###}; actual={window.ActualWidth:0.###}; "
+                + $"mode={window.LayoutMode}; columns={browse.ColumnCount}; ready={expectedReady}.");
+            assert(root.IsVisible
+                   && FindVisualAncestor<ScrollViewer>(root) is null
+                   && empty.Visibility == (expectedEmpty ? Visibility.Visible : Visibility.Collapsed)
+                   && ready.Visibility == (expectedReady ? Visibility.Visible : Visibility.Collapsed),
+                $"Task 7 state {state} exposed the wrong page/empty/ready surface at {item.Width:0} DIP.");
+
+            var main = expectedEmpty ? empty : ready;
+            var headerBounds = BoundsRelativeTo(header, root);
+            var toolbarBounds = BoundsRelativeTo(toolbar, root);
+            var mainBounds = BoundsRelativeTo(main, root);
+            var trayBounds = BoundsRelativeTo(tray, root);
+            const double tolerance = 1.0;
+            var orderedAndInside = new[] { headerBounds, toolbarBounds, mainBounds, trayBounds }
+                                       .All(bounds => bounds.Left >= -tolerance
+                                                      && bounds.Top >= -tolerance
+                                                      && bounds.Right <= root.ActualWidth + tolerance
+                                                      && bounds.Bottom <= root.ActualHeight + tolerance)
+                                   && headerBounds.Bottom <= toolbarBounds.Top + tolerance
+                                   && toolbarBounds.Bottom <= mainBounds.Top + tolerance
+                                   && mainBounds.Bottom <= trayBounds.Top + tolerance;
+            assert(orderedAndInside,
+                $"Task 7 state {state} clipped or overlapped page bands at {item.Width:0} DIP: "
+                + $"root={root.ActualWidth:0.###}x{root.ActualHeight:0.###}; "
+                + $"header={headerBounds}; toolbar={toolbarBounds}; main={mainBounds}; tray={trayBounds}.");
+
+            var search = WpfElementFinder.FindByName<TextBox>(window, "BrowseSearchTextBox")!;
+            var compactFilter = WpfElementFinder.FindByName<Button>(window, "BrowseFilterButton")!;
+            var kindFilter = WpfElementFinder.FindByName<ComboBox>(
+                window,
+                "BrowseKindFilterComboBox")!;
+            assert(search.IsVisible && search.ActualHeight >= 44 - tolerance
+                   && (item.Mode == "Compact"
+                       ? compactFilter.IsVisible && compactFilter.ActualHeight >= 44 - tolerance
+                       : kindFilter.IsVisible && kindFilter.ActualHeight >= 44 - tolerance),
+                $"Task 7 state {state} hid its unique search/filter action at {item.Width:0} DIP.");
+
+            if (expectedReady)
+            {
+                assert(grid.IsVisible
+                       && FindVisualAncestor<ScrollViewer>(grid) is null
+                       && FindVisualDescendants<ScrollViewer>(grid).Any(),
+                    $"Task 7 state {state} did not keep scrolling inside the Browse grid at {item.Width:0} DIP.");
+                var toggle = FindVisualDescendants<BrowseSelectionToggle>(grid)
+                    .FirstOrDefault(candidate => candidate.DataContext is BrowseProjectViewModel);
+                assert(toggle is null
+                       || Math.Abs(toggle.Width - 40) < tolerance
+                       && Math.Abs(toggle.Height - 40) < tolerance,
+                    $"Task 7 state {state} changed the 40-DIP card selection target at {item.Width:0} DIP.");
+            }
+            else
+            {
+                var scanAction = WpfElementFinder.FindByName<Button>(
+                    window,
+                    "BrowseScanCenterButton")!;
+                assert(scanAction.IsVisible && scanAction.ActualHeight >= 44 - tolerance,
+                    $"Task 7 state {state} hid its empty-state recovery action at {item.Width:0} DIP.");
+            }
+
+            if (item.Mode == "Compact" && openCompactDetails)
+            {
+                assert(compactDetails.IsVisible
+                       && backdrop.IsVisible
+                       && !toolbar.IsEnabled
+                       && !grid.IsEnabled
+                       && FindVisualDescendants<ScrollViewer>(compactDetails).Any(),
+                    $"Task 7 Compact details did not make the background inert or own scrolling at {item.Width:0} DIP.");
+            }
+            else
+            {
+                assert(!compactDetails.IsVisible && !backdrop.IsVisible && toolbar.IsEnabled,
+                    $"Task 7 state {state} retained a stale Compact modal at {item.Width:0} DIP.");
+                if (expectedReady && item.Details > 0)
+                {
+                    assert(details.IsVisible
+                           && Math.Abs(details.ActualWidth - item.Details) < tolerance
+                           && FindVisualDescendants<ScrollViewer>(details).Any(),
+                        $"Task 7 state {state} lost the details-owned scroller at {item.Width:0} DIP.");
+                }
+            }
+
+            assert(Math.Abs(tray.ActualHeight - 72) < tolerance
+                   && tray.IsHitTestVisible == expectedTray
+                   && (expectedTray ? tray.Opacity > 0.99 : tray.Opacity < 0.01)
+                   && selectionTray.IsVisible == expectedSelectionTray
+                   && activeTray.IsVisible == expectedActiveTray
+                   && completionTray.IsVisible == expectedCompletionTray,
+                $"Task 7 state {state} projected the wrong 72-DIP tray/hit-test surface at {item.Width:0} DIP.");
+            if (expectedTray)
+            {
+                var visibleTray = expectedActiveTray
+                    ? activeTray
+                    : expectedCompletionTray
+                        ? completionTray
+                        : selectionTray;
+                var trayButtons = FindVisualDescendants<Button>(visibleTray)
+                    .Where(button => button.IsVisible)
+                    .ToArray();
+                assert(trayButtons.Length > 0
+                       && trayButtons.All(button => button.IsHitTestVisible
+                                                    && button.ActualHeight >= 44 - tolerance),
+                    $"Task 7 state {state} lost a 44-DIP tray action at {item.Width:0} DIP.");
+            }
+
+            VerifyBrowseTypographyFloor(root, state, item.Width, assert);
+            Console.WriteLine(
+                $"TASK7_STATE state={state} width={item.Width:0} mode={item.Mode} "
+                + $"columns={browse.ColumnCount} empty={expectedEmpty} current={browse.HasCurrentProject} "
+                + $"selected={browse.SelectedCount}/{browse.HiddenSelectedCount} "
+                + $"task={shell.TaskState} tray={expectedSelectionTray}/{expectedActiveTray}/{expectedCompletionTray}");
+
+            if (openCompactDetails && item.Mode == "Compact")
+            {
+                var closeDetails = WpfElementFinder.FindByName<Button>(
+                    window,
+                    "BrowseDetailCloseButton")!;
+                assert(closeDetails.IsVisible && closeDetails.IsEnabled,
+                    $"Task 7 current-details could not invoke the live Compact close action "
+                    + $"at {item.Width:0} DIP.");
+                RaiseClick(closeDetails);
+                PumpLayout(window);
+                assert(!browse.IsDetailsOpen
+                       && toolbar.IsEnabled
+                       && grid.IsEnabled
+                       && !compactDetails.IsVisible
+                       && !backdrop.IsVisible,
+                    $"Task 7 current-details did not restore its live Compact background "
+                    + $"at {item.Width:0} DIP.");
+            }
+        }
+    }
+
+    private static void VerifyBrowseTypographyFloor(
+        FrameworkElement root,
+        string state,
+        double width,
+        Action<bool, string> assert)
+    {
+        var minimum = Application.Current.Resources["FontSizeMicro"] is double token
+            ? token
+            : 10d;
+        var belowFloor = FindVisualDescendants<TextBlock>(root)
+            .Where(text => text.IsVisible
+                           && text.ActualWidth > 0
+                           && text.ActualHeight > 0
+                           && !string.IsNullOrWhiteSpace(text.Text)
+                           && HasEffectiveOpacity(text, root)
+                           && !text.FontFamily.Source.Contains(
+                               "Segoe Fluent Icons",
+                               StringComparison.OrdinalIgnoreCase)
+                           && text.FontSize + 0.001 < minimum)
+            .Select(text =>
+                $"{text.Name}/{text.Text.Replace(Environment.NewLine, " ")}:"
+                + $"{text.FontSize:0.###}")
+            .ToArray();
+        assert(belowFloor.Length == 0,
+            $"Task 7 state {state} exposed meaningful Browse text below {minimum:0.###} DIP "
+            + $"at {width:0}: [{string.Join(';', belowFloor)}].");
+    }
+
+    private static bool HasEffectiveOpacity(UIElement element, DependencyObject root)
+    {
+        DependencyObject? current = element;
+        while (current is UIElement currentElement)
+        {
+            if (currentElement.Opacity <= 0.01)
+            {
+                return false;
+            }
+
+            if (ReferenceEquals(current, root))
+            {
+                break;
+            }
+
+            current = VisualTreeHelper.GetParent(current);
+        }
+
+        return true;
+    }
+
+    private static void VerifyTask7Accessibility(
+        WallpaperField.MainWindow window,
+        ShellViewModel shell,
+        Action<bool, string> assert)
+    {
+        var browse = shell.BrowsePageViewModel;
+        browse.SearchText = string.Empty;
+        browse.KindFilter = ProjectBrowserKindFilter.All;
+        browse.ShowOnlyProcessable = false;
+        browse.ShowOnlyProblems = false;
+        browse.CloseDetails();
+        browse.CloseFilterLayer();
+        browse.TryClearSelection();
+        var currentSelectedProblem = browse.VisibleProjects.First(project =>
+            project.IsProcessable && project.WarningCount > 0);
+        var processable = browse.VisibleProjects.First(project =>
+            project.IsProcessable
+            && project.ProjectKey != currentSelectedProblem.ProjectKey);
+        var unprocessable = browse.VisibleProjects.First(project =>
+            !project.IsProcessable);
+        browse.CurrentProject = currentSelectedProblem;
+        browse.FocusedProjectKey = currentSelectedProblem.ProjectKey;
+        assert(browse.TrySetSelection(currentSelectedProblem, true),
+            "The Task 7 accessibility fixture could not select its representative card.");
+        shell.NavigateTo("BROWSE");
+        window.Width = 1190;
+        window.Height = 800;
+        window.Activate();
+        PumpLayout(window);
+
+        var grid = WpfElementFinder.FindByName<ListBox>(window, "BrowseProjectGrid")!;
+        foreach (var representative in new[]
+                 {
+                     (Name: "processable", Project: processable),
+                     (Name: "unprocessable", Project: unprocessable),
+                     (Name: "current-selected-problem", Project: currentSelectedProblem)
+                 })
+        {
+            var card = RealizeProjectCard(window, grid, browse, representative.Project);
+            var peer = UIElementAutomationPeer.CreatePeerForElement(card)
+                       ?? new ButtonAutomationPeer(card);
+            var name = peer.GetName();
+            assert(string.Equals(
+                       name,
+                       representative.Project.AutomationSummary,
+                       StringComparison.Ordinal)
+                   && name.Contains(representative.Project.Title, StringComparison.Ordinal)
+                   && name.Contains(representative.Project.WorkshopId, StringComparison.Ordinal)
+                   && name.Contains(representative.Project.TypeLabel, StringComparison.Ordinal)
+                   && name.Contains(representative.Project.ProcessabilityText, StringComparison.Ordinal)
+                   && name.Contains(
+                       $"提示 {representative.Project.WarningCount} 条",
+                       StringComparison.Ordinal)
+                   && name.Contains(
+                       representative.Project.IsCurrent ? "当前项目" : "非当前项目",
+                       StringComparison.Ordinal)
+                   && name.Contains(
+                       representative.Project.IsSelected
+                           ? "已加入处理选择"
+                           : "未加入处理选择",
+                       StringComparison.Ordinal),
+                $"Task 7 {representative.Name} card lost complete runtime AutomationName semantics: "
+                + $"'{name}'.");
+        }
+        assert(currentSelectedProblem.HasProblems
+               && currentSelectedProblem.IsCurrent
+               && currentSelectedProblem.IsSelected
+               && processable.IsProcessable
+               && !unprocessable.IsProcessable,
+            "The Task 7 AutomationName representatives did not cover problem/current/selected/processability states.");
+
+        var currentCard = RealizeProjectCard(
+            window,
+            grid,
+            browse,
+            currentSelectedProblem);
+        var scroll = FindVisualDescendants<ScrollViewer>(grid).First();
+        scroll.ScrollToHome();
+        PumpLayout(window);
+        currentCard = FindCardButtons(grid).Single(card =>
+            card.DataContext is BrowseProjectViewModel project
+            && project.ProjectKey == currentSelectedProblem.ProjectKey);
+        var advancedFilters = WpfElementFinder.FindByName<StackPanel>(
+            window,
+            "BrowseAdvancedFilters")!;
+        var processableFilter = FindVisualDescendants<ToggleButton>(advancedFilters)
+            .Single(toggle => AutomationProperties.GetName(toggle)
+                == "仅显示可处理项目");
+        var problemFilter = FindVisualDescendants<ToggleButton>(advancedFilters)
+            .Single(toggle => AutomationProperties.GetName(toggle)
+                == "仅显示有问题项目");
+        var selectionTray = WpfElementFinder.FindByName<FrameworkElement>(
+            window,
+            "BrowseSelectionTray")!;
+        var trayButtons = FindVisualDescendants<Button>(selectionTray)
+            .Where(button => button.IsVisible)
+            .ToArray();
+        var sequence = new UIElement[]
+        {
+            WpfElementFinder.FindByName<Button>(window, "ScanNavButton")!,
+            WpfElementFinder.FindByName<Button>(window, "BrowseNavButton")!,
+            WpfElementFinder.FindByName<Button>(window, "LibraryNavButton")!,
+            WpfElementFinder.FindByName<Button>(window, "ProblemNavButton")!,
+            FindVisualDescendants<Button>(window).Single(button =>
+                AutomationProperties.GetName(button) == "最小化窗口"),
+            FindVisualDescendants<Button>(window).Single(button =>
+                AutomationProperties.GetName(button) == "最大化或还原窗口"),
+            FindVisualDescendants<Button>(window).Single(button =>
+                AutomationProperties.GetName(button) == "关闭窗口"),
+            WpfElementFinder.FindByName<TextBox>(window, "BrowseSearchTextBox")!,
+            WpfElementFinder.FindByName<ComboBox>(window, "BrowseKindFilterComboBox")!,
+            processableFilter,
+            problemFilter,
+            WpfElementFinder.FindByName<ComboBox>(window, "BrowseSortComboBox")!,
+            currentCard,
+            WpfElementFinder.FindByName<Button>(window, "BrowseOpenFolderButton")!,
+            WpfElementFinder.FindByName<Button>(window, "BrowseCurrentProblemsButton")!,
+            WpfElementFinder.FindByName<Button>(window, "BrowseCurrentProcessButton")!,
+            trayButtons.Single(button => AutomationProperties.GetName(button)
+                == "清空项目处理选择"),
+            trayButtons.Single(button => AutomationProperties.GetName(button)
+                == "处理全部已选项目")
+        };
+        var expectedIdentities = sequence
+            .Select(CaptureFocusIdentity)
+            .ToArray();
+        var enableDeadline = Stopwatch.StartNew();
+        while (sequence.Any(element => !element.IsEnabled)
+               && enableDeadline.Elapsed < TimeSpan.FromSeconds(2))
+        {
+            PumpLayout(window);
+            Thread.Sleep(5);
+        }
+
+        assert(sequence.All(element => element.IsVisible
+                                       && element.IsEnabled
+                                       && element.Focusable
+                                       && KeyboardNavigation.GetIsTabStop(element)),
+            "The Task 7 full Tab chain contains a hidden, disabled, or non-tabbable surface: "
+            + string.Join("; ", sequence.Select(DescribeFocusElement)));
+        foreach (var identity in expectedIdentities)
+        {
+            var matches = FindVisualDescendants<UIElement>(window)
+                .Where(element => element.IsVisible
+                                  && element.IsEnabled
+                                  && element.Focusable
+                                  && KeyboardNavigation.GetIsTabStop(element)
+                                  && CaptureFocusIdentity(element) == identity)
+                .ToArray();
+            assert(matches.Length == 1,
+                $"Task 7 focus identity was not unique in the visible Tab chain: "
+                + $"identity={identity}; matches={matches.Length}.");
+        }
+
+        assert(sequence[0].Focus()
+               && Keyboard.FocusedElement is UIElement origin
+               && CaptureFocusIdentity(origin) == expectedIdentities[0],
+            "The Task 7 full Tab chain could not establish its navigation origin.");
+        var forward = new List<string> { DescribeFocusElement(sequence[0]) };
+        for (var index = 1; index < sequence.Length; index++)
+        {
+            var owner = Keyboard.FocusedElement as UIElement;
+            _ = owner?.MoveFocus(
+                new TraversalRequest(FocusNavigationDirection.Next));
+            PumpLayout(window);
+            var actual = Keyboard.FocusedElement as UIElement;
+            forward.Add(DescribeFocusElement(actual));
+            assert(actual is not null
+                   && actual.IsVisible
+                   && actual.IsEnabled
+                   && actual.Focusable
+                   && KeyboardNavigation.GetIsTabStop(actual)
+                   && CaptureFocusIdentity(actual) == expectedIdentities[index],
+                $"Task 7 Tab chain diverged at {index}: expected "
+                + $"{DescribeFocusElement(sequence[index])}, actual "
+                + $"{DescribeFocusElement(actual)}; chain=[{string.Join(" -> ", forward)}].");
+        }
+
+        var reverse = new List<string> { DescribeFocusElement(sequence[^1]) };
+        for (var index = sequence.Length - 2; index >= 0; index--)
+        {
+            var owner = Keyboard.FocusedElement as UIElement;
+            _ = owner?.MoveFocus(
+                new TraversalRequest(FocusNavigationDirection.Previous));
+            PumpLayout(window);
+            var actual = Keyboard.FocusedElement as UIElement;
+            reverse.Add(DescribeFocusElement(actual));
+            assert(actual is not null
+                   && actual.IsVisible
+                   && actual.IsEnabled
+                   && actual.Focusable
+                   && KeyboardNavigation.GetIsTabStop(actual)
+                   && CaptureFocusIdentity(actual) == expectedIdentities[index],
+                $"Task 7 Shift+Tab chain diverged at {index}: expected "
+                + $"{DescribeFocusElement(sequence[index])}, actual "
+                + $"{DescribeFocusElement(actual)}; chain=[{string.Join(" -> ", reverse)}].");
+        }
+        assert(sequence.Count(element => element is Button
+                   {
+                       Name: "BrowseProjectCardButton"
+                   }) == 1,
+            "The Task 7 full Tab chain did not contain exactly one roving grid seam.");
+        Console.WriteLine(
+            $"TASK7_TAB_FORWARD {string.Join(" -> ", forward)}");
+        Console.WriteLine(
+            $"TASK7_TAB_REVERSE {string.Join(" -> ", reverse)}");
+        browse.TryClearSelection();
+        VerifyCardSemantics(window, shell, assert);
+        VerifyQueuedDirectionalFocus(window, shell, assert);
+        VerifyRovingTabEntryAndResponsiveFocus(window, shell, assert);
+        VerifyCompactModalAndFilter(window, shell, assert);
+    }
+
+    private static Button RealizeProjectCard(
+        Window window,
+        ListBox grid,
+        BrowsePageViewModel browse,
+        BrowseProjectViewModel project)
+    {
+        var row = browse.Rows.First(candidate => candidate.Projects.Any(item =>
+            item?.ProjectKey == project.ProjectKey));
+        grid.ScrollIntoView(row);
+        PumpLayout(window);
+        return FindCardButtons(grid).Single(card =>
+            card.DataContext is BrowseProjectViewModel item
+            && item.ProjectKey == project.ProjectKey);
+    }
+
+    private static string DescribeFocusElement(UIElement? element)
+    {
+        if (element is null)
+        {
+            return "<null>";
+        }
+
+        var framework = element as FrameworkElement;
+        var name = AutomationProperties.GetName(element);
+        return $"{element.GetType().Name}:{framework?.Name ?? "<unnamed>"}/"
+               + $"{(string.IsNullOrWhiteSpace(name) ? "<no-name>" : name)}";
+    }
+
+    private static FocusIdentity CaptureFocusIdentity(UIElement element)
+        => new(
+            element.GetType(),
+            (element as FrameworkElement)?.Name ?? string.Empty,
+            AutomationProperties.GetName(element) ?? string.Empty,
+            element is Button
+            {
+                Name: "BrowseProjectCardButton",
+                DataContext: BrowseProjectViewModel project
+            }
+                ? project.ProjectKey
+                : string.Empty);
+
+    private readonly record struct FocusIdentity(
+        Type ElementType,
+        string Name,
+        string AutomationName,
+        string ProjectKey);
 
     private static void VerifyResponsiveGeometry(
         WallpaperField.MainWindow window,
         ShellViewModel shell,
         Action<bool, string> assert)
     {
-        var cases = new[]
-        {
-            (Width: 920d, Height: 680d, Mode: "Compact", Columns: 3, Details: 0d),
-            (Width: 1059d, Height: 680d, Mode: "Compact", Columns: 3, Details: 0d),
-            (Width: 1060d, Height: 760d, Mode: "Regular", Columns: 4, Details: 300d),
-            (Width: 1189d, Height: 800d, Mode: "Regular", Columns: 4, Details: 300d),
-            (Width: 1190d, Height: 800d, Mode: "Wide", Columns: 5, Details: 340d),
-            (Width: 1600d, Height: 1000d, Mode: "Wide", Columns: 6, Details: 340d)
-        };
-
-        foreach (var item in cases)
+        foreach (var item in Task7ResponsiveCases)
         {
             window.Width = item.Width;
             window.Height = item.Height;
@@ -197,16 +3044,22 @@ internal static class ProjectBrowserUiRegressionTests
                     $"Browse horizontal card gap was {gap:0.###} instead of 8 DIP at {item.Width:0}.");
             }
 
-            if (item.Width is 1060d or 1190d or 1600d)
-            {
-                var metadataCard = cards.First(card =>
-                    card.DataContext is BrowseProjectViewModel { IsProcessable: false });
-                VerifyCardMetadataGeometry(
-                    metadataCard,
-                    item.Width,
-                    highContrast: false,
-                    assert);
-            }
+            var longTitleProject = shell.BrowsePageViewModel.VisibleProjects.First(project =>
+                project.Title.Contains("超长标题", StringComparison.Ordinal));
+            var metadataRow = shell.BrowsePageViewModel.Rows.First(row =>
+                row.Projects.Any(project =>
+                    project?.ProjectKey == longTitleProject.ProjectKey));
+            grid.ScrollIntoView(metadataRow);
+            PumpLayout(window);
+            var metadataCard = FindCardButtons(grid).Single(card =>
+                card.DataContext is BrowseProjectViewModel project
+                && project.ProjectKey == longTitleProject.ProjectKey);
+            VerifyCardMetadataGeometry(
+                metadataCard,
+                item.Width,
+                highContrast: false,
+                assert);
+            VerifyRealizedBrowseRowsAreViewportConstrained(window, grid, assert);
 
             Console.WriteLine(
                 $"BROWSE_GEOMETRY width={item.Width:0} height={item.Height:0} mode={mode} "
@@ -482,10 +3335,10 @@ internal static class ProjectBrowserUiRegressionTests
         ShellViewModel shell,
         Action<bool, string> assert)
     {
+        var viewModel = shell.BrowsePageViewModel;
         window.Width = 920;
         window.Height = 680;
         PumpLayout(window);
-        var viewModel = shell.BrowsePageViewModel;
         var grid = WpfElementFinder.FindByName<ListBox>(window, "BrowseProjectGrid")!;
         var scrollViewer = FindVisualDescendants<ScrollViewer>(grid).First();
         var filterButton = WpfElementFinder.FindByName<Button>(window, "BrowseFilterButton")!;
@@ -497,7 +3350,6 @@ internal static class ProjectBrowserUiRegressionTests
                    card.DataContext is BrowseProjectViewModel project
                    && project.ProjectKey == deepTarget.ProjectKey),
             "The roving Tab fixture did not start with its keyed card virtualized.");
-
         filterButton.Focus();
         PumpLayout(window);
         var entered = filterButton.MoveFocus(
@@ -514,7 +3366,6 @@ internal static class ProjectBrowserUiRegressionTests
             + $"entered={entered}; focused={Keyboard.FocusedElement?.GetType().Name ?? "<null>"}/"
             + $"{(Keyboard.FocusedElement as FrameworkElement)?.Name ?? "<unnamed>"}; "
             + $"grid_focus={grid.IsKeyboardFocusWithin}; offset={scrollViewer.VerticalOffset:0.###}.");
-
         window.Width = 1060;
         PumpLayout(window);
         focusedCard = Keyboard.FocusedElement as Button;
@@ -561,7 +3412,6 @@ internal static class ProjectBrowserUiRegressionTests
             + $"moved={reverseExited}; focused={Keyboard.FocusedElement?.GetType().Name ?? "<null>"}/"
             + $"{(Keyboard.FocusedElement as FrameworkElement)?.Name ?? "<unnamed>"}; "
             + $"grid_focus={grid.IsKeyboardFocusWithin}; advanced_focus={advancedFilters.IsKeyboardFocusWithin}.");
-
         var search = WpfElementFinder.FindByName<TextBox>(window, "BrowseSearchTextBox")!;
         var searchFocused = search.Focus();
         PumpLayout(window);
@@ -578,7 +3428,13 @@ internal static class ProjectBrowserUiRegressionTests
         window.UpdateLayout();
         window.Width = 1060;
         window.UpdateLayout();
-        PumpLayout(window);
+        window.UpdateLayout();
+        window.Dispatcher.Invoke(() => { }, DispatcherPriority.DataBind);
+        window.UpdateLayout();
+        window.Dispatcher.Invoke(() => { }, DispatcherPriority.Render);
+        VerifyRealizedBrowseRowsAreViewportConstrained(window, grid, assert);
+        window.Dispatcher.Invoke(() => { }, DispatcherPriority.ContextIdle);
+        window.UpdateLayout();
         assert(window.LayoutMode == WallpaperField.ShellLayoutMode.Regular
                && viewModel.ColumnCount == 4,
             "The coalesced Browse resize applied a captured breakpoint instead of the latest LayoutMode.");
@@ -1184,7 +4040,7 @@ internal static class ProjectBrowserUiRegressionTests
         window.Height = 680;
         PumpLayout(window);
         var viewModel = shell.BrowsePageViewModel;
-        var grid = WpfElementFinder.FindByName<ListBox>(window, "BrowseProjectGrid")!;
+        var (grid, gridScrollViewer) = CaptureLiveBrowseGridViewport(window, assert);
         var card = FindCardButtons(grid).First();
         var project = (BrowseProjectViewModel)card.DataContext;
         var selectedBeforeDetails = project.IsSelected;
@@ -1226,22 +4082,23 @@ internal static class ProjectBrowserUiRegressionTests
         close.MoveFocus(new TraversalRequest(FocusNavigationDirection.Next));
         assert(IsVisualDescendantOf(Keyboard.FocusedElement as DependencyObject, overlay),
             "Compact details Tab traversal escaped its local cycle.");
-        var gridScrollViewer = FindVisualDescendants<ScrollViewer>(grid).First();
         var persistentDetails = WpfElementFinder.FindByName<FrameworkElement>(
             window, "BrowsePersistentDetails")!;
+        (grid, gridScrollViewer) = CaptureLiveBrowseGridViewport(window, assert);
         var transferDetailsKey = viewModel.CurrentProject!.ProjectKey;
         var transferDetailsAnchor = CaptureVisibleRowAnchor(grid, gridScrollViewer);
-        var transferDetailsPosition = CaptureProjectViewportPosition(
-            grid, gridScrollViewer, transferDetailsAnchor.ProjectKey);
+        var transferDetailsPosition = CaptureProjectRowAnchorPosition(
+            grid, gridScrollViewer, transferDetailsAnchor.ProjectKey, assert);
         close.Focus();
         window.Width = 1060;
         PumpLayout(window);
         PumpLayout(window);
+        (grid, gridScrollViewer) = CaptureLiveBrowseGridViewport(window, assert);
         var regularDetailsAnchor = CaptureVisibleRowAnchor(grid, gridScrollViewer);
-        var regularDetailsPosition = CaptureProjectViewportPosition(
-            grid, gridScrollViewer, transferDetailsAnchor.ProjectKey);
-        var reverseDetailsPosition = CaptureProjectViewportPosition(
-            grid, gridScrollViewer, regularDetailsAnchor.ProjectKey);
+        var regularDetailsPosition = CaptureProjectRowAnchorPosition(
+            grid, gridScrollViewer, transferDetailsAnchor.ProjectKey, assert);
+        var reverseDetailsPosition = CaptureProjectRowAnchorPosition(
+            grid, gridScrollViewer, regularDetailsAnchor.ProjectKey, assert);
         assert(window.LayoutMode == WallpaperField.ShellLayoutMode.Regular
                && persistentDetails.Visibility == Visibility.Visible
                && persistentDetails.IsKeyboardFocusWithin
@@ -1258,9 +4115,10 @@ internal static class ProjectBrowserUiRegressionTests
         window.Width = 1059;
         PumpLayout(window);
         PumpLayout(window);
+        (grid, gridScrollViewer) = CaptureLiveBrowseGridViewport(window, assert);
         var compactDetailsAnchor = CaptureVisibleRowAnchor(grid, gridScrollViewer);
-        var compactDetailsPosition = CaptureProjectViewportPosition(
-            grid, gridScrollViewer, regularDetailsAnchor.ProjectKey);
+        var compactDetailsPosition = CaptureProjectRowAnchorPosition(
+            grid, gridScrollViewer, regularDetailsAnchor.ProjectKey, assert);
         assert(window.LayoutMode == WallpaperField.ShellLayoutMode.Compact
                && viewModel.IsDetailsOpen
                && !viewModel.IsFilterLayerOpen
@@ -1280,6 +4138,7 @@ internal static class ProjectBrowserUiRegressionTests
         var detailsAnchor = CaptureVisibleRowAnchor(grid, gridScrollViewer);
         window.Width = 1059;
         PumpLayout(window);
+        (grid, gridScrollViewer) = CaptureLiveBrowseGridViewport(window, assert);
         var resizedDetailsAnchor = CaptureVisibleRowAnchor(grid, gridScrollViewer);
         assert(overlay.IsKeyboardFocusWithin
                && resizedDetailsAnchor.ProjectKey == detailsAnchor.ProjectKey
@@ -1290,6 +4149,7 @@ internal static class ProjectBrowserUiRegressionTests
             + $"->{resizedDetailsAnchor.ProjectKey}@{resizedDetailsAnchor.NormalizedPosition:0.###}.");
         window.Width = 920;
         PumpLayout(window);
+        (grid, gridScrollViewer) = CaptureLiveBrowseGridViewport(window, assert);
         RaiseKey(overlay, Key.Escape);
         PumpLayout(window);
         assert(!viewModel.IsDetailsOpen && grid.IsEnabled
@@ -1305,27 +4165,29 @@ internal static class ProjectBrowserUiRegressionTests
         PumpLayout(window);
         var filterLayer = WpfElementFinder.FindByName<FrameworkElement>(window, "BrowseCompactFilterLayer")!;
         var toolbar = WpfElementFinder.FindByName<FrameworkElement>(window, "BrowseToolbar")!;
+        (grid, gridScrollViewer) = CaptureLiveBrowseGridViewport(window, assert);
         assert(viewModel.IsFilterLayerOpen && filterLayer.Visibility == Visibility.Visible
                && !toolbar.IsEnabled && !grid.IsEnabled
                && KeyboardNavigation.GetTabNavigation(filterLayer) == KeyboardNavigationMode.Cycle,
             "Compact filter layer did not trap focus and make its page background inert.");
         var compactKindFilter = WpfElementFinder.FindByName<ComboBox>(
             window, "BrowseCompactKindFilterComboBox")!;
-        var fullKindFilter = WpfElementFinder.FindByName<ComboBox>(
-            window, "BrowseKindFilterComboBox")!;
         var transferFilterKey = viewModel.CurrentProject!.ProjectKey;
         var transferFilterAnchor = CaptureVisibleRowAnchor(grid, gridScrollViewer);
-        var transferFilterPosition = CaptureProjectViewportPosition(
-            grid, gridScrollViewer, transferFilterAnchor.ProjectKey);
+        var transferFilterPosition = CaptureProjectRowAnchorPosition(
+            grid, gridScrollViewer, transferFilterAnchor.ProjectKey, assert);
         compactKindFilter.Focus();
         window.Width = 1060;
         PumpLayout(window);
         PumpLayout(window);
+        (grid, gridScrollViewer) = CaptureLiveBrowseGridViewport(window, assert);
+        var fullKindFilter = WpfElementFinder.FindByName<ComboBox>(
+            window, "BrowseKindFilterComboBox")!;
         var regularFilterAnchor = CaptureVisibleRowAnchor(grid, gridScrollViewer);
-        var regularFilterPosition = CaptureProjectViewportPosition(
-            grid, gridScrollViewer, transferFilterAnchor.ProjectKey);
-        var reverseFilterPosition = CaptureProjectViewportPosition(
-            grid, gridScrollViewer, regularFilterAnchor.ProjectKey);
+        var regularFilterPosition = CaptureProjectRowAnchorPosition(
+            grid, gridScrollViewer, transferFilterAnchor.ProjectKey, assert);
+        var reverseFilterPosition = CaptureProjectRowAnchorPosition(
+            grid, gridScrollViewer, regularFilterAnchor.ProjectKey, assert);
         assert(window.LayoutMode == WallpaperField.ShellLayoutMode.Regular
                && !viewModel.IsFilterLayerOpen
                && !viewModel.IsDetailsOpen
@@ -1335,13 +4197,22 @@ internal static class ProjectBrowserUiRegressionTests
                && transferFilterPosition is not null
                && regularFilterPosition is not null
                && Math.Abs(regularFilterPosition.Value - transferFilterPosition.Value) < 0.08,
-            "Compact filter focus did not transfer to the full filter controls across 1059→1060.");
+            "Compact filter focus did not transfer to the full filter controls across 1059→1060. "
+            + $"mode={window.LayoutMode}; filter_open={viewModel.IsFilterLayerOpen}; "
+            + $"details_open={viewModel.IsDetailsOpen}; visible={fullKindFilter.IsVisible}; "
+            + $"focus_within={fullKindFilter.IsKeyboardFocusWithin}; "
+            + $"focused={DescribeFocusElement(Keyboard.FocusedElement as UIElement)}; "
+            + $"key={viewModel.CurrentProject?.ProjectKey ?? "<null>"}; "
+            + $"position={transferFilterPosition}->{regularFilterPosition}.");
         window.Width = 1059;
         PumpLayout(window);
         PumpLayout(window);
+        (grid, gridScrollViewer) = CaptureLiveBrowseGridViewport(window, assert);
+        compactKindFilter = WpfElementFinder.FindByName<ComboBox>(
+            window, "BrowseCompactKindFilterComboBox")!;
         var compactFilterAnchor = CaptureVisibleRowAnchor(grid, gridScrollViewer);
-        var compactFilterPosition = CaptureProjectViewportPosition(
-            grid, gridScrollViewer, regularFilterAnchor.ProjectKey);
+        var compactFilterPosition = CaptureProjectRowAnchorPosition(
+            grid, gridScrollViewer, regularFilterAnchor.ProjectKey, assert);
         assert(window.LayoutMode == WallpaperField.ShellLayoutMode.Compact
                && viewModel.IsFilterLayerOpen
                && !viewModel.IsDetailsOpen
@@ -1355,6 +4226,7 @@ internal static class ProjectBrowserUiRegressionTests
         var filterAnchor = CaptureVisibleRowAnchor(grid, gridScrollViewer);
         window.Width = 1059;
         PumpLayout(window);
+        (grid, gridScrollViewer) = CaptureLiveBrowseGridViewport(window, assert);
         var resizedFilterAnchor = CaptureVisibleRowAnchor(grid, gridScrollViewer);
         assert(filterLayer.IsKeyboardFocusWithin
                && resizedFilterAnchor.ProjectKey == filterAnchor.ProjectKey
@@ -1697,6 +4569,24 @@ internal static class ProjectBrowserUiRegressionTests
         WallpaperField.MainWindow window,
         Action<bool, string> assert)
     {
+        var shell = (ShellViewModel)window.DataContext;
+        var browse = shell.BrowsePageViewModel;
+        browse.SearchText = string.Empty;
+        browse.KindFilter = ProjectBrowserKindFilter.All;
+        browse.ShowOnlyProcessable = false;
+        browse.ShowOnlyProblems = false;
+        browse.CloseDetails();
+        browse.CloseFilterLayer();
+        browse.TryClearSelection();
+        var longTitleProject = browse.VisibleProjects.First(project =>
+            project.IsProcessable
+            && project.Title.Contains("超长标题", StringComparison.Ordinal));
+        browse.CurrentProject = longTitleProject;
+        browse.FocusedProjectKey = longTitleProject.ProjectKey;
+        assert(browse.TrySetSelection(longTitleProject, true),
+            "The High Contrast fixture could not establish its live selection tray.");
+        shell.NavigateTo("BROWSE");
+
         WallpaperField.MainWindow? focusWindow = null;
         var palette = typeof(WallpaperField.MainWindow).GetMethod(
             "ApplyHighContrastPalette", BindingFlags.Instance | BindingFlags.NonPublic)!;
@@ -1713,100 +4603,202 @@ internal static class ProjectBrowserUiRegressionTests
                 ShowActivated = true,
                 Topmost = true
             };
+            focusWindow.SetReducedMotion(true);
             focusWindow.Show();
             focusWindow.Activate();
             SetForegroundWindow(new WindowInteropHelper(focusWindow).Handle);
             PumpLayout(focusWindow);
-            var grid = WpfElementFinder.FindByName<ListBox>(
-                focusWindow, "BrowseProjectGrid")!;
-            FindVisualDescendants<ScrollViewer>(grid).First().ScrollToHome();
-            PumpLayout(focusWindow);
-            var card = FindCardButtons(grid).First();
-            var previewLayer = FindVisualDescendants<Grid>(card)
-                .First(candidate => candidate.Name == "BrowsePreviewLayer");
-
-            focusWindow.SetReducedMotion(true);
-            assert(card.Focus() && card.IsKeyboardFocusWithin,
-                "The live motion fixture could not establish real WPF keyboard focus on a Browse card.");
-            PumpLayout(focusWindow);
-            var reducedTransform = (ScaleTransform)previewLayer.RenderTransform;
-            assert(Math.Abs(reducedTransform.ScaleX - 1.0) < 0.001
-                   && Math.Abs(reducedTransform.ScaleY - 1.0) < 0.001,
-                "Reduced motion did not hold the focused Browse image layer at exact scale 1.0.");
-
-            focusWindow.SetReducedMotion(false);
-            assert(card.Focus() && card.IsKeyboardFocusWithin,
-                "The normal-motion fixture lost real WPF keyboard focus on its Browse card.");
-            PumpLayout(focusWindow);
-            var normalTransform = (ScaleTransform)previewLayer.RenderTransform;
-            assert(Math.Abs(normalTransform.ScaleX - 1.02) < 0.001
-                   && Math.Abs(normalTransform.ScaleY - 1.02) < 0.001,
-                "Normal motion did not hold focused Browse image-only scale at exact 1.02.");
-            focusWindow.SetReducedMotion(true);
-
             palette.Invoke(focusWindow, [true]);
             PumpLayout(focusWindow);
-            var modalBackdrop = WpfElementFinder.FindByName<Border>(
-                focusWindow, "BrowseCompactModalBackdrop");
             assert(ReferenceEquals(Application.Current.Resources["BorderStrongBrush"], SystemColors.WindowTextBrush)
                    && ReferenceEquals(Application.Current.Resources["FocusInnerBrush"], SystemColors.HighlightBrush)
                    && ReferenceEquals(Application.Current.Resources["DisabledBrush"], SystemColors.GrayTextBrush)
                    && Application.Current.Resources.Contains("ModalBackdropBrush")
-                   && ReferenceEquals(Application.Current.Resources["ModalBackdropBrush"], SystemColors.WindowTextBrush)
-                   && modalBackdrop is not null
-                   && ReferenceEquals(modalBackdrop.Background, SystemColors.WindowTextBrush),
-                "Browse High Contrast tokens or its live modal backdrop did not resolve through SystemColors.");
-
-            foreach (var width in new[] { 1060d, 1190d, 1600d })
+                   && ReferenceEquals(Application.Current.Resources["ModalBackdropBrush"], SystemColors.WindowTextBrush),
+                "Browse High Contrast tokens did not resolve through the approved SystemColors resources.");
+            foreach (var item in Task7ResponsiveCases)
             {
-                if (Math.Abs(focusWindow.Width - width) > 0.5)
+                browse.CloseDetails();
+                focusWindow.Width = item.Width;
+                focusWindow.Height = item.Height;
+                focusWindow.Activate();
+                SetForegroundWindow(new WindowInteropHelper(focusWindow).Handle);
+                PumpLayout(focusWindow);
+                PumpLayout(focusWindow);
+                var browseRoot = WpfElementFinder.FindByName<FrameworkElement>(
+                    focusWindow,
+                    "BrowseView")!;
+                var grid = WpfElementFinder.FindByName<ListBox>(
+                    focusWindow,
+                    "BrowseProjectGrid")!;
+                var metadataCard = RealizeProjectCard(
+                    focusWindow,
+                    grid,
+                    browse,
+                    longTitleProject);
+                VerifyCardMetadataGeometry(
+                    metadataCard,
+                    item.Width,
+                    highContrast: true,
+                    assert);
+                VerifyStaticReadyThumbnail(
+                    focusWindow,
+                    metadataCard,
+                    longTitleProject,
+                    browse.ThumbnailGeneration,
+                    item.Width,
+                    assert);
+
+                var search = WpfElementFinder.FindByName<TextBox>(
+                    focusWindow,
+                    "BrowseSearchTextBox")!;
+                VerifyFocusedHighContrastSurface(
+                    focusWindow,
+                    browseRoot,
+                    search,
+                    "toolbar",
+                    item.Width,
+                    assert);
+                VerifyFocusedHighContrastSurface(
+                    focusWindow,
+                    browseRoot,
+                    metadataCard,
+                    "card",
+                    item.Width,
+                    assert);
+                var previewLayer = FindVisualDescendants<Grid>(metadataCard)
+                    .First(candidate => candidate.Name == "BrowsePreviewLayer");
+                var reducedTransform = (ScaleTransform)previewLayer.RenderTransform;
+                assert(Math.Abs(reducedTransform.ScaleX - 1.0) < 0.001
+                       && Math.Abs(reducedTransform.ScaleY - 1.0) < 0.001,
+                    $"Reduced motion did not hold the focused Browse image layer at exact scale 1.0 "
+                    + $"at {item.Width:0} DIP.");
+
+                FrameworkElement detailsSurface;
+                Button detailsAction;
+                if (item.Mode == "Compact")
                 {
-                    palette.Invoke(focusWindow, [false]);
-                    focusWindow.DataContext = null;
-                    focusWindow.Close();
-                    PumpLayout(window);
-                    focusWindow = new WallpaperField.MainWindow
-                    {
-                        DataContext = window.DataContext,
-                        Width = width,
-                        Height = width == 1190d ? 800 : 1000,
-                        Left = SystemParameters.VirtualScreenLeft + 80,
-                        Top = SystemParameters.VirtualScreenTop + 80,
-                        ShowInTaskbar = false,
-                        ShowActivated = true,
-                        Topmost = true
-                    };
-                    focusWindow.Show();
-                    focusWindow.Activate();
-                    SetForegroundWindow(new WindowInteropHelper(focusWindow).Handle);
+                    var openDetails = WpfElementFinder.FindByName<Button>(
+                        focusWindow,
+                        "BrowseCompactDetailsButton")!;
+                    assert(openDetails.IsVisible && openDetails.IsEnabled,
+                        $"High Contrast Compact details action was unavailable at {item.Width:0} DIP.");
+                    RaiseClick(openDetails);
                     PumpLayout(focusWindow);
-                    palette.Invoke(focusWindow, [true]);
-                    PumpLayout(focusWindow);
+                    detailsSurface = WpfElementFinder.FindByName<FrameworkElement>(
+                        focusWindow,
+                        "BrowseCompactDetailsOverlay")!;
+                    var modalBackdrop = WpfElementFinder.FindByName<Border>(
+                        focusWindow,
+                        "BrowseCompactModalBackdrop")!;
+                    detailsAction = WpfElementFinder.FindByName<Button>(
+                        focusWindow,
+                        "BrowseDetailCloseButton")!;
+                    assert(detailsSurface.IsVisible
+                           && modalBackdrop.IsVisible
+                           && ReferenceEquals(modalBackdrop.Background, SystemColors.WindowTextBrush),
+                        $"Compact High Contrast modal/backdrop was not live through SystemColors at "
+                        + $"{item.Width:0} DIP.");
+                }
+                else
+                {
+                    detailsSurface = WpfElementFinder.FindByName<FrameworkElement>(
+                        focusWindow,
+                        "BrowsePersistentDetails")!;
+                    detailsAction = FindVisualDescendants<Button>(detailsSurface)
+                        .Single(button => button.Name == "BrowseOpenFolderButton" && button.IsVisible);
+                    assert(detailsSurface.IsVisible,
+                        $"High Contrast persistent details were not visible at {item.Width:0} DIP.");
                 }
 
-                grid = WpfElementFinder.FindByName<ListBox>(focusWindow, "BrowseProjectGrid")!;
-                FindVisualDescendants<ScrollViewer>(grid).First().ScrollToHome();
-                if (grid.Items.Count > 0)
+                VerifyFocusedHighContrastSurface(
+                    focusWindow,
+                    browseRoot,
+                    detailsAction,
+                    "details",
+                    item.Width,
+                    assert);
+                VerifyNoActiveBrowseAnimations(
+                    detailsSurface,
+                    $"details/{item.Width:0}",
+                    assert);
+                if (item.Mode == "Compact")
                 {
-                    grid.ScrollIntoView(grid.Items[0]);
+                    RaiseClick(detailsAction);
+                    PumpLayout(focusWindow);
+                    assert(!browse.IsDetailsOpen && !detailsSurface.IsVisible,
+                        $"Reduced-motion Compact details did not close without a transition at {item.Width:0} DIP.");
                 }
-                PumpLayout(focusWindow);
-                PumpLayout(focusWindow);
-                var realizedCards = FindCardButtons(grid).ToArray();
-                var metadataCard = realizedCards.FirstOrDefault(candidate =>
-                    candidate.IsLoaded && candidate.IsVisible);
-                assert(metadataCard is not null,
-                    $"High Contrast metadata fixture did not realize a live card at {width:0} DIP. "
-                    + $"cards={realizedCards.Length}; loaded={realizedCards.Count(card => card.IsLoaded)}; "
-                    + $"visible={realizedCards.Count(card => card.IsVisible)}; rows={grid.Items.Count}; "
-                    + $"grid={grid.ActualWidth:0.###}x{grid.ActualHeight:0.###}/{grid.Visibility}/{grid.IsVisible}; "
-                    + $"mode={focusWindow.LayoutMode}; columns={((ShellViewModel)focusWindow.DataContext).BrowsePageViewModel.ColumnCount}.");
-                if (metadataCard is null)
+
+                if (item.Width == Task7ResponsiveCases[0].Width)
                 {
-                    continue;
+                    VerifyReducedMotionTrayLifecycle(
+                        focusWindow,
+                        browseRoot,
+                        browse,
+                        longTitleProject,
+                        assert);
                 }
-                VerifyCardMetadataGeometry(metadataCard, width, highContrast: true, assert);
+
+                var tray = WpfElementFinder.FindByName<FrameworkElement>(
+                    focusWindow,
+                    "BrowseSelectionTray")!;
+                var trayAction = FindVisualDescendants<Button>(tray)
+                    .Single(button => AutomationProperties.GetName(button) == "处理全部已选项目");
+                assert(tray.IsVisible,
+                    $"High Contrast selection tray was not visible at {item.Width:0} DIP.");
+                VerifyFocusedHighContrastSurface(
+                    focusWindow,
+                    browseRoot,
+                    trayAction,
+                    "tray",
+                    item.Width,
+                    assert);
+                VerifyNoActiveBrowseAnimations(
+                    tray,
+                    $"tray/{item.Width:0}",
+                    assert);
+                Console.WriteLine(
+                    $"TASK7_HC_MOTION width={item.Width:0} mode={item.Mode} "
+                    + "surfaces=toolbar/card/details/tray brushes=SystemColors clocks=0 frozen_preview=True");
             }
+
+            focusWindow.Width = 1600;
+            focusWindow.Height = 1000;
+            PumpLayout(focusWindow);
+            var normalGrid = WpfElementFinder.FindByName<ListBox>(
+                focusWindow,
+                "BrowseProjectGrid")!;
+            var normalCard = RealizeProjectCard(
+                focusWindow,
+                normalGrid,
+                browse,
+                longTitleProject);
+            var normalPreviewLayer = FindVisualDescendants<Grid>(normalCard)
+                .First(candidate => candidate.Name == "BrowsePreviewLayer");
+            focusWindow.SetReducedMotion(false);
+            assert(normalCard.Focus() && normalCard.IsKeyboardFocusWithin,
+                "The normal-motion fixture lost real WPF keyboard focus on its Browse card.");
+            PumpLayout(focusWindow);
+            var normalTransform = (ScaleTransform)normalPreviewLayer.RenderTransform;
+            assert(Math.Abs(normalTransform.ScaleX - 1.02) < 0.001
+                   && Math.Abs(normalTransform.ScaleY - 1.02) < 0.001,
+                "Normal motion did not retain the accepted focused image-only scale of exactly 1.02.");
+            var normalBrowseRoot = WpfElementFinder.FindByName<FrameworkElement>(
+                focusWindow,
+                "BrowseView")!;
+            VerifyNoActiveBrowseAnimations(
+                normalBrowseRoot,
+                "normal-motion/1600",
+                assert);
+            Console.WriteLine(
+                "TASK7_NORMAL_MOTION width=1600 image_scale=1.02 other_active_clocks=0");
+            focusWindow.SetReducedMotion(true);
+            PumpLayout(focusWindow);
+            var restoredTransform = (ScaleTransform)normalPreviewLayer.RenderTransform;
+            assert(Math.Abs(restoredTransform.ScaleX - 1.0) < 0.001
+                   && Math.Abs(restoredTransform.ScaleY - 1.0) < 0.001,
+                "Returning to reduced motion did not restore the image layer to exact scale 1.0.");
         }
         finally
         {
@@ -1817,6 +4809,550 @@ internal static class ProjectBrowserUiRegressionTests
                 focusWindow.DataContext = null;
                 focusWindow.Close();
                 PumpLayout(window);
+            }
+
+            browse.CloseDetails();
+            browse.TryClearSelection();
+        }
+    }
+
+    private static void VerifyStaticReadyThumbnail(
+        Window window,
+        Button card,
+        BrowseProjectViewModel project,
+        long expectedGeneration,
+        double width,
+        Action<bool, string> assert)
+    {
+        var preview = FindVisualDescendants<ThumbnailPreviewImage>(card).Single();
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while ((preview.ThumbnailStatus is null || preview.Source is null)
+               && DateTime.UtcNow < deadline)
+        {
+            PumpLayout(window);
+            Thread.Sleep(5);
+        }
+
+        assert(preview.ThumbnailStatus == PreviewThumbnailStatus.Ready
+               && preview.Source is System.Windows.Media.Imaging.BitmapSource { IsFrozen: true }
+               && string.Equals(preview.ProjectKey, project.ProjectKey, StringComparison.Ordinal)
+               && string.Equals(preview.SourcePath, project.PreviewPath, StringComparison.Ordinal)
+               && preview.SnapshotGeneration == expectedGeneration,
+            $"High Contrast/reduced-motion preview was not the static frozen image for its exact "
+            + $"ProjectKey/source/generation at {width:0} DIP: "
+            + $"status={preview.ThumbnailStatus}; source={preview.Source?.GetType().Name ?? "null"}; "
+            + $"frozen={(preview.Source as System.Windows.Media.Imaging.BitmapSource)?.IsFrozen}; "
+            + $"key={preview.ProjectKey}/{project.ProjectKey}; "
+            + $"path_match={string.Equals(preview.SourcePath, project.PreviewPath, StringComparison.Ordinal)}; "
+            + $"generation={preview.SnapshotGeneration}/{expectedGeneration}.");
+    }
+
+    private static void VerifyFocusedHighContrastSurface(
+        Window window,
+        FrameworkElement browseRoot,
+        FrameworkElement focusTarget,
+        string surface,
+        double width,
+        Action<bool, string> assert)
+    {
+        var alwaysShowFocusVisual = typeof(KeyboardNavigation).GetProperty(
+            "AlwaysShowFocusVisual",
+            BindingFlags.Static | BindingFlags.NonPublic);
+        assert(alwaysShowFocusVisual is not null,
+            "The Task 7 live focus gate could not reach WPF's keyboard focus-visual policy.");
+        var previousAlwaysShow = alwaysShowFocusVisual?.GetValue(null) as bool? ?? false;
+        alwaysShowFocusVisual?.SetValue(null, true);
+        try
+        {
+            assert(focusTarget.IsVisible
+                   && focusTarget.IsEnabled
+                   && focusTarget.Focusable
+                   && focusTarget.Focus()
+                   && focusTarget.IsKeyboardFocusWithin,
+                $"High Contrast could not establish real keyboard focus on the {surface} surface "
+                + $"at {width:0} DIP: {DescribeFocusElement(focusTarget)}.");
+            PumpLayout(window);
+            var expectedIdentity = CaptureFocusIdentity(focusTarget);
+            _ = focusTarget.MoveFocus(
+                new TraversalRequest(FocusNavigationDirection.Previous));
+            PumpLayout(window);
+            var predecessor = Keyboard.FocusedElement as UIElement;
+            _ = predecessor?.MoveFocus(
+                new TraversalRequest(FocusNavigationDirection.Next));
+            PumpLayout(window);
+            var actual = Keyboard.FocusedElement as FrameworkElement;
+            assert(actual is not null
+                   && CaptureFocusIdentity(actual) == expectedIdentity,
+                $"High Contrast keyboard focus did not return through the live {surface} Tab path "
+                + $"at {width:0} DIP: expected={expectedIdentity}; actual="
+                + $"{DescribeFocusElement(Keyboard.FocusedElement as UIElement)}.");
+            VerifyFocusedApplicationVisual(actual!, surface, width, assert);
+            VerifyBrowseHighContrastBrushes(browseRoot, surface, width, assert);
+            VerifyNoActiveBrowseAnimations(browseRoot, $"{surface}/{width:0}", assert);
+        }
+        finally
+        {
+            alwaysShowFocusVisual?.SetValue(null, previousAlwaysShow);
+        }
+    }
+
+    private static void VerifyFocusedApplicationVisual(
+        FrameworkElement focusTarget,
+        string surface,
+        double width,
+        Action<bool, string> assert)
+    {
+        var focusStyle = focusTarget.FocusVisualStyle;
+        var applicationStyle = Application.Current.Resources["FocusVisual"] as Style;
+        if (focusStyle is null)
+        {
+            var internalRings = FindVisualDescendants<Border>(focusTarget)
+                .Where(border => border.IsVisible
+                                 && border.Opacity > 0
+                                 && border.ActualWidth > 0
+                                 && border.ActualHeight > 0
+                                 && border.Name is "InputFocusOuter" or "InputFocusInner")
+                .ToArray();
+            assert(internalRings.Length == 2
+                   && internalRings.Any(border => ReferenceEquals(
+                       border.BorderBrush,
+                       SystemColors.WindowTextBrush))
+                   && internalRings.Any(border => ReferenceEquals(
+                       border.BorderBrush,
+                       SystemColors.HighlightBrush)),
+                $"High Contrast {surface} did not render its two app-owned internal focus rings "
+                + $"at {width:0} DIP: rings={internalRings.Length}; "
+                + $"brushes=[{string.Join(';', internalRings.Select(border => border.BorderBrush))}].");
+            return;
+        }
+
+        var adorners = AdornerLayer.GetAdornerLayer(focusTarget)
+                           ?.GetAdorners(focusTarget)
+                       ?? [];
+        var borders = adorners.SelectMany(FindVisualDescendants<Border>)
+            .Where(border => border.IsVisible
+                             && border.ActualWidth > 0
+                             && border.ActualHeight > 0
+                             && (border.BorderThickness.Left > 0
+                                 || border.BorderThickness.Top > 0
+                                 || border.BorderThickness.Right > 0
+                                 || border.BorderThickness.Bottom > 0))
+            .ToArray();
+        var cardChrome = focusTarget is Button { Name: "BrowseProjectCardButton" }
+            ? FindVisualDescendants<Border>(focusTarget)
+                .SingleOrDefault(border => border.Name == "BrowseCardChrome")
+            : null;
+        assert(ReferenceEquals(focusStyle, applicationStyle)
+               && borders.Length == 2
+               && borders.Any(border => ReferenceEquals(
+                   border.BorderBrush,
+                   SystemColors.WindowTextBrush))
+               && borders.Any(border => ReferenceEquals(
+                   border.BorderBrush,
+                   SystemColors.HighlightBrush))
+               && (cardChrome is null
+                   || cardChrome.IsVisible
+                   && cardChrome.BorderThickness.Left >= 2
+                   && ReferenceEquals(cardChrome.BorderBrush, SystemColors.HighlightBrush)),
+            $"High Contrast {surface} did not use the live app FocusVisual's two SystemColors rings "
+            + $"at {width:0} DIP: style={ReferenceEquals(focusStyle, applicationStyle)}; "
+            + $"adorners={adorners.Length}; borders={borders.Length}; "
+            + $"brushes=[{string.Join(';', borders.Select(border => border.BorderBrush))}]; "
+            + $"card_chrome={cardChrome?.BorderBrush}/{cardChrome?.BorderThickness}.");
+    }
+
+    private static void VerifyReducedMotionTrayLifecycle(
+        Window window,
+        FrameworkElement browseRoot,
+        BrowsePageViewModel browse,
+        BrowseProjectViewModel selectedProject,
+        Action<bool, string> assert)
+    {
+        var traySlot = WpfElementFinder.FindByName<Border>(
+            window,
+            "BrowseProcessingTraySlot")!;
+        var selectionTray = WpfElementFinder.FindByName<FrameworkElement>(
+            window,
+            "BrowseSelectionTray")!;
+
+        assert(browse.TryClearSelection(),
+            "The reduced-motion tray lifecycle could not establish its hidden baseline.");
+        PumpLayout(window);
+        assert(!selectionTray.IsVisible
+               && Math.Abs(traySlot.Opacity) < 0.001
+               && !traySlot.IsHitTestVisible,
+            "Reduced motion did not make the cleared tray instantly hidden and inert.");
+        VerifyNoActiveBrowseAnimations(browseRoot, "tray-lifecycle/hidden-before", assert);
+
+        assert(browse.TrySetSelection(selectedProject, true),
+            "The reduced-motion tray lifecycle could not select its live project.");
+        PumpLayout(window);
+        assert(selectionTray.IsVisible
+               && Math.Abs(traySlot.Opacity - 1) < 0.001
+               && traySlot.IsHitTestVisible,
+            "Reduced motion did not make the selected tray instantly visible and interactive.");
+        VerifyNoActiveBrowseAnimations(browseRoot, "tray-lifecycle/visible", assert);
+
+        assert(browse.TryClearSelection(),
+            "The reduced-motion tray lifecycle could not clear its live selection.");
+        PumpLayout(window);
+        assert(!selectionTray.IsVisible
+               && Math.Abs(traySlot.Opacity) < 0.001
+               && !traySlot.IsHitTestVisible,
+            "Reduced motion did not make the tray instantly hidden after clear.");
+        VerifyNoActiveBrowseAnimations(browseRoot, "tray-lifecycle/hidden-after", assert);
+
+        assert(browse.TrySetSelection(selectedProject, true),
+            "The reduced-motion tray lifecycle could not restore the selected fixture.");
+        PumpLayout(window);
+    }
+
+    private static void VerifyBrowseHighContrastBrushes(
+        FrameworkElement browseRoot,
+        string surface,
+        double width,
+        Action<bool, string> assert)
+    {
+        var approved = new Brush[]
+        {
+            SystemColors.WindowBrush,
+            SystemColors.WindowTextBrush,
+            SystemColors.HighlightBrush,
+            SystemColors.HighlightTextBrush,
+            SystemColors.GrayTextBrush
+        };
+        var inspected = new List<(
+            string Owner,
+            string Property,
+            Brush Brush,
+            BaseValueSource Source)>();
+        foreach (var candidate in new DependencyObject[] { browseRoot }
+                     .Concat(FindRenderedVisualDescendants(browseRoot, browseRoot)))
+        {
+            if (candidate is not FrameworkElement framework
+                || !HasPositiveVisualIntersection(framework, browseRoot))
+            {
+                continue;
+            }
+
+            var owner = $"{candidate.GetType().Name}:{framework.Name}";
+            void Add(string property, DependencyProperty dependencyProperty, Brush? brush)
+            {
+                var valueSource = DependencyPropertyHelper.GetValueSource(
+                    candidate,
+                    dependencyProperty).BaseValueSource;
+                if (brush is not null
+                    && IsNonTransparentBrush(brush)
+                    && IsApplicationOwnedBrushValue(
+                        candidate,
+                        dependencyProperty,
+                        valueSource))
+                {
+                    inspected.Add((owner, property, brush, valueSource));
+                }
+            }
+
+            switch (candidate)
+            {
+                case Control control:
+                    Add(
+                        nameof(Control.Background),
+                        Control.BackgroundProperty,
+                        control.Background);
+                    if (control is TextBox
+                        or ComboBox
+                        || control is ContentControl { Content: string })
+                    {
+                        Add(
+                            nameof(Control.Foreground),
+                            Control.ForegroundProperty,
+                            control.Foreground);
+                    }
+
+                    if (control.BorderThickness.Left > 0
+                        || control.BorderThickness.Top > 0
+                        || control.BorderThickness.Right > 0
+                        || control.BorderThickness.Bottom > 0)
+                    {
+                        Add(
+                            nameof(Control.BorderBrush),
+                            Control.BorderBrushProperty,
+                            control.BorderBrush);
+                    }
+                    break;
+                case TextBlock text:
+                    Add(
+                        nameof(TextBlock.Foreground),
+                        TextBlock.ForegroundProperty,
+                        text.Foreground);
+                    break;
+                case Border border:
+                    Add(
+                        nameof(Border.Background),
+                        Border.BackgroundProperty,
+                        border.Background);
+                    if (border.BorderThickness.Left > 0
+                        || border.BorderThickness.Top > 0
+                        || border.BorderThickness.Right > 0
+                        || border.BorderThickness.Bottom > 0)
+                    {
+                        Add(
+                            nameof(Border.BorderBrush),
+                            Border.BorderBrushProperty,
+                            border.BorderBrush);
+                    }
+                    break;
+                case Panel panel:
+                    Add(
+                        nameof(Panel.Background),
+                        Panel.BackgroundProperty,
+                        panel.Background);
+                    break;
+                case System.Windows.Shapes.Shape shape:
+                    Add(
+                        nameof(System.Windows.Shapes.Shape.Fill),
+                        System.Windows.Shapes.Shape.FillProperty,
+                        shape.Fill);
+                    if (shape.StrokeThickness > 0)
+                    {
+                        Add(
+                            nameof(System.Windows.Shapes.Shape.Stroke),
+                            System.Windows.Shapes.Shape.StrokeProperty,
+                            shape.Stroke);
+                    }
+                    break;
+            }
+        }
+
+        var failures = inspected.Where(item =>
+                !approved.Any(brush => ReferenceEquals(brush, item.Brush)))
+            .Take(20)
+            .Select(item =>
+                $"{item.Owner}.{item.Property}={item.Brush.GetType().Name}/{item.Brush}/{item.Source}")
+            .ToArray();
+        assert(inspected.Count > 0 && failures.Length == 0,
+            $"High Contrast {surface} traversal found a non-SystemColors live Browse brush at "
+            + $"{width:0} DIP: inspected={inspected.Count}; failures=[{string.Join("; ", failures)}].");
+    }
+
+    private static bool IsApplicationOwnedBrushValue(
+        DependencyObject owner,
+        DependencyProperty dependencyProperty,
+        BaseValueSource source)
+    {
+        if (source is BaseValueSource.DefaultStyle
+            or BaseValueSource.DefaultStyleTrigger
+            or BaseValueSource.Default)
+        {
+            return false;
+        }
+
+        if (source == BaseValueSource.Inherited)
+        {
+            for (var ancestor = VisualTreeHelper.GetParent(owner);
+                 ancestor is not null;
+                 ancestor = VisualTreeHelper.GetParent(ancestor))
+            {
+                var ancestorSource = DependencyPropertyHelper.GetValueSource(
+                    ancestor,
+                    dependencyProperty).BaseValueSource;
+                if (ancestorSource == BaseValueSource.Inherited)
+                {
+                    continue;
+                }
+
+                return IsApplicationOwnedBrushValue(
+                    ancestor,
+                    dependencyProperty,
+                    ancestorSource);
+            }
+
+            return false;
+        }
+
+        if (source is not (BaseValueSource.ParentTemplate
+            or BaseValueSource.ParentTemplateTrigger)
+            || owner is not FrameworkElement { TemplatedParent: Control templateOwner })
+        {
+            return true;
+        }
+
+        var templateSource = DependencyPropertyHelper.GetValueSource(
+            templateOwner,
+            Control.TemplateProperty).BaseValueSource;
+        return templateSource is not (BaseValueSource.DefaultStyle
+            or BaseValueSource.DefaultStyleTrigger
+            or BaseValueSource.Default);
+    }
+
+    private static bool IsNonTransparentBrush(Brush brush)
+    {
+        if (brush.Opacity <= 0)
+        {
+            return false;
+        }
+
+        return brush switch
+        {
+            SolidColorBrush solid => solid.Color.A > 0,
+            GradientBrush gradient => gradient.GradientStops.Any(stop => stop.Color.A > 0),
+            _ => true
+        };
+    }
+
+    private static void VerifyNoActiveBrowseAnimations(
+        FrameworkElement root,
+        string surface,
+        Action<bool, string> assert)
+    {
+        var failures = new List<string>();
+        foreach (var candidate in new DependencyObject[] { root }
+                     .Concat(FindRenderedVisualDescendants(root, root)))
+        {
+            if (candidate is not FrameworkElement framework
+                || !HasPositiveVisualIntersection(framework, root))
+            {
+                continue;
+            }
+
+            var owner = $"{candidate.GetType().Name}:{framework.Name}";
+            if (candidate is UIElement { HasAnimatedProperties: true }
+                && candidate.GetType().Name != "CaretSubElement")
+            {
+                failures.Add($"{owner}.UIElement");
+            }
+
+            if (candidate is FrameworkElement element)
+            {
+                AddAnimated(failures, owner, nameof(FrameworkElement.RenderTransform), element.RenderTransform);
+                AddAnimated(failures, owner, nameof(FrameworkElement.LayoutTransform), element.LayoutTransform);
+                AddAnimated(failures, owner, nameof(FrameworkElement.Effect), element.Effect);
+            }
+
+            switch (candidate)
+            {
+                case Control control:
+                    AddAnimated(failures, owner, nameof(Control.Background), control.Background);
+                    AddAnimated(failures, owner, nameof(Control.Foreground), control.Foreground);
+                    AddAnimated(failures, owner, nameof(Control.BorderBrush), control.BorderBrush);
+                    break;
+                case TextBlock text:
+                    AddAnimated(failures, owner, nameof(TextBlock.Foreground), text.Foreground);
+                    break;
+                case Border border:
+                    AddAnimated(failures, owner, nameof(Border.Background), border.Background);
+                    AddAnimated(failures, owner, nameof(Border.BorderBrush), border.BorderBrush);
+                    break;
+                case Panel panel:
+                    AddAnimated(failures, owner, nameof(Panel.Background), panel.Background);
+                    break;
+                case System.Windows.Shapes.Shape shape:
+                    AddAnimated(failures, owner, nameof(System.Windows.Shapes.Shape.Fill), shape.Fill);
+                    AddAnimated(failures, owner, nameof(System.Windows.Shapes.Shape.Stroke), shape.Stroke);
+                    break;
+                case Image image:
+                    AddAnimated(failures, owner, nameof(Image.Source), image.Source as Animatable);
+                    break;
+            }
+        }
+
+        assert(root.IsVisible
+               && root.ActualWidth > 0
+               && root.ActualHeight > 0
+               && Math.Abs(root.Opacity - 1) < 0.001
+               && failures.Count == 0,
+            $"Reduced motion left an active Browse clock/transition on {surface}: "
+            + $"root={root.Visibility}/{root.Opacity:0.###}/{root.ActualWidth:0.###}x{root.ActualHeight:0.###}; "
+            + $"failures=[{string.Join("; ", failures.Take(20))}].");
+    }
+
+    private static void AddAnimated(
+        ICollection<string> failures,
+        string owner,
+        string property,
+        Animatable? value)
+    {
+        if (value?.HasAnimatedProperties == true)
+        {
+            failures.Add($"{owner}.{property}");
+        }
+    }
+
+    private static bool HasPositiveVisualIntersection(
+        FrameworkElement element,
+        FrameworkElement viewport)
+    {
+        if (!element.IsVisible
+            || element.Opacity <= 0
+            || element.ActualWidth <= 0
+            || element.ActualHeight <= 0
+            || viewport.ActualWidth <= 0
+            || viewport.ActualHeight <= 0)
+        {
+            return false;
+        }
+
+        try
+        {
+            var bounds = ReferenceEquals(element, viewport)
+                ? new Rect(0, 0, element.ActualWidth, element.ActualHeight)
+                : element.TransformToAncestor(viewport).TransformBounds(
+                    new Rect(0, 0, element.ActualWidth, element.ActualHeight));
+            bounds.Intersect(new Rect(0, 0, viewport.ActualWidth, viewport.ActualHeight));
+            for (DependencyObject? current = element;
+                 !bounds.IsEmpty && current is not null && !ReferenceEquals(current, viewport);
+                 current = VisualTreeHelper.GetParent(current))
+            {
+                if (current is not FrameworkElement ancestor
+                    || current is not UIElement clipOwner
+                    || (!clipOwner.ClipToBounds
+                        && clipOwner.Clip is null
+                        && current is not ScrollContentPresenter
+                        && current is not ScrollViewer))
+                {
+                    continue;
+                }
+
+                var localClip = new Rect(
+                    0,
+                    0,
+                    ancestor.ActualWidth,
+                    ancestor.ActualHeight);
+                if (clipOwner.Clip is { } geometry)
+                {
+                    localClip.Intersect(geometry.Bounds);
+                }
+
+                var ancestorClip = ancestor.TransformToAncestor(viewport)
+                    .TransformBounds(localClip);
+                bounds.Intersect(ancestorClip);
+            }
+
+            return !bounds.IsEmpty && bounds.Width > 0 && bounds.Height > 0;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    private static IEnumerable<DependencyObject> FindRenderedVisualDescendants(
+        DependencyObject root,
+        FrameworkElement viewport)
+    {
+        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(root); index++)
+        {
+            var child = VisualTreeHelper.GetChild(root, index);
+            if (child is FrameworkElement framework
+                && !HasPositiveVisualIntersection(framework, viewport))
+            {
+                continue;
+            }
+
+            yield return child;
+            foreach (var descendant in FindRenderedVisualDescendants(child, viewport))
+            {
+                yield return descendant;
             }
         }
     }
@@ -1851,6 +5387,21 @@ internal static class ProjectBrowserUiRegressionTests
                 ?.ParentBinding.Path?.Path == nameof(BrowseProjectViewModel.WarningCount));
         var processability = textBlocks.First(text =>
             text.Name == "BrowseProjectProcessabilityText");
+        var minimumSemanticFontSize = Application.Current.Resources["FontSizeMicro"] is double token
+            ? token
+            : 10d;
+        var semanticText = new[] { title, workshopId, type, warning, processability };
+        Console.WriteLine(
+            $"BROWSE_TYPOGRAPHY width={width:0} hc={highContrast} minimum_dip={minimumSemanticFontSize:0.###} "
+            + $"title={title.FontSize:0.###} id={workshopId.FontSize:0.###} "
+            + $"type={type.FontSize:0.###} warning={warning.FontSize:0.###} "
+            + $"process={processability.FontSize:0.###}");
+        assert(semanticText.All(text => text.FontSize >= minimumSemanticFontSize),
+            $"Browse visible semantic card text fell below the {minimumSemanticFontSize:0.###}-DIP "
+            + $"FontSizeMicro token at {width:0} DIP (HC={highContrast}): "
+            + $"title={title.FontSize:0.###}, id={workshopId.FontSize:0.###}, "
+            + $"type={type.FontSize:0.###}, warning={warning.FontSize:0.###}, "
+            + $"processability={processability.FontSize:0.###}.");
         var metadata = FindVisualAncestor<Border>(processability)
                        ?? throw new InvalidOperationException("Browse metadata Border was not realized.");
 
@@ -1877,6 +5428,7 @@ internal static class ProjectBrowserUiRegressionTests
         var rowsDoNotOverlap = titleBounds.Bottom <= workshopIdBounds.Top + tolerance
                                && workshopIdBounds.Bottom <= typeBounds.Top + tolerance
                                && typeBounds.Bottom <= processabilityBounds.Top + tolerance;
+        var typeAndWarningDoNotOverlap = typeBounds.Right <= warningBounds.Left + tolerance;
         var previewRecognitionHeight = Math.Max(0, metadataBounds.Top);
 
         Console.WriteLine(
@@ -1884,7 +5436,8 @@ internal static class ProjectBrowserUiRegressionTests
             + $"metadata={metadataBounds.Left:0.###},{metadataBounds.Top:0.###},{metadataBounds.Width:0.###},{metadataBounds.Height:0.###} "
             + $"preview={previewRecognitionHeight:0.###} title={titleBounds} id={workshopIdBounds} "
             + $"type={typeBounds} warning={warningBounds} "
-            + $"process={processabilityBounds}");
+            + $"process={processabilityBounds} inside={allTextInside} rows={rowsDoNotOverlap} "
+            + $"type_warning_horizontal={typeAndWarningDoNotOverlap}");
         assert(metadataBounds.Left >= -tolerance
                && metadataBounds.Top >= -tolerance
                && metadataBounds.Right <= card.ActualWidth + tolerance
@@ -1894,64 +5447,1427 @@ internal static class ProjectBrowserUiRegressionTests
                && workshopId.Visibility == Visibility.Visible
                && workshopId.Text.Contains(project.WorkshopId, StringComparison.Ordinal)
                && allTextInside
-               && rowsDoNotOverlap,
+               && rowsDoNotOverlap
+               && typeAndWarningDoNotOverlap,
             $"Browse metadata exceeded or overlapped its real card bounds at {width:0} DIP "
             + $"(HC={highContrast}). card={card.ActualWidth:0.###}x{card.ActualHeight:0.###}; "
             + $"metadata={metadataBounds}; preview={previewRecognitionHeight:0.###}; "
             + $"title={titleBounds}; id={workshopIdBounds}/{workshopId.Text}; "
             + $"type={typeBounds}; warning={warningBounds}; "
-            + $"process={processabilityBounds}.");
+            + $"process={processabilityBounds}; inside={allTextInside}; rows={rowsDoNotOverlap}; "
+            + $"type/warning={typeAndWarningDoNotOverlap}.");
     }
 
     private static Rect BoundsRelativeTo(FrameworkElement element, Visual ancestor)
         => element.TransformToAncestor(ancestor).TransformBounds(
             new Rect(0, 0, element.ActualWidth, element.ActualHeight));
 
+    private static void VerifyRealizedBrowseRowsAreViewportConstrained(
+        Window window,
+        ListBox grid,
+        Action<bool, string> assert)
+    {
+        var scrollViewer = FindVisualDescendants<ScrollViewer>(grid).First();
+        var presenter = FindVisualDescendants<ScrollContentPresenter>(scrollViewer)
+            .FirstOrDefault();
+        var viewport = (Visual?)presenter ?? scrollViewer;
+        var viewportWidth = presenter?.ActualWidth ?? scrollViewer.ActualWidth;
+        var rows = GetRealizedRowContainers(grid);
+        assert(rows.Count > 0,
+            "The Browse width fixture did not realize any row containers.");
+
+        var rowFailures = new List<string>();
+        foreach (var row in rows)
+        {
+            var rowBounds = BoundsRelativeTo(row, viewport);
+            var panel = FindVisualDescendants<UniformGrid>(row).Single();
+            var cardBounds = FindCardButtons(row)
+                .Where(card => card.IsVisible && card.ActualWidth > 0)
+                .Select(card => BoundsRelativeTo(card, viewport))
+                .OrderBy(bounds => bounds.Left)
+                .ToArray();
+            var minimumGap = cardBounds.Length < 2
+                ? double.PositiveInfinity
+                : cardBounds.Zip(cardBounds.Skip(1), (left, right) => right.Left - left.Right)
+                    .Min();
+            if (row.ActualWidth > viewportWidth + 0.75
+                || panel.ActualWidth > viewportWidth + 0.75
+                || rowBounds.Left < -0.75
+                || rowBounds.Right > viewportWidth + 0.75
+                || cardBounds.Any(bounds => bounds.Left < -0.75
+                                            || bounds.Right > viewportWidth + 0.75)
+                || minimumGap < 7.99)
+            {
+                rowFailures.Add(
+                    $"{grid.ItemContainerGenerator.IndexFromContainer(row)}:"
+                    + $"row={row.ActualWidth:0.###}/{rowBounds.Left:0.###}-{rowBounds.Right:0.###},"
+                    + $"panel={panel.ActualWidth:0.###},cards=[{string.Join(';', cardBounds.Select(bounds =>
+                        $"{bounds.Left:0.###}-{bounds.Right:0.###}"))}],gap={minimumGap:0.###}");
+            }
+        }
+
+        assert(rowFailures.Count == 0,
+            $"Realized Browse rows escaped the {viewportWidth:0.###}-DIP ScrollContentPresenter width: "
+            + string.Join(" | ", rowFailures));
+        var panels = rows.SelectMany(row => FindVisualDescendants<UniformGrid>(row)).ToArray();
+        var cards = rows.SelectMany(FindCardButtons)
+            .Where(card => card.IsVisible && card.ActualWidth > 0)
+            .ToArray();
+        Console.WriteLine(
+            $"BROWSE_ROW_CONTAINMENT width={window.ActualWidth:0.###} "
+            + $"viewport={viewportWidth:0.###} "
+            + $"rows={rows.Min(row => row.ActualWidth):0.###}-{rows.Max(row => row.ActualWidth):0.###} "
+            + $"panels={panels.Min(panel => panel.ActualWidth):0.###}-{panels.Max(panel => panel.ActualWidth):0.###} "
+            + $"cards={cards.Min(card => card.ActualWidth):0.###}-{cards.Max(card => card.ActualWidth):0.###} "
+            + $"columns={(panels.Length == 0 ? 0 : panels[0].Columns)}");
+    }
+
+    private static void VerifyTerminalPreviewSourceDoesNotDriveRowGeometry(
+        Window window,
+        ListBox grid,
+        Action<bool, string> assert)
+    {
+        var terminalImages = FindVisualDescendants<ThumbnailPreviewImage>(grid)
+            .Where(image => image.ThumbnailStatus == PreviewThumbnailStatus.Ready
+                            && image.Source is System.Windows.Media.Imaging.BitmapSource
+                            {
+                                IsFrozen: true
+            })
+            .ToDictionary(image => image, image => image.Source);
+        var ready = CaptureBrowseHorizontalGeometry(grid);
+        assert(ready.RealizedRows > 0 && terminalImages.Count > 0,
+            "The Browse Source geometry fixture did not realize terminal frozen previews.");
+        BrowseHorizontalGeometry withoutSources;
+        try
+        {
+            foreach (var image in terminalImages.Keys)
+            {
+                image.Source = null;
+            }
+
+            PumpLayout(window);
+            withoutSources = CaptureBrowseHorizontalGeometry(grid);
+        }
+        finally
+        {
+            foreach (var (image, source) in terminalImages)
+            {
+                image.Source = source;
+            }
+
+            PumpLayout(window);
+        }
+
+        var restored = CaptureBrowseHorizontalGeometry(grid);
+        assert(BrowseHorizontalGeometryIsStable(ready, withoutSources)
+               && BrowseHorizontalGeometryIsStable(restored, withoutSources),
+            "Terminal preview Source changed Browse row or scroll extent geometry. "
+            + $"ready=[{ready}]; null=[{withoutSources}]; restored=[{restored}].");
+    }
+
+    private static BrowseHorizontalGeometry CaptureBrowseHorizontalGeometry(ListBox grid)
+    {
+        var scrollViewer = FindVisualDescendants<ScrollViewer>(grid).First();
+        var presenter = FindVisualDescendants<ScrollContentPresenter>(scrollViewer)
+            .FirstOrDefault();
+        var rows = GetRealizedRowContainers(grid);
+        var rowWidths = rows.Select(row => row.ActualWidth).ToArray();
+        var itemPresenterWidths = rows
+            .Select(row => VisualTreeHelper.GetChildrenCount(row) == 1
+                ? VisualTreeHelper.GetChild(row, 0) as ContentPresenter
+                : null)
+            .Where(itemPresenter => itemPresenter is not null)
+            .Select(itemPresenter => itemPresenter!.ActualWidth)
+            .ToArray();
+        var panelWidths = rows
+            .SelectMany(row => FindVisualDescendants<UniformGrid>(row))
+            .Select(panel => panel.ActualWidth)
+            .ToArray();
+        var cardWidths = rows
+            .SelectMany(FindCardButtons)
+            .Where(card => card.IsVisible && card.ActualWidth > 0)
+            .Select(card => card.ActualWidth)
+            .ToArray();
+        return new BrowseHorizontalGeometry(
+            presenter?.ActualWidth ?? scrollViewer.ActualWidth,
+            scrollViewer.ExtentWidth,
+            scrollViewer.ExtentHeight,
+            rowWidths.DefaultIfEmpty(0).Max(),
+            itemPresenterWidths.DefaultIfEmpty(0).Max(),
+            panelWidths.DefaultIfEmpty(0).Max(),
+            cardWidths.DefaultIfEmpty(0).Max(),
+            rows.Count,
+            scrollViewer.ComputedVerticalScrollBarVisibility == Visibility.Visible);
+    }
+
+    private static bool BrowseHorizontalGeometryIsStable(
+        BrowseHorizontalGeometry left,
+        BrowseHorizontalGeometry right)
+        => Math.Abs(left.ViewportWidth - right.ViewportWidth) < 0.75
+           && Math.Abs(left.ExtentHeight - right.ExtentHeight) < 0.75
+           && Math.Abs(left.MaximumRowWidth - right.MaximumRowWidth) < 0.75
+           && Math.Abs(left.MaximumItemPresenterWidth - right.MaximumItemPresenterWidth) < 0.75
+           && Math.Abs(left.MaximumCardWidth - right.MaximumCardWidth) < 0.75
+           && left.VerticalScrollBarVisible == right.VerticalScrollBarVisible;
+
+    private readonly record struct BrowseHorizontalGeometry(
+        double ViewportWidth,
+        double ExtentWidth,
+        double ExtentHeight,
+        double MaximumRowWidth,
+        double MaximumItemPresenterWidth,
+        double MaximumPanelWidth,
+        double MaximumCardWidth,
+        int RealizedRows,
+        bool VerticalScrollBarVisible);
+
+    private static void VerifyRealBrowseReflowPerformance(
+        WallpaperField.MainWindow window,
+        ShellViewModel shell,
+        Action<bool, string> assert)
+    {
+        const double budgetMilliseconds = 200;
+        var browse = shell.BrowsePageViewModel;
+        var grid = WpfElementFinder.FindByName<ListBox>(window, "BrowseProjectGrid")!;
+        var browseView = FindVisualDescendants<WallpaperField.Views.BrowsePageView>(window)
+            .Single(view => view.IsVisible);
+        var pendingAnchorField = typeof(WallpaperField.Views.BrowsePageView).GetField(
+            "_pendingViewportAnchor", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var anchorRestoreField = typeof(WallpaperField.Views.BrowsePageView).GetField(
+            "_viewportAnchorRestorePending", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var targets = new[] { 3, 4, 5, 6, 3 };
+
+        window.Width = 1600;
+        window.Height = 1000;
+        PumpLayout(window);
+        browse.SetColumnCount(3);
+        PumpLayout(window);
+        browse.SetColumnCount(6);
+        PumpLayout(window);
+        assert(browse.ColumnCount == 6,
+            "The real Browse reflow warm-up did not restore its 6-column baseline.");
+
+        var samples = new List<double>(targets.Length);
+        var transitions = new List<string>(targets.Length);
+        foreach (var targetColumns in targets)
+        {
+            var previousColumns = browse.ColumnCount;
+            var previousFirstRow = browse.Rows.FirstOrDefault();
+            var beforeContainers = GetRealizedRowContainers(grid).ToArray();
+            var beforeCards = FindCardButtons(grid).ToArray();
+            var beforeThumbnails = FindVisualDescendants<ThumbnailPreviewImage>(grid).ToArray();
+            var beforeFocusedElement = Keyboard.FocusedElement;
+            var beforePendingAnchor = pendingAnchorField.GetValue(browseView);
+            var beforeAnchorRestore = anchorRestoreField.GetValue(browseView);
+            var stopwatch = Stopwatch.StartNew();
+            browse.SetColumnCount(targetColumns);
+            window.UpdateLayout();
+            window.Dispatcher.Invoke(() => { }, DispatcherPriority.DataBind);
+            window.UpdateLayout();
+            window.Dispatcher.Invoke(() => { }, DispatcherPriority.Render);
+            window.Dispatcher.Invoke(() => { }, DispatcherPriority.ContextIdle);
+            window.UpdateLayout();
+            stopwatch.Stop();
+
+            var expectedRows = (RuntimeProjectCount + targetColumns - 1) / targetColumns;
+            var currentFirstRow = browse.Rows.FirstOrDefault();
+            var realizedRows = GetRealizedRowContainers(grid).Count;
+            var realizedCards = FindCardButtons(grid).Count();
+            var realizedPanels = FindVisualDescendants<UniformGrid>(grid).ToArray();
+            var flattenedKeys = browse.Rows
+                .SelectMany(row => row.Projects)
+                .Where(project => project is not null)
+                .Select(project => project!.ProjectKey)
+                .ToArray();
+            var expectedEmptySlots = expectedRows * targetColumns - RuntimeProjectCount;
+            var afterContainers = GetRealizedRowContainers(grid).ToArray();
+            var afterCards = FindCardButtons(grid).ToArray();
+            var afterThumbnails = FindVisualDescendants<ThumbnailPreviewImage>(grid).ToArray();
+            var retainedRows = beforeContainers.Intersect(afterContainers).Count();
+            var retainedCards = beforeCards.Intersect(afterCards).Count();
+            var retainedThumbnails = beforeThumbnails.Intersect(afterThumbnails).Count();
+            var focusStable = ReferenceEquals(beforeFocusedElement, Keyboard.FocusedElement);
+            var anchorStable = ReferenceEquals(
+                                   beforePendingAnchor,
+                                   pendingAnchorField.GetValue(browseView))
+                               && Equals(
+                                   beforeAnchorRestore,
+                                   anchorRestoreField.GetValue(browseView));
+            assert(previousColumns != targetColumns
+                   && browse.ColumnCount == targetColumns
+                   && browse.Rows.Count == expectedRows
+                   && grid.Items.Count == expectedRows
+                   && currentFirstRow is not null
+                   && ReferenceEquals(previousFirstRow, currentFirstRow)
+                   && browse.Rows.All(row => row.Projects.Count == targetColumns)
+                   && browse.Rows[^1].Projects.Count(project => project is null)
+                       == expectedEmptySlots
+                   && flattenedKeys.SequenceEqual(
+                       browse.VisibleProjects.Select(project => project.ProjectKey))
+                   && realizedRows > 0
+                   && realizedCards > 0
+                   && realizedCards <= realizedRows * targetColumns
+                   && retainedRows > 0
+                   && retainedCards > 0
+                   && retainedThumbnails > 0
+                   && realizedPanels.Length > 0
+                   && realizedPanels.All(panel => panel.Columns == targetColumns)
+                   && focusStable
+                   && anchorStable,
+                $"The live {previousColumns}-to-{targetColumns}-column Browse reflow did not "
+                + "reuse its row/card/preview prefix and exactly regroup the 1,000-item projection "
+                + "before the WPF layout/render/idle boundary: "
+                + $"columns={browse.ColumnCount}; rows={browse.Rows.Count}/{expectedRows}; "
+                + $"row_reused={ReferenceEquals(previousFirstRow, currentFirstRow)}; "
+                + $"realized={realizedRows}x{targetColumns}/{realizedCards}; "
+                + $"retained={retainedRows}/{retainedCards}/{retainedThumbnails}; "
+                + $"empty_slots={expectedEmptySlots}; panels={realizedPanels.Length}; "
+                + $"focus_stable={focusStable}; anchor_stable={anchorStable}.");
+            samples.Add(stopwatch.Elapsed.TotalMilliseconds);
+            transitions.Add($"{previousColumns}>{targetColumns}@1600x1000");
+        }
+
+        var p95 = NearestRank95(samples);
+        var dpi = VisualTreeHelper.GetDpi(window);
+        Console.WriteLine(
+            "PERF_METRIC name=browse.grid.real_reflow_3_4_5_6 "
+            + "service=projection_rows_wpf_layout_render_contextidle "
+            + $"samples_ms=[{string.Join(',', samples.Select(value => value.ToString("0.###")))}] "
+            + $"p95_ms={p95:0.###} budget_ms={budgetMilliseconds:0} "
+            + $"result={(p95 <= budgetMilliseconds ? "PASS" : "FAIL")} "
+            + $"transitions=[{string.Join(',', transitions)}] fixture={RuntimeProjectCount} "
+            + $"dpi={dpi.PixelsPerInchX:0.##}x{dpi.PixelsPerInchY:0.##} "
+            + $"final_window={window.ActualWidth:0.##}x{window.ActualHeight:0.##}");
+        browse.SetColumnCount(6);
+        PumpLayout(window);
+        assert(samples.Count == 5 && p95 <= budgetMilliseconds,
+            $"Browse live 3/4/5/6 row-projection + WPF layout/render/ContextIdle p95 "
+            + $"{p95:0.###}ms exceeded {budgetMilliseconds:0}ms.");
+    }
+
     private static void VerifyBrowseScrollPerformance(
         WallpaperField.MainWindow window,
         Action<bool, string> assert)
     {
+        const int stepsPerDirection = 30;
+        const int roundCount = 5;
+        const double budgetMilliseconds = 33.3;
         window.Width = 1600;
         window.Height = 1000;
         PumpLayout(window);
         var grid = WpfElementFinder.FindByName<ListBox>(window, "BrowseProjectGrid")!;
+        var search = WpfElementFinder.FindByName<TextBox>(window, "BrowseSearchTextBox")!;
+        assert(search.Focus(),
+            "The Task 7 scroll fixture could not move focus out of the virtualized grid.");
+        PumpLayout(window);
+        assert(!grid.IsKeyboardFocusWithin,
+            "The Task 7 scroll fixture retained a focused off-screen card container.");
         var scrollViewer = FindVisualDescendants<ScrollViewer>(grid).First();
         scrollViewer.ScrollToHome();
         PumpLayout(window);
-        var scrollStep = Math.Max(48d, scrollViewer.ViewportHeight / 5d);
-        for (var index = 1; index <= 30; index++)
+
+        var scrollableHeight = scrollViewer.ScrollableHeight;
+        assert(scrollableHeight > 0 && grid.Items.Count > stepsPerDirection,
+            "The Task 7 Browse fixture did not expose a full-library virtualized scroll range.");
+        for (var index = 1; index <= stepsPerDirection; index++)
         {
-            scrollViewer.ScrollToVerticalOffset(
-                Math.Min(scrollViewer.ScrollableHeight, index * scrollStep));
+            scrollViewer.ScrollToVerticalOffset(scrollableHeight * index / stepsPerDirection);
             grid.UpdateLayout();
             window.Dispatcher.Invoke(() => { }, DispatcherPriority.Render);
         }
 
-        scrollViewer.ScrollToHome();
-        PumpLayout(window);
-        var samples = new List<double>();
-        for (var index = 1; index <= 30; index++)
+        for (var index = stepsPerDirection - 1; index >= 0; index--)
         {
-            var target = Math.Min(scrollViewer.ScrollableHeight, index * scrollStep);
-            var stopwatch = Stopwatch.StartNew();
-            scrollViewer.ScrollToVerticalOffset(target);
+            scrollViewer.ScrollToVerticalOffset(scrollableHeight * index / stepsPerDirection);
             grid.UpdateLayout();
             window.Dispatcher.Invoke(() => { }, DispatcherPriority.Render);
-            stopwatch.Stop();
-            samples.Add(stopwatch.Elapsed.TotalMilliseconds);
         }
 
-        var p95 = samples.OrderBy(value => value)
-            .ElementAt((int)Math.Ceiling(samples.Count * 0.95) - 1);
-        var realizedRows = FindVisualDescendants<ListBoxItem>(grid).Count();
+        var aggregate = new List<double>(roundCount * stepsPerDirection * 2);
+        var continuousRange = Math.Min(
+            scrollableHeight,
+            scrollViewer.ViewportHeight * 6d);
+        for (var round = 1; round <= roundCount; round++)
+        {
+            scrollViewer.ScrollToHome();
+            PumpLayout(window);
+            var samples = new List<double>(stepsPerDirection * 2);
+            for (var index = 1; index <= stepsPerDirection; index++)
+            {
+                samples.Add(MeasureScrollService(
+                    window,
+                    grid,
+                    scrollViewer,
+                    continuousRange * index / stepsPerDirection));
+                VerifyBrowseVirtualizationBounds(grid, scrollViewer, assert);
+            }
+
+            for (var index = stepsPerDirection - 1; index >= 0; index--)
+            {
+                samples.Add(MeasureScrollService(
+                    window,
+                    grid,
+                    scrollViewer,
+                    continuousRange * index / stepsPerDirection));
+                VerifyBrowseVirtualizationBounds(grid, scrollViewer, assert);
+            }
+
+            aggregate.AddRange(samples);
+            var p95 = NearestRank95(samples);
+            Console.WriteLine(
+                $"PERF_METRIC name=browse.grid.scroll_round_{round} "
+                + $"service=ui_layout_render_dispatch samples_ms=[{string.Join(',', samples.Select(value => value.ToString("0.###")))}] "
+                + $"p95_ms={p95:0.###} budget_ms={budgetMilliseconds:0.0} "
+                + $"result={(p95 <= budgetMilliseconds ? "PASS" : "FAIL")}");
+            assert(samples.Count == stepsPerDirection * 2 && p95 <= budgetMilliseconds,
+                $"Browse round {round} 30-down/30-back UI/layout/render-dispatch p95 "
+                + $"{p95:0.###}ms exceeded {budgetMilliseconds:0.0}ms.");
+        }
+
+        var aggregateP95 = NearestRank95(aggregate);
+        var finalBounds = CaptureBrowseVirtualizationBounds(grid, scrollViewer);
         Console.WriteLine(
-            $"PERF_METRIC name=browse.grid.continuous_scroll samples_ms=[{string.Join(',', samples.Select(value => value.ToString("0.###")))}] "
-            + $"p95_ms={p95:0.###} budget_ms=33.3 result={(p95 <= 33.3 ? "PASS" : "FAIL")} "
-            + $"realized_rows={realizedRows} total_rows={grid.Items.Count}");
-        assert(p95 <= 33.3,
-            $"Browse 1,000-card continuous-scroll p95 {p95:0.###}ms exceeded 33.3ms.");
-        assert(realizedRows < grid.Items.Count,
-            "Browse 1,000-card scroll realized all row containers.");
+            $"PERF_METRIC name=browse.grid.scroll_aggregate service=ui_layout_render_dispatch "
+            + $"samples={aggregate.Count} p95_ms={aggregateP95:0.###} "
+            + $"budget_ms={budgetMilliseconds:0.0} result={(aggregateP95 <= budgetMilliseconds ? "PASS" : "FAIL")} "
+            + $"visible_rows={finalBounds.VisibleRows} realized_rows={finalBounds.RealizedRows} "
+            + $"realized_index={finalBounds.MinimumRealizedIndex}-{finalBounds.MaximumRealizedIndex} "
+            + $"allowed_index={finalBounds.MinimumAllowedIndex}-{finalBounds.MaximumAllowedIndex} "
+            + $"realized_cards={finalBounds.RealizedCards} columns={finalBounds.Columns}");
+        assert(aggregateP95 <= budgetMilliseconds,
+            $"Browse aggregate 300-sample UI/layout/render-dispatch p95 {aggregateP95:0.###}ms "
+            + $"exceeded {budgetMilliseconds:0.0}ms.");
+    }
+
+    private static double MeasureScrollService(
+        Window window,
+        ListBox grid,
+        ScrollViewer scrollViewer,
+        double targetOffset)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        scrollViewer.ScrollToVerticalOffset(targetOffset);
+        grid.UpdateLayout();
+        window.Dispatcher.Invoke(() => { }, DispatcherPriority.Render);
+        stopwatch.Stop();
+        return stopwatch.Elapsed.TotalMilliseconds;
+    }
+
+    private static void VerifyBrowseVirtualizationBounds(
+        ListBox grid,
+        ScrollViewer scrollViewer,
+        Action<bool, string> assert)
+    {
+        grid.Dispatcher.Invoke(() => { }, DispatcherPriority.ContextIdle);
+        grid.UpdateLayout();
+        foreach (var container in GetRealizedRowContainers(grid))
+        {
+            var row = container.DataContext as BrowseRowViewModel;
+            var panels = FindVisualDescendants<UniformGrid>(container).ToArray();
+            assert(row is not null && panels.Length == 1,
+                $"Browse realized row {grid.ItemContainerGenerator.IndexFromContainer(container)} "
+                + $"must expose one UniformGrid for its BrowseRowViewModel; panels={panels.Length}.");
+            if (row is not null && panels.Length == 1)
+            {
+                assert(panels[0].Columns == row.Projects.Count,
+                    $"Browse realized row {grid.ItemContainerGenerator.IndexFromContainer(container)} "
+                    + $"laid out {row.Projects.Count} slots with UniformGrid.Columns={panels[0].Columns}.");
+            }
+        }
+
+        var bounds = CaptureBrowseVirtualizationBounds(grid, scrollViewer);
+        assert(bounds.VisibleRows > 0
+               && bounds.RealizedRows <= 3 * bounds.VisibleRows + 2,
+            $"Browse virtualization realized {bounds.RealizedRows} rows for a {bounds.VisibleRows}-row "
+            + "viewport, exceeding the visible plus one-page-above/below bound.");
+        assert(bounds.MinimumRealizedIndex >= bounds.MinimumAllowedIndex
+               && bounds.MaximumRealizedIndex <= bounds.MaximumAllowedIndex,
+            $"Browse realized row indices {bounds.MinimumRealizedIndex}-{bounds.MaximumRealizedIndex} "
+            + $"outside the one-page cache {bounds.MinimumAllowedIndex}-{bounds.MaximumAllowedIndex}; "
+            + $"visible={bounds.FirstVisibleIndex}-{bounds.LastVisibleIndex}; "
+            + $"offset={bounds.VerticalOffset:0.###}; viewport={bounds.ViewportHeight:0.###}; "
+            + $"median_row={bounds.MedianRowHeight:0.###}.");
+        assert(bounds.RealizedCards <= bounds.RealizedRows * bounds.Columns,
+            $"Browse realized {bounds.RealizedCards} cards for {bounds.RealizedRows} rows × "
+            + $"{bounds.Columns} columns.");
+    }
+
+    private static void VerifyRecycledCardOwnerContext(
+        WallpaperField.MainWindow window,
+        ShellViewModel shell,
+        TaskLifecycleCoordinator coordinator,
+        Action<bool, string> assert)
+    {
+        var browse = shell.BrowsePageViewModel;
+        var grid = WpfElementFinder.FindByName<ListBox>(window, "BrowseProjectGrid")!;
+        var recycledRow = browse.Rows.Skip(100).First(row =>
+            row.Projects.OfType<BrowseProjectViewModel>().Any(project => project.IsProcessable));
+        var project = recycledRow.Projects.OfType<BrowseProjectViewModel>()
+            .First(candidate => candidate.IsProcessable);
+        grid.ScrollIntoView(recycledRow);
+        PumpLayout(window);
+
+        var card = FindCardButtons(grid).Single(candidate =>
+            candidate.DataContext is BrowseProjectViewModel item
+            && item.ProjectKey == project.ProjectKey);
+        VerifyRealizedBrowseRowsAreViewportConstrained(window, grid, assert);
+        var toggle = FindToggleForProject(grid, project.ProjectKey)!;
+        browse.CurrentProject = project;
+        PumpLayout(window);
+        var cardImage = FindVisualDescendants<ThumbnailPreviewImage>(card).Single();
+        var detailImage = FindVisualDescendants<ThumbnailPreviewImage>(window).Single(image =>
+            image.ProjectKey == project.ProjectKey && image.DecodePixelWidth == 480);
+        assert(ReferenceEquals(project.Owner, browse),
+            "A recycled Browse project does not retain its owning page context.");
+
+        assert(new[] { cardImage, detailImage }.All(image =>
+                   ReferenceEquals(image.ThumbnailService, browse.ThumbnailService)
+                   && image.SnapshotGeneration == browse.ThumbnailGeneration)
+               && string.Equals(
+                   AutomationProperties.GetHelpText(toggle),
+                   browse.SelectionAvailabilityText,
+                   StringComparison.Ordinal)
+               && toggle.IsEnabled,
+            "A recycled card/detail lost its owner preview or writable-selection context.");
+
+        var release = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var operation = coordinator.RunAsync(
+            ForegroundOperationKind.Scan,
+            async (_, cancellationToken) =>
+                await release.Task.WaitAsync(cancellationToken).ConfigureAwait(true));
+        try
+        {
+            PumpLayout(window);
+            assert(!browse.IsSelectionWritable
+                   && !toggle.IsEnabled
+                   && string.Equals(
+                       AutomationProperties.GetHelpText(toggle),
+                       browse.SelectionAvailabilityText,
+                       StringComparison.Ordinal),
+                "A recycled selection toggle did not follow its owner into busy read-only state.");
+        }
+        finally
+        {
+            release.TrySetResult(true);
+            WaitForDispatcherTask(window, operation);
+        }
+
+        PumpLayout(window);
+        assert(browse.IsSelectionWritable
+               && toggle.IsEnabled
+               && string.Equals(
+                   AutomationProperties.GetHelpText(toggle),
+                   browse.SelectionAvailabilityText,
+                   StringComparison.Ordinal),
+            "A recycled selection toggle did not restore its owner writable state.");
+    }
+
+    private static BrowseVirtualizationBounds CaptureBrowseVirtualizationBounds(
+        ListBox grid,
+        ScrollViewer scrollViewer)
+    {
+        var presenter = FindVisualDescendants<ScrollContentPresenter>(scrollViewer)
+            .FirstOrDefault();
+        var viewportVisual = (Visual?)presenter ?? scrollViewer;
+        var viewportHeight = presenter?.ActualHeight ?? scrollViewer.ViewportHeight;
+        var realized = GetRealizedRowContainers(grid)
+            .Select(container =>
+            {
+                var bounds = BoundsRelativeTo(container, viewportVisual);
+                return new
+                {
+                    Container = container,
+                    Index = grid.ItemContainerGenerator.IndexFromContainer(container),
+                    Top = bounds.IsEmpty ? double.NaN : bounds.Top,
+                    Height = bounds.IsEmpty ? 0 : bounds.Height
+                };
+            })
+            .Where(item => item.Index >= 0 && item.Height > 0)
+            .OrderBy(item => item.Index)
+            .ToArray();
+        if (realized.Length == 0)
+        {
+            return new BrowseVirtualizationBounds(
+                0, 0, -1, -1, 0, -1, 0, 0, -1, -1,
+                scrollViewer.VerticalOffset, scrollViewer.ViewportHeight, 0);
+        }
+
+        var orderedHeights = realized.Select(item => item.Height).Order().ToArray();
+        var medianHeight = orderedHeights[orderedHeights.Length / 2];
+        var visibleRows = Math.Max(
+            1,
+            (int)Math.Ceiling(viewportHeight / medianHeight));
+        var visible = realized.Where(item =>
+                item.Top + item.Height > 0
+                && item.Top < viewportHeight)
+            .ToArray();
+        var firstVisible = visible.Length > 0
+            ? visible.Min(item => item.Index)
+            : realized.Min(item => item.Index);
+        var lastVisible = visible.Length > 0
+            ? visible.Max(item => item.Index)
+            : realized.Max(item => item.Index);
+        var viewModel = ((ShellViewModel)Window.GetWindow(grid)!.DataContext).BrowsePageViewModel;
+        return new BrowseVirtualizationBounds(
+            visibleRows,
+            realized.Length,
+            realized.Min(item => item.Index),
+            realized.Max(item => item.Index),
+            Math.Max(0, firstVisible - visibleRows),
+            Math.Min(grid.Items.Count - 1, lastVisible + visibleRows),
+            FindCardButtons(grid).Count(),
+            viewModel.ColumnCount,
+            firstVisible,
+            lastVisible,
+            scrollViewer.VerticalOffset,
+            viewportHeight,
+            medianHeight);
+    }
+
+    private static double NearestRank95(IReadOnlyCollection<double> samples)
+    {
+        var ordered = samples.Order().ToArray();
+        return ordered[(int)Math.Ceiling(ordered.Length * 0.95) - 1];
+    }
+
+    private sealed record BrowseVirtualizationBounds(
+        int VisibleRows,
+        int RealizedRows,
+        int MinimumRealizedIndex,
+        int MaximumRealizedIndex,
+        int MinimumAllowedIndex,
+        int MaximumAllowedIndex,
+        int RealizedCards,
+        int Columns,
+        int FirstVisibleIndex,
+        int LastVisibleIndex,
+        double VerticalOffset,
+        double ViewportHeight,
+        double MedianRowHeight);
+
+    private static void VerifyPreviewResourceStability(
+        WallpaperField.MainWindow window,
+        ShellViewModel shell,
+        PerformanceRegressionTests.ProjectBrowserPerformanceFixture fixture,
+        IReadOnlyCollection<PreviewThumbnailSignalEventArgs> previewSignals,
+        IReadOnlyCollection<PreviewThumbnailSignalEventArgs> rawPreviewSignals,
+        Action<bool, string> assert)
+    {
+        const int measuredRounds = 3;
+        var browse = shell.BrowsePageViewModel;
+        var service = browse.ThumbnailService;
+        var expectedStatuses = CreateExpectedPreviewStatuses(fixture);
+        shell.NavigateTo("BROWSE");
+        window.Width = 1600;
+        window.Height = 1000;
+        PumpLayout(window);
+
+        var warmTraversal = TraversePreviewLibrary(
+            window,
+            shell,
+            expectedStatuses,
+            assert);
+        assert(warmTraversal.CompletedProjectKeys.SetEquals(
+                   fixture.Records.Select(record => record.ProjectKey)),
+            $"Task 7 preview warm traversal completed "
+            + $"{warmTraversal.CompletedProjectKeys.Count}/1,000 unique ProjectKeys.");
+        var warmMetrics = service.GetMetrics();
+        PerformanceRegressionTests.ReportThumbnailMetrics("task7_warm", warmMetrics, assert);
+        RouteAwayAndVerifyPreviewShutdown(window, shell, service, assert);
+        VerifyExclusivePreviewAccess(fixture, assert);
+
+        var handles = new List<int> { CaptureHandleCount() };
+        var decodeDeltas = new List<long>(measuredRounds);
+        for (var round = 1; round <= measuredRounds; round++)
+        {
+            shell.NavigateTo("BROWSE");
+            PumpLayout(window);
+            PreparePreviewTraversalStart(
+                window,
+                shell,
+                expectedStatuses,
+                assert);
+            var before = service.GetMetrics();
+            var traversal = TraversePreviewLibrary(
+                window,
+                shell,
+                expectedStatuses,
+                assert);
+            var after = service.GetMetrics();
+            assert(traversal.CompletedProjectKeys.SetEquals(
+                       fixture.Records.Select(record => record.ProjectKey)),
+                $"Task 7 preview traversal {round} completed "
+                + $"{traversal.CompletedProjectKeys.Count}/1,000 unique ProjectKeys.");
+            PerformanceRegressionTests.ReportThumbnailMetrics($"task7_round_{round}", after, assert);
+            assert(traversal.SampleCount > 0
+                   && traversal.PeakObservedActive
+                       <= PreviewThumbnailLimits.MaximumConcurrentDecodes,
+                $"Preview traversal {round} did not retain bounded observation evidence: "
+                + $"samples={traversal.SampleCount}; active={traversal.PeakObservedActive}; "
+                + $"pending={traversal.PeakObservedPending}; "
+                + $"observers={traversal.PeakObservedObservers}.");
+
+            RouteAwayAndVerifyPreviewShutdown(window, shell, service, assert);
+            VerifyExclusivePreviewAccess(fixture, assert);
+            handles.Add(CaptureHandleCount());
+            decodeDeltas.Add(after.DecodeRequestCount - before.DecodeRequestCount);
+            Console.WriteLine(
+                $"PREVIEW_TRAVERSAL round={round} completed={traversal.CompletedProjectKeys.Count} "
+                + $"decode_delta={decodeDeltas[^1]} "
+                + $"cache={after.CacheEntryCount}/{after.CacheDecodedBytes} "
+                + $"pending={after.PendingDecodes} observers={after.ObserverCount} "
+                + $"sample_peak={traversal.PeakObservedActive}/"
+                + $"{traversal.PeakObservedPending}/{traversal.PeakObservedObservers} "
+                + $"handle_count={handles[^1]}");
+        }
+
+        var sustainedHandleGrowth = Enumerable.Range(0, handles.Count - 2).Any(index =>
+            handles[index] < handles[index + 1]
+            && handles[index + 1] < handles[index + 2]
+            && handles[index + 2] - handles[index] > 8);
+        Console.WriteLine(
+            $"PREVIEW_HANDLE_TREND samples=[{string.Join(',', handles)}] "
+            + $"sustained_growth_over_8={sustainedHandleGrowth}");
+        assert(!sustainedHandleGrowth,
+            $"Preview handle count showed sustained three-sample growth above 8: "
+            + $"[{string.Join(',', handles)}].");
+        assert(decodeDeltas.Count == measuredRounds
+               && decodeDeltas.Distinct().Count() == 1
+               && decodeDeltas.All(delta => delta is > 0 and <= RuntimeProjectCount * 2),
+            $"Preview traversal decode work was unstable or unbounded: "
+            + $"[{string.Join(',', decodeDeltas)}].");
+
+        var expectedFailures = fixture.MissingProjectKeys
+            .Select(projectKey => (ProjectKey: projectKey, Code: "PREVIEW_MISSING"))
+            .Concat(fixture.CorruptProjectKeys.Select(projectKey =>
+                (ProjectKey: projectKey, Code: "PREVIEW_CORRUPT")))
+            .Append((ProjectKey: fixture.OverBudgetProjectKey, Code: "PREVIEW_INPUT_BYTES"))
+            .ToArray();
+        var failedSignals = previewSignals.Where(signal =>
+                signal.Kind == PreviewThumbnailSignalKind.Failed)
+            .ToArray();
+        var rawFailedSignals = rawPreviewSignals.Where(signal =>
+                signal.Kind == PreviewThumbnailSignalKind.Failed)
+            .ToArray();
+        var finalMetrics = service.GetMetrics();
+        var previewIssues = shell.ProblemCenterSession.Issues.Where(issue =>
+                issue.Source == AppIssueSource.Browse
+                && issue.Code.StartsWith("PREVIEW_", StringComparison.Ordinal))
+            .ToArray();
+        Console.WriteLine(
+            $"PREVIEW_FAILURE_SIGNALS raw={rawFailedSignals.Length} forwarded={failedSignals.Length} "
+            + $"failure_cache_hits={finalMetrics.FailureCacheHitCount} "
+            + $"raw_values=[{string.Join(',', rawFailedSignals.Select(signal => $"{signal.ProjectKey}:{signal.FailureCode}"))}] "
+            + $"forwarded_values=[{string.Join(',', failedSignals.Select(signal => $"{signal.ProjectKey}:{signal.FailureCode}"))}] "
+            + $"issues=[{string.Join(',', previewIssues.Select(issue => $"{issue.ProjectKey}:{issue.Code}:{issue.ResolutionState}"))}]");
+        foreach (var expected in expectedFailures)
+        {
+            var matching = failedSignals.Where(signal =>
+                    signal.ProjectKey == expected.ProjectKey
+                    && signal.FailureCode == expected.Code)
+                .ToArray();
+            var matchingRaw = rawFailedSignals.Where(signal =>
+                    signal.ProjectKey == expected.ProjectKey
+                    && signal.FailureCode == expected.Code)
+                .ToArray();
+            var matchingIssues = previewIssues.Where(issue =>
+                    issue.ProjectKey == expected.ProjectKey
+                    && issue.Code == expected.Code
+                    && issue.ResolutionState == AppIssueResolutionState.Open)
+                .ToArray();
+            assert(matching.Length == 1,
+                $"Preview failure {expected.Code} for {expected.ProjectKey} published "
+                + $"{matching.Length} times instead of one bounded per-item fact.");
+            assert(matchingRaw.Length == 1 && matchingIssues.Length == 1,
+                $"Preview failure {expected.Code} for {expected.ProjectKey} was not represented "
+                + $"exactly once in the raw service and Problem Center facts: "
+                + $"raw={matchingRaw.Length}; issues={matchingIssues.Length}.");
+        }
+
+        assert(failedSignals.Select(signal => signal.ProjectKey)
+                   .ToHashSet(StringComparer.Ordinal)
+                   .SetEquals(expectedFailures.Select(expected => expected.ProjectKey))
+               && rawFailedSignals.Select(signal => signal.ProjectKey)
+                   .ToHashSet(StringComparer.Ordinal)
+                   .SetEquals(expectedFailures.Select(expected => expected.ProjectKey))
+               && failedSignals.Length == expectedFailures.Length
+               && rawFailedSignals.Length == expectedFailures.Length
+               && previewIssues.Length == expectedFailures.Length
+               && shell.BrowsePageViewModel.TotalProjectCount == RuntimeProjectCount,
+            "Missing/corrupt/over-budget previews caused a global failure, an unexpected issue, "
+            + "or repeated work instead of five bounded per-item placeholders.");
+        shell.NavigateTo("BROWSE");
+        PumpLayout(window);
+        PreparePreviewTraversalStart(window, shell, expectedStatuses, assert);
+        var liveGrid = WpfElementFinder.FindByName<ListBox>(window, "BrowseProjectGrid")!;
+        VerifyTerminalPreviewSourceDoesNotDriveRowGeometry(window, liveGrid, assert);
+    }
+
+    private static void VerifyPreviewResourceStabilityWithoutAnnouncements(
+        WallpaperField.MainWindow window,
+        ShellViewModel shell,
+        PerformanceRegressionTests.ProjectBrowserPerformanceFixture fixture,
+        IReadOnlyCollection<PreviewThumbnailSignalEventArgs> previewSignals,
+        IReadOnlyCollection<PreviewThumbnailSignalEventArgs> rawPreviewSignals,
+        Action<bool, string> assert)
+    {
+        VerifyPreviewResourceStability(
+            window,
+            shell,
+            fixture,
+            previewSignals,
+            rawPreviewSignals,
+            assert);
+
+        RouteAwayAndVerifyPreviewShutdown(
+            window,
+            shell,
+            shell.BrowsePageViewModel.ThumbnailService,
+            assert);
+        var silenceCoordinator = new TaskLifecycleCoordinator();
+        var silenceShell = CreateShell(
+            fixture,
+            fixture.SourceRoot,
+            fixture.OutputRoot,
+            silenceCoordinator,
+            fixture);
+        var forwardedSignals = new ConcurrentQueue<PreviewThumbnailSignalEventArgs>();
+        var rawSignals = new ConcurrentQueue<PreviewThumbnailSignalEventArgs>();
+        EventHandler<PreviewThumbnailSignalEventArgs> forwardedHandler = (_, args) =>
+            forwardedSignals.Enqueue(args);
+        EventHandler<PreviewThumbnailSignalEventArgs> rawHandler = (_, args) =>
+            rawSignals.Enqueue(args);
+        silenceShell.BrowsePageViewModel.PreviewStatusChanged += forwardedHandler;
+        silenceShell.BrowsePageViewModel.ThumbnailService.StatusChanged += rawHandler;
+        WaitForDispatcherTask(window, silenceShell.ScanSession.ScanAsync());
+
+        var automationRoot = AutomationElement.FromHandle(
+            new WindowInteropHelper(window).Handle);
+        var expectedText = silenceShell.UnpackSession.TrayLiveRegionText;
+        var eventCount = 0;
+        AutomationEventHandler handler = (sender, _) =>
+        {
+            try
+            {
+                if (sender is AutomationElement element
+                    && string.Equals(
+                        element.Current.AutomationId,
+                        "BrowseProcessingLiveRegion",
+                        StringComparison.Ordinal))
+                {
+                    Interlocked.Increment(ref eventCount);
+                }
+            }
+            catch (ElementNotAvailableException)
+            {
+            }
+        };
+        var handlerRegistered = false;
+        string? initialName = null;
+        try
+        {
+            Automation.AddAutomationEventHandler(
+                AutomationElementIdentifiers.LiveRegionChangedEvent,
+                automationRoot,
+                TreeScope.Subtree,
+                handler);
+            handlerRegistered = true;
+            window.DataContext = silenceShell;
+            silenceShell.NavigateTo("BROWSE");
+            window.Width = 1600;
+            window.Height = 1000;
+            PumpLayout(window);
+            var liveRegion = WpfElementFinder.FindByName<TextBlock>(
+                window,
+                "BrowseProcessingLiveRegion")!;
+            initialName = AutomationProperties.GetName(liveRegion);
+            assert(string.Equals(
+                       silenceShell.UnpackSession.TrayLiveRegionText,
+                       expectedText,
+                       StringComparison.Ordinal)
+                   && string.Equals(initialName, expectedText, StringComparison.Ordinal),
+                "The cold preview silence shell did not begin from the expected processing live-region fact.");
+
+            var traversal = TraversePreviewLibrary(
+                window,
+                silenceShell,
+                CreateExpectedPreviewStatuses(fixture),
+                assert);
+            assert(traversal.CompletedProjectKeys.SetEquals(
+                       fixture.Records.Select(record => record.ProjectKey))
+                   && traversal.SampleCount > 1,
+                "The cold live-region isolation pass did not execute a real multi-step full-library preview scroll: "
+                + $"completed={traversal.CompletedProjectKeys.Count}; samples={traversal.SampleCount}.");
+            RouteAwayAndVerifyPreviewShutdown(
+                window,
+                silenceShell,
+                silenceShell.BrowsePageViewModel.ThumbnailService,
+                assert);
+
+            var expectedFailures = fixture.MissingProjectKeys
+                .Select(projectKey => (ProjectKey: projectKey, Code: "PREVIEW_MISSING"))
+                .Concat(fixture.CorruptProjectKeys.Select(projectKey =>
+                    (ProjectKey: projectKey, Code: "PREVIEW_CORRUPT")))
+                .Append((ProjectKey: fixture.OverBudgetProjectKey, Code: "PREVIEW_INPUT_BYTES"))
+                .ToArray();
+            var failedRaw = rawSignals.Where(signal =>
+                    signal.Kind == PreviewThumbnailSignalKind.Failed)
+                .ToArray();
+            var failedForwarded = forwardedSignals.Where(signal =>
+                    signal.Kind == PreviewThumbnailSignalKind.Failed)
+                .ToArray();
+            var previewIssues = silenceShell.ProblemCenterSession.Issues.Where(issue =>
+                    issue.Source == AppIssueSource.Browse
+                    && issue.Code.StartsWith("PREVIEW_", StringComparison.Ordinal))
+                .ToArray();
+            foreach (var expected in expectedFailures)
+            {
+                assert(failedRaw.Count(signal =>
+                           signal.ProjectKey == expected.ProjectKey
+                           && signal.FailureCode == expected.Code) == 1
+                       && failedForwarded.Count(signal =>
+                           signal.ProjectKey == expected.ProjectKey
+                           && signal.FailureCode == expected.Code) == 1
+                       && previewIssues.Count(issue =>
+                           issue.ProjectKey == expected.ProjectKey
+                           && issue.Code == expected.Code
+                           && issue.ResolutionState == AppIssueResolutionState.Open) == 1,
+                    $"Cold preview failure {expected.Code} for {expected.ProjectKey} was not represented "
+                    + "exactly once in raw, forwarded, and Problem Center facts.");
+            }
+
+            assert(failedRaw.Length == expectedFailures.Length
+                   && failedForwarded.Length == expectedFailures.Length
+                   && previewIssues.Length == expectedFailures.Length,
+                "Cold preview traversal emitted duplicate or unexpected failure facts: "
+                + $"raw={failedRaw.Length}; forwarded={failedForwarded.Length}; "
+                + $"problems={previewIssues.Length}.");
+
+            PumpLayout(window);
+            liveRegion = WpfElementFinder.FindByName<TextBlock>(
+                window,
+                "BrowseProcessingLiveRegion")!;
+            assert(Volatile.Read(ref eventCount) == 0
+                   && string.Equals(
+                       silenceShell.UnpackSession.TrayLiveRegionText,
+                       expectedText,
+                       StringComparison.Ordinal)
+                   && string.Equals(
+                       AutomationProperties.GetName(liveRegion),
+                       initialName,
+                       StringComparison.Ordinal),
+                "Cold preview loading/scrolling raised or mutated the Task 6 processing live-region fact. "
+                + $"events={eventCount}; text='{expectedText}'→"
+                + $"'{silenceShell.UnpackSession.TrayLiveRegionText}'; name='{initialName}'→"
+                + $"'{AutomationProperties.GetName(liveRegion)}'.");
+            Console.WriteLine(
+                $"PREVIEW_LIVE_REGION_COLD events={eventCount} terminal={traversal.CompletedProjectKeys.Count} "
+                + $"raw={failedRaw.Length} forwarded={failedForwarded.Length} problems={previewIssues.Length}");
+        }
+        finally
+        {
+            if (handlerRegistered)
+            {
+                Automation.RemoveAutomationEventHandler(
+                    AutomationElementIdentifiers.LiveRegionChangedEvent,
+                    automationRoot,
+                    handler);
+            }
+            silenceShell.BrowsePageViewModel.PreviewStatusChanged -= forwardedHandler;
+            silenceShell.BrowsePageViewModel.ThumbnailService.StatusChanged -= rawHandler;
+            window.DataContext = shell;
+            shell.NavigateTo("BROWSE");
+            PumpLayout(window);
+            silenceShell.Dispose();
+        }
+    }
+
+    private static IReadOnlyDictionary<string, PreviewThumbnailStatus>
+        CreateExpectedPreviewStatuses(
+            PerformanceRegressionTests.ProjectBrowserPerformanceFixture fixture)
+    {
+        var missingProjectKeys = fixture.MissingProjectKeys.ToHashSet(StringComparer.Ordinal);
+        var corruptProjectKeys = fixture.CorruptProjectKeys.ToHashSet(StringComparer.Ordinal);
+        return fixture.Records.ToDictionary(
+            record => record.ProjectKey,
+            record => missingProjectKeys.Contains(record.ProjectKey)
+                ? PreviewThumbnailStatus.Missing
+                : corruptProjectKeys.Contains(record.ProjectKey)
+                    ? PreviewThumbnailStatus.Corrupt
+                    : string.Equals(
+                        record.ProjectKey,
+                        fixture.OverBudgetProjectKey,
+                        StringComparison.Ordinal)
+                        ? PreviewThumbnailStatus.OverBudget
+                        : PreviewThumbnailStatus.Ready,
+            StringComparer.Ordinal);
+    }
+
+    private static PreviewTraversalResult TraversePreviewLibrary(
+        WallpaperField.MainWindow window,
+        ShellViewModel shell,
+        IReadOnlyDictionary<string, PreviewThumbnailStatus> expectedStatuses,
+        Action<bool, string> assert)
+    {
+        var browse = shell.BrowsePageViewModel;
+        var service = browse.ThumbnailService;
+        var grid = WpfElementFinder.FindByName<ListBox>(window, "BrowseProjectGrid")!;
+        var scrollViewer = FindVisualDescendants<ScrollViewer>(grid).First();
+        var step = Math.Max(1d, scrollViewer.ViewportHeight * 0.75d);
+        var offsets = new List<double> { 0 };
+        for (var offset = step; offset < scrollViewer.ScrollableHeight; offset += step)
+        {
+            offsets.Add(offset);
+        }
+
+        offsets.Add(scrollViewer.ScrollableHeight);
+        var fullTraversal = offsets.Concat(offsets.AsEnumerable().Reverse().Skip(1)).ToArray();
+        var completedProjectKeys = new HashSet<string>(StringComparer.Ordinal);
+        var sampleCount = 0;
+        var peakObservedActive = 0;
+        var peakObservedPending = 0;
+        var peakObservedObservers = 0;
+        foreach (var offset in fullTraversal)
+        {
+            scrollViewer.ScrollToVerticalOffset(offset);
+            grid.UpdateLayout();
+            window.Dispatcher.Invoke(() => { }, DispatcherPriority.Render);
+
+            var bounds = CaptureBrowseVirtualizationBounds(grid, scrollViewer);
+            var actualVisibleRows = Math.Max(
+                1,
+                bounds.LastVisibleIndex - bounds.FirstVisibleIndex + 1);
+            var leaseBound = (Math.Max(bounds.VisibleRows, actualVisibleRows) + 2)
+                             * browse.ColumnCount + 1;
+            var observation = WaitForVisiblePreviewCompletion(
+                window,
+                grid,
+                scrollViewer,
+                service,
+                expectedStatuses,
+                browse.ThumbnailGeneration,
+                assert);
+            // Thumbnail completion pumps DataBind/Render and can settle a fractional
+            // ScrollViewer offset. The lease bound must use the same post-quiescence
+            // positive-area geometry as the live controls, not the pre-wait snapshot.
+            bounds = CaptureBrowseVirtualizationBounds(grid, scrollViewer);
+            actualVisibleRows = Math.Max(
+                1,
+                bounds.LastVisibleIndex - bounds.FirstVisibleIndex + 1);
+            leaseBound = (Math.Max(bounds.VisibleRows, actualVisibleRows) + 2)
+                         * browse.ColumnCount + 1;
+            completedProjectKeys.UnionWith(observation.CompletedProjectKeys);
+            sampleCount += observation.SampleCount;
+            peakObservedActive = Math.Max(
+                peakObservedActive,
+                observation.PeakObservedActive);
+            peakObservedPending = Math.Max(
+                peakObservedPending,
+                observation.PeakObservedPending);
+            peakObservedObservers = Math.Max(
+                peakObservedObservers,
+                observation.PeakObservedObservers);
+            var metrics = observation.Metrics;
+            var leaseGeometry = metrics.ObserverCount > leaseBound
+                ? DescribeLivePreviewLeaseGeometry(
+                    window,
+                    grid,
+                    scrollViewer,
+                    bounds,
+                    leaseBound)
+                : string.Empty;
+            assert(metrics.ActiveDecodes <= PreviewThumbnailLimits.MaximumConcurrentDecodes
+                   && metrics.PeakActiveDecodes <= PreviewThumbnailLimits.MaximumConcurrentDecodes
+                   && metrics.ActiveDecodes <= metrics.PendingDecodes
+                   && metrics.PendingDecodes <= metrics.ObserverCount
+                   && metrics.ObserverCount <= leaseBound
+                   && metrics.CacheEntryCount <= PreviewThumbnailLimits.MaximumEntries
+                   && metrics.CacheDecodedBytes <= PreviewThumbnailLimits.MaximumDecodedCacheBytes,
+                $"Preview viewport budgets failed at offset {offset:0.###}: "
+                + $"active={metrics.ActiveDecodes}/{metrics.PeakActiveDecodes}; "
+                + $"pending={metrics.PendingDecodes}; observers={metrics.ObserverCount}/{leaseBound}; "
+                + $"cache={metrics.CacheEntryCount}/{metrics.CacheDecodedBytes}; "
+                + $"visible={bounds.FirstVisibleIndex}-{bounds.LastVisibleIndex}; "
+                + $"theoretical={bounds.VisibleRows}; actual={actualVisibleRows}; "
+                + $"viewport={bounds.ViewportHeight:0.###}; median={bounds.MedianRowHeight:0.###}; "
+                + leaseGeometry + ".");
+        }
+
+        return new PreviewTraversalResult(
+            completedProjectKeys,
+            sampleCount,
+            peakObservedActive,
+            peakObservedPending,
+            peakObservedObservers);
+    }
+
+    private static void PreparePreviewTraversalStart(
+        Window window,
+        ShellViewModel shell,
+        IReadOnlyDictionary<string, PreviewThumbnailStatus> expectedStatuses,
+        Action<bool, string> assert)
+    {
+        var browse = shell.BrowsePageViewModel;
+        var grid = WpfElementFinder.FindByName<ListBox>(window, "BrowseProjectGrid")!;
+        var scrollViewer = FindVisualDescendants<ScrollViewer>(grid).First();
+        scrollViewer.ScrollToHome();
+        grid.UpdateLayout();
+        window.Dispatcher.Invoke(() => { }, DispatcherPriority.Render);
+        _ = WaitForVisiblePreviewCompletion(
+            window,
+            grid,
+            scrollViewer,
+            browse.ThumbnailService,
+            expectedStatuses,
+            browse.ThumbnailGeneration,
+            assert);
+    }
+
+    private static PreviewViewportObservation WaitForVisiblePreviewCompletion(
+        Window window,
+        ListBox grid,
+        ScrollViewer scrollViewer,
+        PreviewThumbnailService service,
+        IReadOnlyDictionary<string, PreviewThumbnailStatus> expectedStatuses,
+        long expectedGeneration,
+        Action<bool, string> assert)
+    {
+        var leaseField = typeof(ThumbnailPreviewImage).GetField(
+            "_lease",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        assert(leaseField is not null,
+            "The Task 7 preview observer gate could not inspect live ThumbnailPreviewImage leases.");
+        if (leaseField is null)
+        {
+            return new PreviewViewportObservation(
+                service.GetMetrics(),
+                [],
+                0,
+                0,
+                0,
+                0);
+        }
+
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        var sampleCount = 0;
+        var peakObservedActive = 0;
+        var peakObservedPending = 0;
+        var peakObservedObservers = 0;
+        string? firstBudgetFailure = null;
+        PreviewThumbnailMetrics metrics;
+        IReadOnlyList<(ThumbnailPreviewImage Image, BrowseProjectViewModel Project)> visible;
+        do
+        {
+            PumpLayout(window);
+            metrics = service.GetMetrics();
+            visible = CaptureVisibleCardPreviews(grid, scrollViewer);
+            var currentBounds = CaptureBrowseVirtualizationBounds(grid, scrollViewer);
+            var currentVisibleRows = Math.Max(
+                1,
+                currentBounds.LastVisibleIndex - currentBounds.FirstVisibleIndex + 1);
+            var currentColumns = ((ShellViewModel)window.DataContext)
+                .BrowsePageViewModel.ColumnCount;
+            var currentLeaseBound = (Math.Max(
+                    currentBounds.VisibleRows,
+                    currentVisibleRows) + 2)
+                * currentColumns + 1;
+            sampleCount++;
+            peakObservedActive = Math.Max(peakObservedActive, metrics.ActiveDecodes);
+            peakObservedPending = Math.Max(peakObservedPending, metrics.PendingDecodes);
+            peakObservedObservers = Math.Max(peakObservedObservers, metrics.ObserverCount);
+            if (firstBudgetFailure is null
+                && (metrics.ActiveDecodes > PreviewThumbnailLimits.MaximumConcurrentDecodes
+                    || metrics.PeakActiveDecodes > PreviewThumbnailLimits.MaximumConcurrentDecodes
+                    || metrics.ActiveDecodes > metrics.PendingDecodes
+                    || metrics.PendingDecodes > metrics.ObserverCount
+                    || metrics.ObserverCount > currentLeaseBound
+                    || metrics.CacheEntryCount > PreviewThumbnailLimits.MaximumEntries
+                    || metrics.CacheDecodedBytes
+                    > PreviewThumbnailLimits.MaximumDecodedCacheBytes))
+            {
+                firstBudgetFailure =
+                    $"active={metrics.ActiveDecodes}/{metrics.PeakActiveDecodes}; "
+                    + $"pending={metrics.PendingDecodes}; observers={metrics.ObserverCount}/{currentLeaseBound}; "
+                    + $"cache={metrics.CacheEntryCount}/{metrics.CacheDecodedBytes}";
+            }
+
+            if (metrics.ActiveDecodes == 0
+                && metrics.PendingDecodes == 0
+                && visible.Count > 0
+                && visible.All(item => item.Image.ThumbnailStatus is not null))
+            {
+                var terminalMismatches = visible
+                    .Where(item => !expectedStatuses.TryGetValue(
+                                       item.Project.ProjectKey,
+                                       out var expectedStatus)
+                                   || item.Image.ThumbnailStatus != expectedStatus
+                                   || !string.Equals(
+                                       item.Image.ProjectKey,
+                                       item.Project.ProjectKey,
+                                       StringComparison.Ordinal)
+                                   || !string.Equals(
+                                       item.Image.SourcePath,
+                                       item.Project.PreviewPath,
+                                       StringComparison.Ordinal)
+                                   || item.Image.SnapshotGeneration != expectedGeneration
+                                   || (expectedStatus == PreviewThumbnailStatus.Ready
+                                       ? item.Image.Source is not System.Windows.Media.Imaging.BitmapSource
+                                         {
+                                             IsFrozen: true
+                                         }
+                                       : item.Image.Source is not null))
+                    .Select(item =>
+                        $"{item.Project.ProjectKey}:expected="
+                        + $"{expectedStatuses.GetValueOrDefault(item.Project.ProjectKey)}/"
+                         + $"actual={item.Image.ThumbnailStatus}/"
+                         + $"image_key={item.Image.ProjectKey ?? "<null>"}/"
+                         + $"path_match={string.Equals(item.Image.SourcePath, item.Project.PreviewPath, StringComparison.Ordinal)}/"
+                         + $"generation={item.Image.SnapshotGeneration}/{expectedGeneration}/"
+                         + $"source={item.Image.Source?.GetType().Name ?? "null"}/"
+                        + $"frozen={(item.Image.Source as System.Windows.Media.Imaging.BitmapSource)?.IsFrozen}")
+                    .ToArray();
+                var liveLeaseControls = FindVisualDescendants<ThumbnailPreviewImage>(window)
+                    .Count(image => leaseField.GetValue(image) is PreviewThumbnailLease);
+                assert(firstBudgetFailure is null,
+                    $"Preview work exceeded a resource relationship while waiting: {firstBudgetFailure}.");
+                assert(terminalMismatches.Length == 0,
+                    "Visible preview controls did not publish the exact fixture-typed terminal result: "
+                    + $"[{string.Join(';', terminalMismatches)}].");
+                assert(metrics.ObserverCount == liveLeaseControls,
+                    "Quiescent preview ObserverCount diverged from the actual live _lease controls: "
+                    + $"metrics={metrics.ObserverCount}; controls={liveLeaseControls}; "
+                    + $"visible={visible.Count}; lease_bound={currentLeaseBound}.");
+                return new PreviewViewportObservation(
+                    metrics,
+                    visible.Select(item => item.Project.ProjectKey)
+                        .ToHashSet(StringComparer.Ordinal),
+                    sampleCount,
+                    peakObservedActive,
+                    peakObservedPending,
+                    peakObservedObservers);
+            }
+
+            Thread.Sleep(1);
+        }
+        while (DateTime.UtcNow < deadline);
+
+        var incomplete = visible
+            .Where(item => item.Image.ThumbnailStatus is null)
+            .Select(item => item.Project.ProjectKey)
+            .ToArray();
+        assert(false,
+            "Visible preview controls did not all publish terminal ThumbnailStatus before quiescence: "
+            + $"active={metrics.ActiveDecodes}; pending={metrics.PendingDecodes}; "
+            + $"observers={metrics.ObserverCount}; visible={visible.Count}; "
+            + $"incomplete=[{string.Join(',', incomplete)}].");
+        return new PreviewViewportObservation(
+            metrics,
+            visible.Where(item => item.Image.ThumbnailStatus is not null)
+                .Select(item => item.Project.ProjectKey)
+                .ToHashSet(StringComparer.Ordinal),
+            sampleCount,
+            peakObservedActive,
+            peakObservedPending,
+            peakObservedObservers);
+    }
+
+    private static IReadOnlyList<(
+        ThumbnailPreviewImage Image,
+        BrowseProjectViewModel Project)> CaptureVisibleCardPreviews(
+        ListBox grid,
+        ScrollViewer scrollViewer)
+    {
+        var presenter = FindVisualDescendants<ScrollContentPresenter>(scrollViewer)
+            .FirstOrDefault();
+        var viewport = (Visual?)presenter ?? scrollViewer;
+        var width = presenter?.ActualWidth ?? scrollViewer.ActualWidth;
+        var height = presenter?.ActualHeight ?? scrollViewer.ActualHeight;
+        if (width <= 0 || height <= 0)
+        {
+            return [];
+        }
+
+        var visible = new List<(ThumbnailPreviewImage, BrowseProjectViewModel)>();
+        foreach (var image in FindVisualDescendants<ThumbnailPreviewImage>(grid))
+        {
+            if (!image.IsLoaded
+                || !image.IsVisible
+                || FindVisualAncestor<Button>(image) is not
+                {
+                    Name: "BrowseProjectCardButton",
+                    DataContext: BrowseProjectViewModel project
+                } card)
+            {
+                continue;
+            }
+
+            var bounds = BoundsRelativeTo(card, viewport);
+            if (bounds.Left < width
+                && bounds.Right > 0
+                && bounds.Top < height
+                && bounds.Bottom > 0)
+            {
+                visible.Add((image, project));
+            }
+        }
+
+        return visible;
+    }
+
+    private static string DescribeLivePreviewLeaseGeometry(
+        Window window,
+        ListBox grid,
+        ScrollViewer scrollViewer,
+        BrowseVirtualizationBounds bounds,
+        int leaseBound)
+    {
+        var leaseField = typeof(ThumbnailPreviewImage).GetField(
+            "_lease",
+            BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var presenter = FindVisualDescendants<ScrollContentPresenter>(scrollViewer)
+            .FirstOrDefault();
+        var viewport = (Visual?)presenter ?? scrollViewer;
+        var liveImages = FindVisualDescendants<ThumbnailPreviewImage>(window)
+            .Where(image => leaseField.GetValue(image) is PreviewThumbnailLease)
+            .ToArray();
+        var rowGeometry = liveImages
+            .Select(image => FindVisualAncestor<ListBoxItem>(image))
+            .Where(row => row is not null && IsVisualDescendantOf(row, grid))
+            .Cast<ListBoxItem>()
+            .GroupBy(
+                row => row,
+                (IEqualityComparer<ListBoxItem>)ReferenceEqualityComparer.Instance)
+            .Select(group =>
+            {
+                var row = group.Key;
+                var rendered = BoundsRelativeTo(row, viewport);
+                var slot = LayoutInformation.GetLayoutSlot(row);
+                return $"{grid.ItemContainerGenerator.IndexFromContainer(row)}:"
+                       + $"render={rendered.Top:0.###}-{rendered.Bottom:0.###}/"
+                       + $"slot={slot.Top:0.###}-{slot.Bottom:0.###}/"
+                       + $"leases={group.Count()}";
+            })
+            .ToArray();
+        var detailLeases = liveImages.Count(image =>
+            FindVisualAncestor<ListBoxItem>(image) is null);
+        return $"controls={liveImages.Length}; detail={detailLeases}; bound={leaseBound}; "
+               + $"visible={bounds.FirstVisibleIndex}-{bounds.LastVisibleIndex}/"
+               + $"rows={bounds.VisibleRows}; offset={bounds.VerticalOffset:0.###}; "
+               + $"viewport={bounds.ViewportHeight:0.###}; "
+               + $"row_geometry=[{string.Join(';', rowGeometry)}]";
+    }
+
+    private static PreviewThumbnailMetrics WaitForPreviewQuiescence(
+        Window window,
+        PreviewThumbnailService service,
+        Action<bool, string> assert)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        PreviewThumbnailMetrics metrics;
+        do
+        {
+            PumpLayout(window);
+            metrics = service.GetMetrics();
+            if (metrics.ActiveDecodes == 0 && metrics.PendingDecodes == 0)
+            {
+                return metrics;
+            }
+
+            Thread.Sleep(1);
+        }
+        while (DateTime.UtcNow < deadline);
+
+        assert(false,
+            $"Preview workers did not quiesce: active={metrics.ActiveDecodes}; "
+            + $"pending={metrics.PendingDecodes}; observers={metrics.ObserverCount}.");
+        return metrics;
+    }
+
+    private static void RouteAwayAndVerifyPreviewShutdown(
+        Window window,
+        ShellViewModel shell,
+        PreviewThumbnailService service,
+        Action<bool, string> assert)
+    {
+        shell.NavigateTo("SCAN");
+        PumpLayout(window);
+        var metrics = WaitForPreviewQuiescence(window, service, assert);
+        assert(metrics.ActiveDecodes == 0
+               && metrics.PendingDecodes == 0
+               && metrics.ObserverCount == 0
+               && metrics.CacheEntryCount <= PreviewThumbnailLimits.MaximumEntries
+               && metrics.CacheDecodedBytes <= PreviewThumbnailLimits.MaximumDecodedCacheBytes,
+            $"Routing away retained preview work or leases: active={metrics.ActiveDecodes}; "
+            + $"pending={metrics.PendingDecodes}; observers={metrics.ObserverCount}; "
+            + $"cache={metrics.CacheEntryCount}/{metrics.CacheDecodedBytes}.");
+    }
+
+    private static void VerifyExclusivePreviewAccess(
+        PerformanceRegressionTests.ProjectBrowserPerformanceFixture fixture,
+        Action<bool, string> assert)
+    {
+        var missingKeys = fixture.MissingProjectKeys.ToHashSet(StringComparer.Ordinal);
+        var survivingPaths = fixture.Records
+            .Where(record => !missingKeys.Contains(record.ProjectKey))
+            .Select(record => record.PreviewPath!)
+            .ToArray();
+        var missingPaths = fixture.Records
+            .Where(record => missingKeys.Contains(record.ProjectKey))
+            .Select(record => record.PreviewPath!)
+            .ToArray();
+        var allSurvivorsExist = survivingPaths.Length == RuntimeProjectCount - missingKeys.Count
+                                && survivingPaths.All(File.Exists)
+                                && missingPaths.All(path => !File.Exists(path));
+        assert(allSurvivorsExist,
+            $"The exclusive-access gate expected {RuntimeProjectCount - missingKeys.Count} surviving "
+            + $"preview files, but found {survivingPaths.Count(File.Exists)}; "
+            + $"missing fixtures still present={missingPaths.Count(File.Exists)}.");
+        if (!allSurvivorsExist)
+        {
+            return;
+        }
+
+        try
+        {
+            foreach (var path in survivingPaths)
+            {
+                using var stream = new FileStream(
+                    path,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.None);
+            }
+
+            assert(true, "Surviving Task 7 preview files accepted exclusive access.");
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            assert(false,
+                $"A preview file retained an OS handle after route-away: {exception.GetType().Name}.");
+        }
+    }
+
+    private sealed record PreviewTraversalResult(
+        HashSet<string> CompletedProjectKeys,
+        int SampleCount,
+        int PeakObservedActive,
+        int PeakObservedPending,
+        int PeakObservedObservers);
+
+    private sealed record PreviewViewportObservation(
+        PreviewThumbnailMetrics Metrics,
+        HashSet<string> CompletedProjectKeys,
+        int SampleCount,
+        int PeakObservedActive,
+        int PeakObservedPending,
+        int PeakObservedObservers);
+
+    private static int CaptureHandleCount()
+    {
+        using var process = Process.GetCurrentProcess();
+        process.Refresh();
+        return process.HandleCount;
     }
 
     private static void VerifyRecycledRowKeepsCardVisuals(
@@ -2117,13 +7033,26 @@ internal static class ProjectBrowserUiRegressionTests
             .OfType<ListBoxItem>()
             .ToList();
 
+    private static (ListBox Grid, ScrollViewer Viewport) CaptureLiveBrowseGridViewport(
+        Window window,
+        Action<bool, string> assert)
+    {
+        var grid = WpfElementFinder.FindByName<ListBox>(window, "BrowseProjectGrid")!;
+        var viewport = FindVisualDescendants<ScrollViewer>(grid).First();
+        assert(grid.IsLoaded
+               && viewport.IsLoaded
+               && ReferenceEquals(Window.GetWindow(grid), window)
+               && IsVisualDescendantOf(viewport, grid),
+            "The responsive focus fixture captured a detached Browse grid or viewport.");
+        return (grid, viewport);
+    }
+
     private static (string ProjectKey, double NormalizedPosition) CaptureVisibleRowAnchor(
         ListBox grid,
         ScrollViewer viewport)
     {
         var anchor = GetRealizedRowContainers(grid)
-            .Where(container => container.DataContext is BrowseRowViewModel { Slot0: not null }
-                                && container.ActualHeight > 0)
+            .Where(container => container.ActualHeight > 0)
             .Select(container => new
             {
                 Container = container,
@@ -2133,28 +7062,97 @@ internal static class ProjectBrowserUiRegressionTests
                                 && candidate.Top < viewport.ActualHeight)
             .OrderBy(candidate => candidate.Top)
             .First();
-        var row = (BrowseRowViewModel)anchor.Container.DataContext;
+        var visibleLeftmostCard = FindCardButtons(anchor.Container)
+            .Select(card => new
+            {
+                Card = card,
+                TopLeft = card.TranslatePoint(new Point(0, 0), viewport)
+            })
+            .Where(candidate => candidate.Card.IsLoaded
+                                && candidate.Card.IsVisible
+                                && candidate.Card.ActualWidth > 0
+                                && candidate.Card.ActualHeight > 0
+                                && candidate.TopLeft.X < viewport.ActualWidth
+                                && candidate.TopLeft.X + candidate.Card.ActualWidth > 0
+                                && candidate.TopLeft.Y < viewport.ActualHeight
+                                && candidate.TopLeft.Y + candidate.Card.ActualHeight > 0)
+            .OrderBy(candidate => candidate.TopLeft.X)
+            .First();
+        var project = (BrowseProjectViewModel)visibleLeftmostCard.Card.DataContext;
         return (
-            row.Slot0!.ProjectKey,
+            project.ProjectKey,
             Math.Clamp(-anchor.Top / anchor.Container.ActualHeight, 0, 1));
     }
 
-    private static double? CaptureProjectViewportPosition(
+    private static double? CaptureProjectRowAnchorPosition(
         ListBox grid,
         ScrollViewer viewport,
-        string projectKey)
+        string projectKey,
+        Action<bool, string> assert)
     {
-        var card = FindCardButtons(grid).FirstOrDefault(candidate =>
-            candidate.IsLoaded
-            && candidate.IsVisible
-            && candidate.DataContext is BrowseProjectViewModel project
-            && string.Equals(project.ProjectKey, projectKey, StringComparison.Ordinal));
-        if (card is null || viewport.ViewportHeight <= 0)
+        if (viewport.ViewportHeight <= 0 || viewport.ActualWidth <= 0)
         {
             return null;
         }
 
-        return card.TranslatePoint(new Point(0, 0), viewport).Y / viewport.ViewportHeight;
+        var visibleCards = FindCardButtons(grid)
+            .Where(candidate =>
+                candidate.IsLoaded
+                && candidate.IsVisible
+                && candidate.ActualWidth > 0
+                && candidate.ActualHeight > 0
+                && candidate.DataContext is BrowseProjectViewModel project
+                && string.Equals(project.ProjectKey, projectKey, StringComparison.Ordinal))
+            .Select(card =>
+            {
+                var topLeft = card.TranslatePoint(new Point(0, 0), viewport);
+                return new
+                {
+                    Card = card,
+                    Bounds = new Rect(
+                        topLeft,
+                        new Size(card.ActualWidth, card.ActualHeight))
+                };
+            })
+            .Where(candidate => candidate.Bounds.Left < viewport.ActualWidth
+                                && candidate.Bounds.Right > 0
+                                && candidate.Bounds.Top < viewport.ActualHeight
+                                && candidate.Bounds.Bottom > 0)
+            .ToArray();
+        assert(visibleCards.Length == 1,
+            "The responsive focus fixture did not find exactly one positive-area visible card "
+            + $"for ProjectKey {projectKey}: count={visibleCards.Length}.");
+        if (visibleCards.Length != 1)
+        {
+            return null;
+        }
+
+        var targetRow = FindVisualAncestor<ListBoxItem>(visibleCards[0].Card);
+        var firstVisibleRow = GetRealizedRowContainers(grid)
+            .Where(container => container.ActualHeight > 0)
+            .Select(container => new
+            {
+                Container = container,
+                Top = container.TranslatePoint(new Point(0, 0), viewport).Y
+            })
+            .Where(candidate => candidate.Top + candidate.Container.ActualHeight > 0
+                                && candidate.Top < viewport.ActualHeight)
+            .OrderBy(candidate => candidate.Top)
+            .FirstOrDefault();
+        assert(targetRow is not null
+               && firstVisibleRow is not null
+               && ReferenceEquals(targetRow, firstVisibleRow.Container),
+            "The responsive focus fixture retained the ProjectKey outside the first positive-area row: "
+            + $"ProjectKey={projectKey}; target_row="
+            + $"{(targetRow is null ? -1 : grid.ItemContainerGenerator.IndexFromContainer(targetRow))}; "
+            + $"first_row={(firstVisibleRow is null ? -1 : grid.ItemContainerGenerator.IndexFromContainer(firstVisibleRow.Container))}.");
+        if (targetRow is null || firstVisibleRow is null)
+        {
+            return null;
+        }
+
+        var rowTop = targetRow.TranslatePoint(new Point(0, 0), viewport).Y;
+        return Math.Clamp(-rowTop / targetRow.ActualHeight, 0, 1);
     }
 
     private static async Task VerifyFocusModelAsync(Action<bool, string> assert)
@@ -2339,12 +7337,18 @@ internal static class ProjectBrowserUiRegressionTests
     }
 
     private static void VerifyVirtualizationContract(ListBox grid, Action<bool, string> assert)
-        => assert(VirtualizingPanel.GetIsVirtualizing(grid)
-                  && VirtualizingPanel.GetVirtualizationMode(grid) == VirtualizationMode.Recycling
-                  && VirtualizingPanel.GetScrollUnit(grid) == ScrollUnit.Pixel
-                  && VirtualizingPanel.GetCacheLengthUnit(grid) == VirtualizationCacheLengthUnit.Page
-                  && VirtualizingPanel.GetCacheLength(grid) == new VirtualizationCacheLength(1),
-            "BrowseProjectGrid lost Recycling, Pixel scrolling, or one-page cache virtualization.");
+    {
+        var cache = VirtualizingPanel.GetCacheLength(grid);
+        assert(VirtualizingPanel.GetIsVirtualizing(grid)
+               && VirtualizingPanel.GetVirtualizationMode(grid) == VirtualizationMode.Recycling
+               && VirtualizingPanel.GetScrollUnit(grid) == ScrollUnit.Pixel
+               && VirtualizingPanel.GetCacheLengthUnit(grid) == VirtualizationCacheLengthUnit.Page
+               && cache.CacheBeforeViewport is > 0 and <= 1
+               && cache.CacheAfterViewport is > 0 and <= 1,
+            "BrowseProjectGrid lost Recycling, Pixel scrolling, or its positive at-most-one-page cache: "
+            + $"before={cache.CacheBeforeViewport:0.###}; after={cache.CacheAfterViewport:0.###}; "
+            + $"unit={VirtualizingPanel.GetCacheLengthUnit(grid)}.");
+    }
 
     private static void VerifyProductionSurface(Action<bool, string> assert)
     {
@@ -2589,20 +7593,27 @@ internal static class ProjectBrowserUiRegressionTests
 
     private static void WaitForDispatcherTask(Window window, Task task)
     {
-        if (!task.IsCompleted)
-        {
-            var frame = new DispatcherFrame();
-            _ = task.ContinueWith(
-                _ => window.Dispatcher.BeginInvoke(
-                    DispatcherPriority.Send, new Action(() => frame.Continue = false)),
-                CancellationToken.None,
-                TaskContinuationOptions.ExecuteSynchronously,
-                TaskScheduler.Default);
-            Dispatcher.PushFrame(frame);
-        }
+        WaitForDispatcherTaskWithoutLayout(window, task);
 
         task.GetAwaiter().GetResult();
         PumpLayout(window);
+    }
+
+    private static void WaitForDispatcherTaskWithoutLayout(Window window, Task task)
+    {
+        if (task.IsCompleted)
+        {
+            return;
+        }
+
+        var frame = new DispatcherFrame();
+        _ = task.ContinueWith(
+            _ => window.Dispatcher.BeginInvoke(
+                DispatcherPriority.Send, new Action(() => frame.Continue = false)),
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+        Dispatcher.PushFrame(frame);
     }
 
     private static bool IsVisualDescendantOf(DependencyObject? child, DependencyObject ancestor)
@@ -2693,6 +7704,132 @@ internal static class ProjectBrowserUiRegressionTests
         catch (UnauthorizedAccessException)
         {
         }
+    }
+
+    private sealed class RecordingSnapshotPngWriter(
+        Func<bool> finalLeaseProbe,
+        Exception? failure = null) : ISnapshotPngWriter
+    {
+        internal int CallCount { get; private set; }
+
+        internal BitmapSource? Bitmap { get; private set; }
+
+        internal string? DestinationPath { get; private set; }
+
+        internal CancellationToken CancellationToken { get; private set; }
+
+        internal bool FinalBrowseLeaseCurrent { get; private set; }
+
+        internal int CallerThreadId { get; private set; }
+
+        public Task WriteAsync(
+            BitmapSource bitmap,
+            string destinationPath,
+            CancellationToken cancellationToken)
+        {
+            CallCount++;
+            Bitmap = bitmap;
+            DestinationPath = destinationPath;
+            CancellationToken = cancellationToken;
+            CallerThreadId = Environment.CurrentManagedThreadId;
+            FinalBrowseLeaseCurrent = finalLeaseProbe();
+            return failure is null
+                ? Task.CompletedTask
+                : Task.FromException(failure);
+        }
+    }
+
+    private sealed class RecordingSnapshotDiagnosticWriter(Exception? failure = null)
+        : ISnapshotDiagnosticWriter
+    {
+        internal int CallCount { get; private set; }
+
+        internal List<string> Diagnostics { get; } = [];
+
+        internal CancellationToken CancellationToken { get; private set; }
+
+        internal int CallerThreadId { get; private set; }
+
+        public Task WriteAsync(
+            string diagnostic,
+            CancellationToken cancellationToken)
+        {
+            CallCount++;
+            Diagnostics.Add(diagnostic);
+            CancellationToken = cancellationToken;
+            CallerThreadId = Environment.CurrentManagedThreadId;
+            return failure is null
+                ? Task.CompletedTask
+                : Task.FromException(failure);
+        }
+    }
+
+    private sealed class CancelingSnapshotDiagnosticWriter(
+        CancellationTokenSource cancellation) : ISnapshotDiagnosticWriter
+    {
+        internal int CallCount { get; private set; }
+
+        public Task WriteAsync(
+            string diagnostic,
+            CancellationToken cancellationToken)
+        {
+            CallCount++;
+            cancellation.Cancel();
+            return Task.FromCanceled(cancellationToken);
+        }
+    }
+
+    private sealed class BlockingSnapshotPngWriter : ISnapshotPngWriter
+    {
+        private readonly TaskCompletionSource<bool> _release = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal bool HasEntered { get; private set; }
+
+        internal BitmapSource? Bitmap { get; private set; }
+
+        internal CancellationToken CancellationToken { get; private set; }
+
+        public async Task WriteAsync(
+            BitmapSource bitmap,
+            string destinationPath,
+            CancellationToken cancellationToken)
+        {
+            Bitmap = bitmap;
+            CancellationToken = cancellationToken;
+            HasEntered = true;
+            await _release.Task.ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+
+        internal void Release()
+            => _release.TrySetResult(true);
+    }
+
+    private sealed class CommittedBlockingSnapshotPngWriter : ISnapshotPngWriter
+    {
+        private readonly TaskCompletionSource<bool> _release = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal bool HasEntered { get; private set; }
+
+        internal bool Committed { get; private set; }
+
+        internal CancellationToken CancellationToken { get; private set; }
+
+        public async Task WriteAsync(
+            BitmapSource bitmap,
+            string destinationPath,
+            CancellationToken cancellationToken)
+        {
+            CancellationToken = cancellationToken;
+            HasEntered = true;
+            await _release.Task.ConfigureAwait(false);
+            Committed = true;
+        }
+
+        internal void ReleaseCommittedSuccess()
+            => _release.TrySetResult(true);
     }
 
     private sealed class BrowserScanService(

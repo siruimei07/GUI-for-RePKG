@@ -45,6 +45,71 @@ if (args.Length == 1
     return;
 }
 
+if (args.Length == 1
+    && string.Equals(args[0], "--project-browser-performance-only", StringComparison.Ordinal))
+{
+    PerformanceRegressionTests.RunProjectBrowserBenchmarks(Assert);
+    Console.WriteLine(metrics.CreateSuccessSummary());
+    return;
+}
+
+if (args.Length == 1
+    && string.Equals(args[0], "--project-browser-task7-wpf-only", StringComparison.Ordinal))
+{
+    UiStructureRegressionTests.VerifyTask7WpfWindow(Assert);
+    Console.WriteLine(metrics.CreateSuccessSummary());
+    return;
+}
+
+if (args.Length == 1
+    && string.Equals(args[0], "--project-browser-task7-host-only", StringComparison.Ordinal))
+{
+    UiStructureRegressionTests.VerifyTask7IsolatedApplicationHost(Assert);
+    Console.WriteLine(metrics.CreateSuccessSummary());
+    return;
+}
+
+if (args.Length == 1
+    && string.Equals(args[0], "--project-browser-task7-host-fault-only", StringComparison.Ordinal))
+{
+    UiStructureRegressionTests.VerifyTask7IsolatedApplicationFailureCleanup(Assert);
+    Console.WriteLine(metrics.CreateSuccessSummary());
+    return;
+}
+
+if (args.Length == 1
+    && string.Equals(args[0], "--project-browser-task7-cleanup-only", StringComparison.Ordinal))
+{
+    ProjectBrowserUiRegressionTests.VerifyTask7ForcedCleanup(Assert);
+    Console.WriteLine(metrics.CreateSuccessSummary());
+    return;
+}
+
+if (args.Length == 1
+    && string.Equals(args[0], "--project-browser-task7-visual-only", StringComparison.Ordinal))
+{
+    UiStructureRegressionTests.VerifyTask7VisualWpfWindow(Assert);
+    Console.WriteLine(metrics.CreateSuccessSummary());
+    return;
+}
+
+if (args.Length == 1
+    && string.Equals(args[0], "--project-browser-task7-readiness-only", StringComparison.Ordinal))
+{
+    UiStructureRegressionTests.VerifyTask7ReadinessWpfWindow(Assert);
+    Console.WriteLine(metrics.CreateSuccessSummary());
+    return;
+}
+
+if (args.Length == 1
+    && string.Equals(args[0], "--project-browser-task7-atomic-only", StringComparison.Ordinal))
+{
+    SnapshotCaptureRegressionTests.Run(Assert);
+    UiStructureRegressionTests.VerifyTask7SnapshotCaptureWpfWindow(Assert);
+    Console.WriteLine(metrics.CreateSuccessSummary());
+    return;
+}
+
 var testRoot = Path.Combine(
     Path.GetTempPath(),
     $"WallpaperField-Smoke-{Guid.NewGuid():N}");

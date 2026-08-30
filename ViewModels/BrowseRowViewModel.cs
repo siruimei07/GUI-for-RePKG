@@ -1,14 +1,16 @@
 namespace WallpaperField.ViewModels;
 
-public sealed class BrowseRowViewModel
+public sealed class BrowseRowViewModel : ObservableObject
 {
+    private IReadOnlyList<BrowseProjectViewModel?> _projects;
+
     public BrowseRowViewModel(IReadOnlyList<BrowseProjectViewModel?> projects)
     {
         ArgumentNullException.ThrowIfNull(projects);
-        Projects = Array.AsReadOnly(projects.ToArray());
+        _projects = CopyProjects(projects);
     }
 
-    public IReadOnlyList<BrowseProjectViewModel?> Projects { get; }
+    public IReadOnlyList<BrowseProjectViewModel?> Projects => _projects;
 
     public BrowseProjectViewModel? Slot0 => GetSlot(0);
 
@@ -22,6 +24,40 @@ public sealed class BrowseRowViewModel
 
     public BrowseProjectViewModel? Slot5 => GetSlot(5);
 
+    internal void UpdateProjects(IReadOnlyList<BrowseProjectViewModel?> projects)
+    {
+        ArgumentNullException.ThrowIfNull(projects);
+        var updated = CopyProjects(projects);
+        var changedSlots = Enumerable.Range(0, 6)
+            .Where(index => !ReferenceEquals(GetSlot(index), GetSlot(updated, index)))
+            .ToArray();
+
+        _projects = updated;
+        OnPropertyChanged(nameof(Projects));
+        foreach (var index in changedSlots)
+        {
+            OnPropertyChanged($"Slot{index}");
+        }
+    }
+
     private BrowseProjectViewModel? GetSlot(int index)
         => index < Projects.Count ? Projects[index] : null;
+
+    private static BrowseProjectViewModel? GetSlot(
+        IReadOnlyList<BrowseProjectViewModel?> projects,
+        int index)
+        => index < projects.Count ? projects[index] : null;
+
+    private static IReadOnlyList<BrowseProjectViewModel?> CopyProjects(
+        IReadOnlyList<BrowseProjectViewModel?> projects)
+    {
+        if (projects.Count is < 3 or > 6)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(projects),
+                "Browse rows must contain between three and six slots.");
+        }
+
+        return Array.AsReadOnly(projects.ToArray());
+    }
 }

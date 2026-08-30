@@ -11,6 +11,17 @@
              PreviewGotKeyboardFocus="BrowsePageView_PreviewGotKeyboardFocus"
              SizeChanged="BrowsePageView_SizeChanged">
     <UserControl.Resources>
+        <DataTemplate x:Key="BrowseFilterOptionTemplate">
+            <TextBlock VerticalAlignment="Center"
+                       Text="{Binding Label}"
+                       TextTrimming="CharacterEllipsis" />
+        </DataTemplate>
+        <Style x:Key="BrowseDarkGhostButton"
+               BasedOn="{StaticResource GhostButton}"
+               TargetType="{x:Type Button}">
+            <Setter Property="Foreground" Value="{DynamicResource PaperBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource Paper24Brush}" />
+        </Style>
         <DataTemplate x:Key="BrowseProjectDetailsTemplate">
             <StackPanel Margin="16">
                 <Border x:Name="BrowseDetailPreviewFrame"
@@ -30,13 +41,13 @@
                                        Foreground="{DynamicResource PaperBrush}"
                                        Text="静态预览" />
                         </StackPanel>
-                        <controls:ThumbnailPreviewImage ThumbnailService="{Binding DataContext.BrowsePageViewModel.ThumbnailService, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                        <controls:ThumbnailPreviewImage ThumbnailService="{Binding Owner.ThumbnailService}"
                                                         ProjectKey="{Binding ProjectKey}"
                                                         SourcePath="{Binding PreviewPath}"
                                                         ScanFileLength="{Binding PreviewFileLength}"
                                                         ScanLastWriteTimeUtc="{Binding PreviewLastWriteTimeUtc}"
                                                         PreviewFormat="{Binding PreviewFormat}"
-                                                        SnapshotGeneration="{Binding DataContext.BrowsePageViewModel.ThumbnailGeneration, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                                        SnapshotGeneration="{Binding Owner.ThumbnailGeneration}"
                                                         DecodePixelWidth="480"
                                                         Stretch="UniformToFill"
                                                         RenderOptions.BitmapScalingMode="HighQuality"
@@ -75,12 +86,12 @@
                            FontFamily="Consolas"
                            FontSize="10"
                            Foreground="{DynamicResource PaperBrush}"
-                           Text="{Binding DataContext.BrowsePageViewModel.CurrentFolderDisplayPath, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                           Text="{Binding Owner.CurrentFolderDisplayPath}"
                            TextWrapping="Wrap" />
                 <TextBlock Margin="0,4,0,0"
                            FontSize="10"
                            Foreground="{DynamicResource SignalBrush}"
-                           Text="{Binding DataContext.BrowsePageViewModel.CurrentFolderTargetLabel, RelativeSource={RelativeSource AncestorType={x:Type Window}}}" />
+                           Text="{Binding Owner.CurrentFolderTargetLabel}" />
                 <TextBlock Margin="0,12,0,0"
                            FontSize="11"
                            Foreground="{DynamicResource PaperBrush}"
@@ -194,15 +205,73 @@
                              MinHeight="44"
                              Style="{StaticResource SearchTextBox}"
                              Text="{Binding BrowsePageViewModel.SearchText, UpdateSourceTrigger=PropertyChanged}"
-                             AutomationProperties.Name="搜索项目名称或 Workshop ID" />
-                    <TextBlock Margin="0,0,12,0"
+                             AutomationProperties.Name="搜索项目名称或 Workshop ID"
+                             AutomationProperties.HelpText="输入项目名称或 Workshop ID 后筛选当前扫描快照" />
+                    <TextBlock x:Name="BrowseSearchIcon"
+                               Margin="16,0,0,0"
+                               HorizontalAlignment="Left"
+                               VerticalAlignment="Center"
+                               IsHitTestVisible="False"
+                               FontFamily="Segoe Fluent Icons"
+                               FontSize="15"
+                               Foreground="{DynamicResource InkBrush}"
+                               Text="&#xE721;" />
+                    <TextBlock x:Name="BrowseSearchWatermark"
+                               Margin="47,0,154,0"
+                               VerticalAlignment="Center"
+                               IsHitTestVisible="False"
+                               FontSize="13"
+                               Foreground="{DynamicResource TextMutedBrush}"
+                               Text="搜索名称或 Workshop ID">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding Text, ElementName=BrowseSearchTextBox}" Value="">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                    <TextBlock x:Name="BrowseSearchMatchCountText"
                                HorizontalAlignment="Right"
                                VerticalAlignment="Center"
                                IsHitTestVisible="False"
                                FontFamily="Consolas"
                                FontSize="10"
                                Foreground="{DynamicResource TextMutedBrush}"
-                               Text="{Binding BrowsePageViewModel.MatchCount, StringFormat={}MATCH {0}}" />
+                               Text="{Binding BrowsePageViewModel.MatchCount, StringFormat={}MATCH {0}}">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Margin" Value="0,0,56,0" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding Text, ElementName=BrowseSearchTextBox}" Value="">
+                                        <Setter Property="Margin" Value="0,0,12,0" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                    <Button x:Name="BrowseSearchClearButton"
+                            Margin="0,0,3,0"
+                            HorizontalAlignment="Right"
+                            VerticalAlignment="Center"
+                            Click="BrowseSearchClearButton_Click"
+                            AutomationProperties.Name="清除项目搜索"
+                            ToolTip="清除搜索">
+                        <Button.Style>
+                            <Style BasedOn="{StaticResource IconButton}" TargetType="Button">
+                                <Setter Property="Visibility" Value="Visible" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding Text, ElementName=BrowseSearchTextBox}" Value="">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                        <TextBlock FontFamily="Segoe Fluent Icons" Text="&#xE711;" />
+                    </Button>
                 </Grid>
                 <StackPanel x:Name="BrowseAdvancedFilters"
                             Grid.Column="2"
@@ -213,7 +282,7 @@
                               Margin="0,0,8,0"
                               Style="{StaticResource ProblemFilterComboBox}"
                               ItemsSource="{Binding BrowsePageViewModel.KindFilterOptions}"
-                              DisplayMemberPath="Label"
+                              ItemTemplate="{StaticResource BrowseFilterOptionTemplate}"
                               SelectedValuePath="Value"
                               SelectedValue="{Binding BrowsePageViewModel.KindFilter}"
                               AutomationProperties.Name="项目类型筛选" />
@@ -236,7 +305,7 @@
                               MinHeight="44"
                               Style="{StaticResource ProblemFilterComboBox}"
                               ItemsSource="{Binding BrowsePageViewModel.SortOptions}"
-                              DisplayMemberPath="Label"
+                              ItemTemplate="{StaticResource BrowseFilterOptionTemplate}"
                               SelectedValuePath="Value"
                               SelectedValue="{Binding BrowsePageViewModel.Sort}"
                               AutomationProperties.Name="项目排序" />
@@ -370,7 +439,8 @@
                         BorderBrush="{DynamicResource BorderBrush}"
                         BorderThickness="1"
                         CornerRadius="8"
-                        ClipToBounds="True">
+                        ClipToBounds="True"
+                        SizeChanged="BrowseGridHost_SizeChanged">
                     <ListBox x:Name="BrowseProjectGrid"
                              Background="Transparent"
                              BorderThickness="0"
@@ -385,8 +455,8 @@
                              VirtualizingPanel.IsVirtualizing="True"
                              VirtualizingPanel.VirtualizationMode="Recycling"
                              VirtualizingPanel.ScrollUnit="Pixel"
-                             VirtualizingPanel.CacheLength="1"
-                             VirtualizingPanel.CacheLengthUnit="Page">
+                             VirtualizingPanel.CacheLengthUnit="Page"
+                             VirtualizingPanel.CacheLength="0.5">
                         <ListBox.ItemsPanel>
                             <ItemsPanelTemplate><VirtualizingStackPanel /></ItemsPanelTemplate>
                         </ListBox.ItemsPanel>
@@ -398,14 +468,19 @@
                                 <Setter Property="IsTabStop" Value="False" />
                                 <Setter Property="Template">
                                     <Setter.Value>
-                                        <ControlTemplate TargetType="ListBoxItem"><ContentPresenter /></ControlTemplate>
+                                        <ControlTemplate TargetType="ListBoxItem">
+                                            <ContentPresenter Width="{Binding ActualWidth, RelativeSource={RelativeSource AncestorType={x:Type ScrollContentPresenter}}}"
+                                                              HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
+                                        </ControlTemplate>
                                     </Setter.Value>
                                 </Setter>
                             </Style>
                         </ListBox.ItemContainerStyle>
                         <ListBox.ItemTemplate>
                             <DataTemplate DataType="{x:Type viewModels:BrowseRowViewModel}">
-                                <UniformGrid Columns="{Binding DataContext.BrowsePageViewModel.ColumnCount, RelativeSource={RelativeSource AncestorType={x:Type ListBox}}}">
+                                <UniformGrid UseLayoutRounding="False"
+                                             Columns="{Binding Projects.Count}">
                                     <UniformGrid.Resources>
                                         <Style x:Key="BrowseProjectSlotPresenter" TargetType="ContentPresenter">
                                             <Style.Triggers>
@@ -453,23 +528,23 @@
                                                                                    Foreground="{DynamicResource PaperBrush}"
                                                                                    Text="静态预览" />
                                                                     </StackPanel>
-                                                                    <controls:ThumbnailPreviewImage ThumbnailService="{Binding DataContext.BrowsePageViewModel.ThumbnailService, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                                                    <controls:ThumbnailPreviewImage ThumbnailService="{Binding Owner.ThumbnailService}"
                                                                                                     ProjectKey="{Binding ProjectKey}"
                                                                                                     SourcePath="{Binding PreviewPath}"
                                                                                                     ScanFileLength="{Binding PreviewFileLength}"
                                                                                                     ScanLastWriteTimeUtc="{Binding PreviewLastWriteTimeUtc}"
                                                                                                     PreviewFormat="{Binding PreviewFormat}"
-                                                                                                    SnapshotGeneration="{Binding DataContext.BrowsePageViewModel.ThumbnailGeneration, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                                                                                    SnapshotGeneration="{Binding Owner.ThumbnailGeneration}"
                                                                                                     DecodePixelWidth="320"
                                                                                                     Stretch="UniformToFill"
                                                                                                     RenderOptions.BitmapScalingMode="HighQuality" />
                                                                 </Grid>
                                                             </Border>
                                                         </Grid>
-                                                        <Border x:Name="BrowseProjectMetadata"
-                                                                MaxHeight="74"
-                                                                Padding="7,2"
-                                                                VerticalAlignment="Bottom"
+                                                         <Border x:Name="BrowseProjectMetadata"
+                                                                 MaxHeight="74"
+                                                                 Padding="7,1"
+                                                                 VerticalAlignment="Bottom"
                                                                 Background="{DynamicResource OverlayBrush}"
                                                                 ClipToBounds="True">
                                                             <Grid ClipToBounds="True">
@@ -479,7 +554,7 @@
                                                                     <RowDefinition Height="Auto" />
                                                                     <RowDefinition Height="Auto" />
                                                                 </Grid.RowDefinitions>
-                                                                <TextBlock Height="20"
+                                                                 <TextBlock Height="18"
                                                                            FontSize="10"
                                                                            FontWeight="SemiBold"
                                                                            Foreground="{DynamicResource PaperBrush}"
@@ -488,37 +563,38 @@
                                                                            Text="{Binding Title}"
                                                                            TextTrimming="CharacterEllipsis"
                                                                            TextWrapping="Wrap" />
-                                                                <TextBlock Grid.Row="1"
-                                                                           Height="8"
+                                                                 <TextBlock Grid.Row="1"
+                                                                           Height="11"
+                                                                           Margin="0,0,0,1"
                                                                            FontFamily="Consolas"
-                                                                           FontSize="7"
+                                                                           FontSize="{DynamicResource FontSizeMicro}"
                                                                            Foreground="{DynamicResource PaperBrush}"
-                                                                           LineHeight="8"
+                                                                           LineHeight="10"
                                                                            Text="{Binding WorkshopId, StringFormat=ID {0}}"
                                                                            TextTrimming="CharacterEllipsis" />
-                                                                <Grid Grid.Row="2" Height="9">
-                                                                    <TextBlock HorizontalAlignment="Left"
-                                                                               FontFamily="Consolas"
-                                                                               FontSize="7.5"
-                                                                               Foreground="{DynamicResource SignalBrush}"
-                                                                               LineHeight="9"
-                                                                               Text="{Binding TypeLabel}" />
-                                                                    <TextBlock HorizontalAlignment="Right"
-                                                                               FontFamily="Consolas"
-                                                                               FontSize="7.5"
-                                                                               Foreground="{DynamicResource SignalBrush}"
-                                                                               LineHeight="9"
-                                                                               Text="{Binding WarningCount, StringFormat=! {0}}" />
-                                                                </Grid>
-                                                                <TextBlock x:Name="BrowseProjectProcessabilityText"
-                                                                           Grid.Row="3"
-                                                                           Height="9"
-                                                                           FontSize="7.5"
-                                                                           FontWeight="SemiBold"
-                                                                           Foreground="{DynamicResource SignalBrush}"
-                                                                           LineHeight="9"
-                                                                           Text="{Binding ProcessabilityText}"
-                                                                           TextTrimming="CharacterEllipsis">
+                                                                 <Grid Grid.Row="2" Height="11" Margin="0,0,0,1">
+                                                                     <TextBlock HorizontalAlignment="Left"
+                                                                                FontFamily="Consolas"
+                                                                                FontSize="{DynamicResource FontSizeMicro}"
+                                                                                Foreground="{DynamicResource SignalBrush}"
+                                                                                LineHeight="10"
+                                                                                Text="{Binding TypeLabel}" />
+                                                                     <TextBlock HorizontalAlignment="Right"
+                                                                                FontFamily="Consolas"
+                                                                                FontSize="{DynamicResource FontSizeMicro}"
+                                                                                Foreground="{DynamicResource SignalBrush}"
+                                                                                LineHeight="10"
+                                                                                Text="{Binding WarningCount, StringFormat=! {0}}" />
+                                                                 </Grid>
+                                                                 <TextBlock x:Name="BrowseProjectProcessabilityText"
+                                                                            Grid.Row="3"
+                                                                            Height="11"
+                                                                            FontSize="{DynamicResource FontSizeMicro}"
+                                                                            FontWeight="SemiBold"
+                                                                            Foreground="{DynamicResource SignalBrush}"
+                                                                            LineHeight="10"
+                                                                            Text="{Binding ProcessabilityText}"
+                                                                            TextTrimming="CharacterEllipsis">
                                                                     <TextBlock.Style>
                                                                         <Style TargetType="TextBlock">
                                                                             <Setter Property="Visibility" Value="Hidden" />
@@ -571,7 +647,7 @@
                                                           Focusable="False"
                                                           IsChecked="{Binding IsSelected, Mode=OneWay}"
                                                           SelectionRequested="BrowseProjectSelectionToggle_SelectionRequested"
-                                                          AutomationProperties.HelpText="{Binding DataContext.BrowsePageViewModel.SelectionAvailabilityText, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                          AutomationProperties.HelpText="{Binding Owner.SelectionAvailabilityText}"
                                                           AutomationProperties.Name="{Binding Title, StringFormat=切换处理选择：{0}}">
                                                     <controls:BrowseSelectionToggle.Style>
                                                         <Style TargetType="{x:Type controls:BrowseSelectionToggle}">
@@ -602,7 +678,7 @@
                                                                     </MultiDataTrigger.Conditions>
                                                                     <Setter Property="Visibility" Value="Visible" />
                                                                 </MultiDataTrigger>
-                                                                <DataTrigger Binding="{Binding DataContext.BrowsePageViewModel.IsSelectionWritable, RelativeSource={RelativeSource AncestorType=Window}}" Value="False">
+                                                                <DataTrigger Binding="{Binding Owner.IsSelectionWritable}" Value="False">
                                                                     <Setter Property="IsEnabled" Value="False" />
                                                                 </DataTrigger>
                                                             </Style.Triggers>
@@ -636,7 +712,10 @@
                     <Grid>
                         <Grid.RowDefinitions><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
                         <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                            <ContentControl Content="{Binding BrowsePageViewModel.CurrentProject}" ContentTemplate="{StaticResource BrowseProjectDetailsTemplate}" />
+                            <ContentControl Focusable="False"
+                                            KeyboardNavigation.IsTabStop="False"
+                                            Content="{Binding BrowsePageViewModel.CurrentProject}"
+                                            ContentTemplate="{StaticResource BrowseProjectDetailsTemplate}" />
                         </ScrollViewer>
                         <StackPanel Grid.Row="1" Margin="16,8,16,16">
                             <Grid>
@@ -654,7 +733,7 @@
                                         Grid.Column="1"
                                         Margin="8,0,0,0"
                                         MinHeight="44"
-                                        Style="{StaticResource GhostButton}"
+                                        Style="{StaticResource BrowseDarkGhostButton}"
                                         Command="{Binding ShowBrowseProjectProblemsCommand}"
                                         CommandParameter="{Binding BrowsePageViewModel.CurrentProject}"
                                         AutomationProperties.Name="查看当前项目的问题中心"
@@ -721,7 +800,10 @@
                             AutomationProperties.Name="关闭项目详情"
                             Content="关闭" />
                     <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                        <ContentControl Content="{Binding BrowsePageViewModel.CurrentProject}" ContentTemplate="{StaticResource BrowseProjectDetailsTemplate}" />
+                        <ContentControl Focusable="False"
+                                        KeyboardNavigation.IsTabStop="False"
+                                        Content="{Binding BrowsePageViewModel.CurrentProject}"
+                                        ContentTemplate="{StaticResource BrowseProjectDetailsTemplate}" />
                     </ScrollViewer>
                     <StackPanel Grid.Row="2" Margin="16,8,16,16">
                         <Grid>
@@ -739,7 +821,7 @@
                                     Grid.Column="1"
                                     Margin="8,0,0,0"
                                     MinHeight="44"
-                                    Style="{StaticResource GhostButton}"
+                                    Style="{StaticResource BrowseDarkGhostButton}"
                                     Command="{Binding ShowBrowseProjectProblemsCommand}"
                                     CommandParameter="{Binding BrowsePageViewModel.CurrentProject}"
                                     AutomationProperties.Name="查看当前项目的问题中心"
@@ -793,17 +875,18 @@
                               MinHeight="44"
                               Style="{StaticResource ProblemFilterComboBox}"
                               ItemsSource="{Binding BrowsePageViewModel.KindFilterOptions}"
-                              DisplayMemberPath="Label"
+                              ItemTemplate="{StaticResource BrowseFilterOptionTemplate}"
                               SelectedValuePath="Value"
                               SelectedValue="{Binding BrowsePageViewModel.KindFilter}"
                               AutomationProperties.Name="项目类型筛选" />
                     <ToggleButton Margin="0,10,0,0" MinHeight="44" Style="{StaticResource FilterToggleButton}" IsChecked="{Binding BrowsePageViewModel.ShowOnlyProcessable}" AutomationProperties.Name="仅显示可处理项目" Content="仅可处理" />
                     <ToggleButton Margin="0,8,0,0" MinHeight="44" Style="{StaticResource FilterToggleButton}" IsChecked="{Binding BrowsePageViewModel.ShowOnlyProblems}" AutomationProperties.Name="仅显示有问题项目" Content="有问题" />
                     <TextBlock Margin="0,16,0,6" Style="{StaticResource TechnicalLabel}" Text="排序" />
-                    <ComboBox MinHeight="44"
+                    <ComboBox x:Name="BrowseCompactSortComboBox"
+                              MinHeight="44"
                               Style="{StaticResource ProblemFilterComboBox}"
                               ItemsSource="{Binding BrowsePageViewModel.SortOptions}"
-                              DisplayMemberPath="Label"
+                              ItemTemplate="{StaticResource BrowseFilterOptionTemplate}"
                               SelectedValuePath="Value"
                               SelectedValue="{Binding BrowsePageViewModel.Sort}"
                               AutomationProperties.Name="项目排序" />

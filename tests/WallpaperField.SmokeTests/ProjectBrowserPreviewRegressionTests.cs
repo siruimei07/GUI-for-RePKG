@@ -1796,8 +1796,13 @@ internal static class ProjectBrowserPreviewRegressionTests
     {
         await RunOnStaAsync(async () =>
         {
-            var decoder = new ControlledDecoder((_, _) => Task.FromResult(
-                PreviewThumbnailResult.Ready(CreateFrozenBitmap(16, 10))));
+            var decodedRequests = new ConcurrentQueue<PreviewThumbnailDecodeRequest>();
+            var decoder = new ControlledDecoder((request, _) =>
+            {
+                decodedRequests.Enqueue(request);
+                return Task.FromResult(
+                    PreviewThumbnailResult.Ready(CreateFrozenBitmap(16, 10)));
+            });
             using var service = new PreviewThumbnailService(decoder);
             service.SetGeneration(8);
 
@@ -1890,6 +1895,52 @@ internal static class ProjectBrowserPreviewRegressionTests
                     dispatcher: window.Dispatcher);
                 assert(service.GetMetrics().ObserverCount == 1,
                     "Recycling/source change retained the old thumbnail lease.");
+
+                var latestPath = Path.Combine(
+                    Path.GetTempPath(),
+                    "viewport-preview-latest.gif");
+                var latestTimestamp = DateTimeOffset.UnixEpoch.AddMinutes(7);
+                image.ProjectKey = "viewport-project-intermediate";
+                image.SourcePath = Path.Combine(
+                    Path.GetTempPath(),
+                    "viewport-preview-intermediate.jpg");
+                image.ScanFileLength = 701;
+                image.ScanLastWriteTimeUtc = DateTimeOffset.UnixEpoch.AddMinutes(6);
+                image.PreviewFormat = ".jpg";
+                image.DecodePixelWidth = 257;
+                image.ProjectKey = "viewport-project-latest";
+                image.SourcePath = latestPath;
+                image.ScanFileLength = 702;
+                image.ScanLastWriteTimeUtc = latestTimestamp;
+                image.PreviewFormat = ".gif";
+                image.SnapshotGeneration = 8;
+                image.DecodePixelWidth = 321;
+                await DrainAsync(window.Dispatcher, DispatcherPriority.ApplicationIdle);
+                await WaitUntilAsync(
+                    () => decoder.CallCount == 3 && image.Source is not null,
+                    dispatcher: window.Dispatcher);
+                var leaseField = typeof(ThumbnailPreviewImage).GetField(
+                    "_lease",
+                    BindingFlags.Instance | BindingFlags.NonPublic);
+                var request = (leaseField?.GetValue(image) as PreviewThumbnailLease)?.Request;
+                var lastDecode = decodedRequests.LastOrDefault();
+                assert(decoder.CallCount == 3
+                       && request is not null
+                       && request.ProjectKey == "viewport-project-latest"
+                       && string.Equals(request.CanonicalPath, Path.GetFullPath(latestPath), StringComparison.OrdinalIgnoreCase)
+                       && request.ScanFileLength == 702
+                       && request.ScanLastWriteTimeUtc == latestTimestamp
+                       && request.PreviewFormat == ".gif"
+                       && request.SizeBucket == 384
+                       && request.Generation == 8
+                       && lastDecode is not null
+                       && string.Equals(lastDecode.CanonicalPath, request.CanonicalPath, StringComparison.OrdinalIgnoreCase)
+                       && lastDecode.ScanFileLength == request.ScanFileLength
+                       && lastDecode.ScanLastWriteTimeUtc == request.ScanLastWriteTimeUtc
+                       && lastDecode.PreviewFormat == request.PreviewFormat
+                       && lastDecode.SizeBucket == request.SizeBucket
+                       && image.ThumbnailStatus == PreviewThumbnailStatus.Ready,
+                    "Rapid ThumbnailPreviewImage request-DP changes did not coalesce onto the latest exact identity.");
 
                 window.Content = null;
                 await DrainAsync(window.Dispatcher, DispatcherPriority.ApplicationIdle);

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Windows.Controls;
 
 namespace WallpaperField.Views;
@@ -9,12 +10,29 @@ public sealed partial class LibraryPageView : UserControl
         InitializeComponent();
     }
 
-    internal Task<bool> PositionSnapshotAsync(
+    internal Task<SnapshotPositionResult> PositionSnapshotAsync(
         int requestedIndex,
-        Func<bool> isBusy)
-        => SnapshotListPositioner.PositionAsync(
+        Func<bool> isBusy,
+        CancellationToken cancellationToken = default)
+        => SnapshotListPositioner.PositionLegacyAsync(
             LibraryResultsList,
             requestedIndex,
             isBusy,
-            verifyPreview: true);
+            verifyPreview: true,
+            cancellationToken);
+
+    internal Task<SnapshotPositionResult> PositionSnapshotAsync(
+        int requestedIndex,
+        Func<bool> isBusy,
+        Stopwatch deadlineClock,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+        => SnapshotListPositioner.PositionLegacyAsync(
+            LibraryResultsList,
+            requestedIndex,
+            isBusy,
+            verifyPreview: true,
+            deadlineClock,
+            timeout,
+            cancellationToken);
 }
