@@ -10,8 +10,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$ProductVersion = '1.2.2'
-$FileVersion = '1.2.2.0'
+$ProductVersion = '1.3.0'
+$FileVersion = '1.3.0.0'
 $AssemblyVersion = '1.0.0.0'
 $RuntimeIdentifier = 'win-x64'
 $Configuration = 'Release'
@@ -247,7 +247,7 @@ $projectPath = Join-Path $projectRoot 'WallpaperField.csproj'
 $solutionPath = Join-Path $projectRoot 'WallpaperField.slnx'
 $nugetConfigPath = Join-Path $projectRoot 'NuGet.Config'
 $rootExecutable = Join-Path $projectRoot 'GUI_for_RePKG.exe'
-$releaseNotesPath = Join-Path $projectRoot 'docs\releases\v1.2.2.md'
+$releaseNotesPath = Join-Path $projectRoot 'docs\releases\v1.3.0.md'
 $unresolvedOutputPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputDirectory)
 $outputPath = Get-NormalizedPath $unresolvedOutputPath
 $outputParent = Get-NormalizedPath (Split-Path -Parent $outputPath)
@@ -281,6 +281,65 @@ if (Test-Path -LiteralPath $outputParent -PathType Leaf)
     throw "OutputDirectory parent is a file: $outputParent"
 }
 
+$sourceCommitOutput = @(& git -C $projectRoot rev-parse HEAD 2>&1)
+$sourceCommitExitCode = $LASTEXITCODE
+$sourceCommit = ($sourceCommitOutput -join '').Trim()
+if ($sourceCommitExitCode -ne 0 -or $sourceCommit -notmatch '^[0-9a-fA-F]{40}$')
+{
+    throw 'Could not resolve a full 40-character source commit.'
+}
+
+# Respect the checkout's EOL normalization; overriding it can make a fresh
+# Windows checkout appear tracked-dirty before Git refreshes its index.
+$null = @(& git -C $projectRoot diff --quiet HEAD -- 2>&1)
+$trackedDiffExitCode = $LASTEXITCODE
+if ($trackedDiffExitCode -ne 0 -and $trackedDiffExitCode -ne 1)
+{
+    throw 'Could not inspect tracked source changes.'
+}
+
+$trackedDiffPaths = @(& git -C $projectRoot diff --name-only HEAD -- 2>&1)
+if ($LASTEXITCODE -ne 0)
+{
+    throw 'Could not enumerate tracked source changes.'
+}
+$trackedDiffPaths = @($trackedDiffPaths | ForEach-Object { [string] $_ } | Where-Object {
+    -not [string]::IsNullOrWhiteSpace($_)
+})
+
+$worktreeStatusEntries = @(& git -C $projectRoot status --porcelain=v1 --untracked-files=all 2>&1)
+if ($LASTEXITCODE -ne 0)
+{
+    throw 'Could not inspect the source worktree state.'
+}
+$worktreeStatusEntries = @($worktreeStatusEntries | ForEach-Object { [string] $_ } | Where-Object {
+    -not [string]::IsNullOrWhiteSpace($_)
+})
+
+if ($trackedDiffExitCode -eq 1 -or $worktreeStatusEntries.Count -gt 0)
+{
+    $dirtyPathEvidence = @(@(
+        $trackedDiffPaths
+        $worktreeStatusEntries | ForEach-Object {
+            if ($_.Length -gt 3) { $_.Substring(3) } else { $_ }
+        }
+    ) | Sort-Object -Unique)
+    if ($dirtyPathEvidence.Count -eq 0)
+    {
+        $dirtyPathEvidence = @('<unknown tracked change>')
+    }
+    $displayLimit = 20
+    $displayPaths = @($dirtyPathEvidence | Select-Object -First $displayLimit)
+    $remainingCount = $dirtyPathEvidence.Count - $displayPaths.Count
+    $remainingSuffix = if ($remainingCount -gt 0) { " (+$remainingCount more)" } else { '' }
+    throw "Release builds require a clean source worktree. Dirty paths: $($displayPaths -join ', ')$remainingSuffix"
+}
+
+$dirtyTracked = $false
+$dirtyWorktree = $false
+$dirtyTrackedPaths = @()
+$statusEntries = @()
+
 Assert-NoReparseInExistingPath $projectRoot 'Repository path'
 Assert-NoReparseInExistingPath $outputParent 'Release output parent'
 
@@ -307,30 +366,10 @@ else
 Assert-NoReparseInExistingPath $workspace 'Release build workspace'
 try
 {
-    $sourceCommit = (& git -C $projectRoot rev-parse HEAD).Trim()
-    if ($LASTEXITCODE -ne 0 -or $sourceCommit -notmatch '^[0-9a-fA-F]{40}$')
-    {
-        throw 'Could not resolve a full 40-character source commit.'
-    }
-
-    # Respect the checkout's EOL normalization; overriding it can make a fresh
-    # Windows checkout appear tracked-dirty before Git refreshes its index.
-    & git -C $projectRoot diff --quiet HEAD --
-    $dirtyTracked = $LASTEXITCODE -ne 0
-    $dirtyTrackedPaths = @(& git -C $projectRoot diff --name-only HEAD --)
-    if ($LASTEXITCODE -ne 0)
-    {
-        throw 'Could not enumerate tracked source changes.'
-    }
-    $statusEntries = @(& git -C $projectRoot status --porcelain=v1 --untracked-files=all)
-    if ($LASTEXITCODE -ne 0)
-    {
-        throw 'Could not inspect the source worktree state.'
-    }
-    $dirtyWorktree = $statusEntries.Count -gt 0
-
-    $sdkVersion = (& dotnet --version).Trim()
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($sdkVersion))
+    $sdkVersionOutput = @(& dotnet --version 2>&1)
+    $sdkVersionExitCode = $LASTEXITCODE
+    $sdkVersion = ($sdkVersionOutput -join '').Trim()
+    if ($sdkVersionExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($sdkVersion))
     {
         throw 'Could not determine the .NET SDK version.'
     }
@@ -408,14 +447,14 @@ try
     [System.IO.Directory]::CreateDirectory((Join-Path $qaDirectory 'source\9001')) | Out-Null
     [System.IO.Directory]::CreateDirectory((Join-Path $qaDirectory 'output')) | Out-Null
     $qaProjectJson = @{
-        title = 'v1.2.2 release candidate QA'
+        title = 'v1.3.0 release candidate QA'
         workshopid = '9001'
         type = 'scene'
         file = 'scene.json'
     } | ConvertTo-Json
     Write-Utf8File (Join-Path $qaDirectory 'source\9001\project.json') $qaProjectJson
     $snapshotPath = Join-Path $qaDirectory 'candidate-launch.png'
-    $launchArgumentLine = '--source "{0}" --output "{1}" --scan --snapshot "{2}" --width 920 --height 680 --reduced-motion' -f (Join-Path $qaDirectory 'source'), (Join-Path $qaDirectory 'output'), $snapshotPath
+    $launchArgumentLine = '--source "{0}" --output "{1}" --scan --page browse --snapshot "{2}" --width 920 --height 680 --reduced-motion' -f (Join-Path $qaDirectory 'source'), (Join-Path $qaDirectory 'output'), $snapshotPath
     $candidateProcess = Start-Process -FilePath $publishedExecutable -ArgumentList $launchArgumentLine -WindowStyle Hidden -PassThru
     if (-not $candidateProcess.WaitForExit(30000))
     {

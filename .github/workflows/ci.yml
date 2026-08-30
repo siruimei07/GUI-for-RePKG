@@ -116,8 +116,113 @@ jobs:
         shell: pwsh
         run: dotnet list .\WallpaperField.slnx package --outdated --include-transitive
 
+      - name: Verify release source and SDK item-boundary contracts
+        shell: pwsh
+        run: |
+          $probeRoot = Join-Path $env:RUNNER_TEMP "WallpaperField-v1.3.0-source-contract-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          .\scripts\verify-release-source-cleanliness.ps1 -WorkRoot $probeRoot
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Verify dirty clones cannot start a release
+        shell: pwsh
+        run: |
+          $probeRoot = Join-Path $env:RUNNER_TEMP "WallpaperField-v1.3.0-dirty-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          if (Test-Path -LiteralPath $probeRoot) {
+            throw "Dirty release probe root already exists: $probeRoot"
+          }
+          [System.IO.Directory]::CreateDirectory($probeRoot) | Out-Null
+          $pwsh = @(Get-Command pwsh -CommandType Application -ErrorAction Stop)[0].Source
+          $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+
+          function Invoke-DirtyReleaseProbe {
+            param(
+              [Parameter(Mandatory = $true)][string] $Name,
+              [Parameter(Mandatory = $true)][string] $DirtyPath,
+              [Parameter(Mandatory = $true)][ValidateSet('tracked', 'untracked')][string] $Mutation
+            )
+
+            $caseRoot = Join-Path $probeRoot $Name
+            $repositoryPath = Join-Path $caseRoot 'repository'
+            $toolsPath = Join-Path $caseRoot 'tools'
+            $outputParent = Join-Path $caseRoot 'release-output'
+            $outputPath = Join-Path $outputParent 'candidate'
+            $dotnetMarker = Join-Path $caseRoot 'dotnet-called.txt'
+            [System.IO.Directory]::CreateDirectory($caseRoot) | Out-Null
+            [System.IO.Directory]::CreateDirectory($toolsPath) | Out-Null
+
+            & git clone --quiet --no-hardlinks . $repositoryPath
+            if ($LASTEXITCODE -ne 0) {
+              throw "$Name clone failed with exit $LASTEXITCODE."
+            }
+            if ($Mutation -eq 'tracked') {
+              [System.IO.File]::AppendAllText((Join-Path $repositoryPath $DirtyPath), "`r`nrelease dirty sentinel`r`n", $utf8NoBom)
+            } else {
+              [System.IO.File]::WriteAllText((Join-Path $repositoryPath $DirtyPath), "release dirty sentinel`r`n", $utf8NoBom)
+            }
+
+            $dotnetShim = @'
+          @echo off
+          >"%RELEASE_GATE_DOTNET_MARKER%" echo called %*
+          exit /b 97
+          '@
+            [System.IO.File]::WriteAllText((Join-Path $toolsPath 'dotnet.cmd'), $dotnetShim, $utf8NoBom)
+
+            $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+            $startInfo.FileName = $pwsh
+            $startInfo.UseShellExecute = $false
+            $startInfo.RedirectStandardOutput = $true
+            $startInfo.RedirectStandardError = $true
+            $startInfo.CreateNoWindow = $true
+            $startInfo.ArgumentList.Add('-NoLogo')
+            $startInfo.ArgumentList.Add('-NoProfile')
+            $startInfo.ArgumentList.Add('-NonInteractive')
+            $startInfo.ArgumentList.Add('-File')
+            $startInfo.ArgumentList.Add((Join-Path $repositoryPath 'build-release.ps1'))
+            $startInfo.ArgumentList.Add('-OutputDirectory')
+            $startInfo.ArgumentList.Add($outputPath)
+            $startInfo.Environment['PATH'] = $toolsPath + [System.IO.Path]::PathSeparator + $startInfo.Environment['PATH']
+            $startInfo.Environment['RELEASE_GATE_DOTNET_MARKER'] = $dotnetMarker
+
+            $process = [System.Diagnostics.Process]::new()
+            $process.StartInfo = $startInfo
+            if (-not $process.Start()) {
+              throw "$Name child process did not start."
+            }
+            $standardOutput = $process.StandardOutput.ReadToEnd()
+            $standardError = $process.StandardError.ReadToEnd()
+            $process.WaitForExit()
+            $exitCode = $process.ExitCode
+            $process.Dispose()
+            $output = $standardOutput + [Environment]::NewLine + $standardError
+            Write-Host "DIRTY_RELEASE_SENTINEL case=$Name exit=$exitCode"
+            $output | Write-Host
+
+            if ($exitCode -eq 0) { throw "$Name dirty release unexpectedly succeeded." }
+            if ($output -notlike '*clean source worktree*') { throw "$Name clean-source diagnostic was absent." }
+            if ($output -notlike "*$DirtyPath*") { throw "$Name dirty path was absent from the diagnostic." }
+            if (Test-Path -LiteralPath $dotnetMarker) { throw "$Name invoked dotnet before rejection." }
+            if (Test-Path -LiteralPath $outputParent) { throw "$Name created the release output parent before rejection." }
+          }
+
+          try {
+            Invoke-DirtyReleaseProbe -Name 'tracked' -DirtyPath 'README.md' -Mutation tracked
+            Invoke-DirtyReleaseProbe -Name 'untracked' -DirtyPath 'dirty-release-sentinel.txt' -Mutation untracked
+          } finally {
+            $resolvedProbeRoot = [System.IO.Path]::GetFullPath($probeRoot).TrimEnd('\', '/')
+            $resolvedRunnerTemp = [System.IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\', '/')
+            $expectedPrefix = $resolvedRunnerTemp + [System.IO.Path]::DirectorySeparatorChar
+            $leaf = [System.IO.Path]::GetFileName($resolvedProbeRoot)
+            if (-not $resolvedProbeRoot.StartsWith($expectedPrefix, [StringComparison]::OrdinalIgnoreCase) -or
+                $leaf -notmatch '^WallpaperField-v1\.3\.0-dirty-[0-9]+-[0-9]+$') {
+              throw "Refusing to remove an unverified dirty release probe root: $resolvedProbeRoot"
+            }
+            Remove-Item -LiteralPath $resolvedProbeRoot -Recurse -Force
+          }
+          # The two child failures are expected; do not leak their LASTEXITCODE to GitHub's pwsh wrapper.
+          exit 0
+
       - name: Build and verify isolated release candidate
         shell: pwsh
         run: |
-          $releaseRoot = Join-Path $env:RUNNER_TEMP "WallpaperField-v1.2.1-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $releaseRoot = Join-Path $env:RUNNER_TEMP "WallpaperField-v1.3.0-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
           .\build-release.ps1 -OutputDirectory $releaseRoot
