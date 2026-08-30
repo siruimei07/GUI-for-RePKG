@@ -112,7 +112,7 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
             () => CurrentFolderTarget is not null && !IsFolderTargetResolving);
         SelectVisibleProjectsCommand = new RelayCommand(
             () => TrySelectVisibleProjects(),
-            () => IsSelectionWritable && VisibleProjects.Any(project => project.IsProcessable));
+            CanSelectVisibleProjects);
         ClearSelectionCommand = new RelayCommand(
             () => TryClearSelection(),
             () => IsSelectionWritable && SelectedCount > 0);
@@ -127,8 +127,6 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
         add => _previewCallbacks.Add(value);
         remove => _previewCallbacks.Remove(value);
     }
-
-    public event EventHandler<ProjectFolderOpenFailedEventArgs>? FolderOpenFailed;
 
     public RangeObservableCollection<BrowseRowViewModel> Rows { get; } = [];
 
@@ -284,9 +282,26 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
 
     public bool IsSelectionWritable => _isSelectionWritable;
 
-    public string SelectionAvailabilityText => IsSelectionWritable
-        ? "可修改处理选择"
-        : "前台任务运行中，处理选择只读";
+    public string SelectionAvailabilityText
+    {
+        get
+        {
+            if (!IsSelectionWritable)
+            {
+                return "前台任务运行中，处理选择只读。";
+            }
+
+            var processableCount = VisibleProjects.Count(project => project.IsProcessable);
+            if (processableCount > 0)
+            {
+                return $"当前匹配有 {processableCount:N0} 个可处理项目，可加入处理选择。";
+            }
+
+            return HasSnapshot
+                ? "当前匹配没有可处理项目。"
+                : "请先完成一次成功扫描。";
+        }
+    }
 
     public bool IsCompactLayout
     {
@@ -385,7 +400,7 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
     public string SelectionTraySummaryText
         => $"已选 {SelectedCount:N0} · 当前匹配 {VisibleSelectedCount:N0}"
            + $" · 隐藏 {HiddenSelectedCount:N0}"
-           + $" · Package {SelectedPackageCount:N0} / Video {SelectedVideoCount:N0}";
+           + $" · 解包 {SelectedPackageCount:N0} 项 / 复制视频 {SelectedVideoCount:N0} 项";
 
     public bool HasSnapshot => _snapshot is not null;
 
@@ -401,29 +416,12 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
 
     public string SnapshotSourcePath => _snapshot?.Identity.SourceDirectory ?? string.Empty;
 
-    public bool IsSnapshotSourceCurrent
-    {
-        get
-        {
-            var normalizedCurrentSource = _scanSession.SourcePathValidation.NormalizedPath;
-            if (!HasSnapshot
-                || string.IsNullOrWhiteSpace(normalizedCurrentSource)
-                || string.IsNullOrWhiteSpace(SnapshotSourcePath))
-            {
-                return false;
-            }
-
-            return string.Equals(
-                normalizedCurrentSource,
-                SnapshotSourcePath,
-                StringComparison.OrdinalIgnoreCase);
-        }
-    }
+    public bool IsSnapshotSourceCurrent => IsDisplayedSnapshotIdentityCurrent();
 
     public string SnapshotSourceStatusText => !HasSnapshot
         ? "尚无成功扫描快照"
         : IsSnapshotSourceCurrent
-            ? "正在显示当前来源的成功快照"
+            ? "正在显示当前输入的成功快照"
             : "当前输入已变更 · 正在显示上一次成功扫描的快照";
 
     public bool HasVisibleProjects => VisibleProjects.Count > 0;
@@ -718,7 +716,6 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
         if (isCurrentTarget)
         {
             FolderActionStatusText = summary;
-            FolderOpenFailed?.Invoke(this, new ProjectFolderOpenFailedEventArgs(result));
         }
     }
 
@@ -827,7 +824,10 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
             ApplySnapshot(_scanSession.ProjectSnapshot);
         }
         else if (e.PropertyName is nameof(ScanSession.SourcePath)
-                  or nameof(ScanSession.SourcePathValidation))
+                  or nameof(ScanSession.OutputPath)
+                  or nameof(ScanSession.SourcePathValidation)
+                  or nameof(ScanSession.OutputPathValidation)
+                  or nameof(ScanSession.IsCurrentIdentity))
         {
             OnPropertiesChanged(
                 nameof(CurrentSourcePath),
@@ -888,6 +888,8 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
                 string.Equals(project.ProjectKey, previousFocusKey, StringComparison.Ordinal))
                 ?.WorkshopId;
 
+        CurrentProject = null;
+        FocusedProjectKey = null;
         _snapshot = snapshot;
         _thumbnailService.SetGeneration(snapshot?.Revision ?? 0);
         DetachCards();
@@ -903,10 +905,9 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
 
         var sameSource = previousSnapshot is not null
                          && snapshot is not null
-                         && string.Equals(
+                         && OutputPathPolicy.PathsEqual(
                              previousSnapshot.Identity.SourceDirectory,
-                             snapshot.Identity.SourceDirectory,
-                             StringComparison.OrdinalIgnoreCase);
+                             snapshot.Identity.SourceDirectory);
         var restoredCurrent = sameSource
             ? FindRestoredProject(previousCurrentKey, previousCurrentId)
             : null;
@@ -914,8 +915,6 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
             ? FindRestoredProject(previousFocusKey, previousFocusId)
             : null;
 
-        _currentProject = null;
-        _focusedProjectKey = null;
         RefreshProjection(restoredCurrent?.ProjectKey, restoredFocus?.ProjectKey);
         OnPropertiesChanged(
             nameof(TotalProjectCount),
@@ -1079,7 +1078,11 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
         CurrentProject = VisibleProjects.FirstOrDefault(project =>
                              currentKey is not null
                              && string.Equals(project.ProjectKey, currentKey, StringComparison.Ordinal))
-                         ?? VisibleProjects.FirstOrDefault();
+                          ?? VisibleProjects.FirstOrDefault();
+        if (CurrentProject is null)
+        {
+            CloseDetails();
+        }
         FocusedProjectKey = VisibleProjects.Any(project =>
             focusKey is not null
             && string.Equals(project.ProjectKey, focusKey, StringComparison.Ordinal))
@@ -1099,8 +1102,38 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
             nameof(ShowScanCenterAction),
             nameof(FilteredEmptyDetailText),
             nameof(EmptyTitle),
-            nameof(EmptyDescription));
+            nameof(EmptyDescription),
+            nameof(SelectionAvailabilityText));
+        SelectVisibleProjectsCommand.NotifyCanExecuteChanged();
         ClearFiltersCommand.NotifyCanExecuteChanged();
+    }
+
+    private bool CanSelectVisibleProjects()
+        => IsSelectionWritable
+           && VisibleProjects.Any(project => project.IsProcessable);
+
+    private bool IsDisplayedSnapshotIdentityCurrent()
+    {
+        if (_snapshot is null
+            || string.IsNullOrWhiteSpace(_scanSession.SourcePath)
+            || string.IsNullOrWhiteSpace(_scanSession.OutputPath))
+        {
+            return false;
+        }
+
+        try
+        {
+            return OutputPathPolicy.PathsEqual(
+                       _scanSession.SourcePath,
+                       _snapshot.Identity.SourceDirectory)
+                   && OutputPathPolicy.PathsEqual(
+                       _scanSession.OutputPath,
+                       _snapshot.Identity.OutputDirectory);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private bool MatchesFilters(BrowseProjectViewModel project)

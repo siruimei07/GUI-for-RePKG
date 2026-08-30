@@ -61,6 +61,8 @@ internal static class ProjectBrowserProjectionRegressionTests
                          "HasVisibleProjects",
                          "MatchSummaryText",
                          "SnapshotCompletedAtText",
+                         "SnapshotSourceStatusText",
+                         "IsSnapshotSourceCurrent",
                          "HasActiveFilters",
                          "ShowClearFiltersAction",
                          "ShowScanCenterAction",
@@ -130,6 +132,7 @@ internal static class ProjectBrowserProjectionRegressionTests
         await VerifyDirectUnavailabilityReasonsAsync(assert);
         await VerifyWriteTargetsAndBrowseSummariesAsync(assert);
         await VerifyCurrentAndSharedSelectionAsync(assert);
+        await VerifySnapshotIdentityAndReplacementCleanupAsync(assert);
         await VerifySnapshotRecoveryAndDisposalAsync(assert);
         await VerifyIdentityCommitFailureIsAtomicAsync(assert);
         await VerifyThousandItemProjectionPerformanceAsync(assert);
@@ -247,7 +250,7 @@ internal static class ProjectBrowserProjectionRegressionTests
             "The Browse summary fixture could not establish its shared selection.");
         fixture.Browse.KindFilter = ProjectBrowserKindFilter.Package;
         assert(fixture.Browse.SelectionTraySummaryText
-                   == "已选 2 · 当前匹配 1 · 隐藏 1 · Package 1 / Video 1"
+                   == "已选 2 · 当前匹配 1 · 隐藏 1 · 解包 1 项 / 复制视频 1 项"
                && ReadRequiredString(fixture.Browse, "MatchSummaryText")
                    == "MATCH 1 / 4",
             "The selection tray did not distinguish total, current-match and hidden selection.");
@@ -1218,6 +1221,59 @@ internal static class ProjectBrowserProjectionRegressionTests
         }
     }
 
+    private static async Task VerifySnapshotIdentityAndReplacementCleanupAsync(
+        Action<bool, string> assert)
+    {
+        using var fixture = new ProjectionFixture();
+        await fixture.ScanAsync(
+        [
+            CreateRecord(
+                fixture.SourceRoot,
+                fixture.OutputRoot,
+                "cleanup",
+                "Cleanup target",
+                WallpaperProjectKind.Package)
+        ]);
+
+        var browse = fixture.Browse;
+        browse.SetCompactLayout(true);
+        browse.OpenDetails();
+        var targetDeadline = DateTime.UtcNow.AddSeconds(2);
+        while (browse.CurrentFolderTarget is null && DateTime.UtcNow < targetDeadline)
+        {
+            await Task.Delay(5);
+        }
+
+        var notifications = new List<string>();
+        browse.PropertyChanged += (_, args) =>
+        {
+            if (!string.IsNullOrWhiteSpace(args.PropertyName))
+            {
+                notifications.Add(args.PropertyName);
+            }
+        };
+
+        var changedOutput = Path.Combine(fixture.Root, "changed-output");
+        Directory.CreateDirectory(changedOutput);
+        fixture.Scan.OutputPath = changedOutput;
+        assert(!browse.IsSnapshotSourceCurrent
+               && browse.SnapshotSourceStatusText.Contains("输入已变更", StringComparison.Ordinal),
+            "Browse treated an output-path drift as the current successful snapshot identity.");
+        fixture.Scan.OutputPath = fixture.OutputRoot;
+        assert(browse.IsSnapshotSourceCurrent,
+            "Browse did not recover current snapshot identity after restoring source and output paths.");
+
+        await fixture.ScanAsync([]);
+        assert(browse.CurrentProject is null
+               && browse.CurrentFolderTarget is null
+               && !browse.IsFolderTargetResolving
+               && !browse.IsDetailsOpen
+               && browse.FocusedProjectKey is null
+               && notifications.Contains(nameof(BrowsePageViewModel.CurrentProject), StringComparer.Ordinal)
+               && notifications.Contains(nameof(BrowsePageViewModel.HasCurrentProject), StringComparer.Ordinal),
+            "Replacing an open Compact detail with an empty snapshot retained stale current/focus/folder state or skipped notifications.");
+    }
+
     private static async Task VerifySnapshotRecoveryAndDisposalAsync(
         Action<bool, string> assert)
     {
@@ -1233,22 +1289,24 @@ internal static class ProjectBrowserProjectionRegressionTests
         fixture.Browse.FocusedProjectKey = oldB.ProjectKey;
         fixture.Browse.TrySetSelection(oldB, true);
 
+        var alternateOutputRoot = Path.Combine(fixture.Root, "alternate-output");
         var sameSourceRecords = new[]
         {
-            CreateRecord(fixture.SourceRoot, fixture.OutputRoot, "b", "Beta refreshed", WallpaperProjectKind.Video),
-            CreateRecord(fixture.SourceRoot, fixture.OutputRoot, "a", "Alpha refreshed", WallpaperProjectKind.Package)
+            CreateRecord(fixture.SourceRoot, alternateOutputRoot, "b", "Beta refreshed", WallpaperProjectKind.Video),
+            CreateRecord(fixture.SourceRoot, alternateOutputRoot, "a", "Alpha refreshed", WallpaperProjectKind.Package)
         };
         await fixture.ScanAsync(
             sameSourceRecords,
             fixture.SourceRoot + Path.DirectorySeparatorChar,
-            fixture.OutputRoot + Path.DirectorySeparatorChar);
+            alternateOutputRoot + Path.DirectorySeparatorChar);
         assert(fixture.Browse.CurrentProject is { WorkshopId: "b" } currentB
                && !ReferenceEquals(currentB, oldB)
                && fixture.Browse.FocusedProjectKey == currentB.ProjectKey
                && fixture.Scan.ProjectSnapshot!.Identity.SourceDirectory == fixture.SourceRoot
-               && fixture.Scan.ProjectSnapshot.Identity.OutputDirectory == fixture.OutputRoot
+               && fixture.Scan.ProjectSnapshot.Identity.OutputDirectory == alternateOutputRoot
                && fixture.Browse.SelectedCount == 0,
-            "Trailing directory separators changed canonical snapshot identity or reset current/focus.");
+            "A same-source rescan with a new output root failed to restore current/focus by ProjectKey, "
+            + "or trailing separators changed canonical snapshot identity.");
 
         var movedB = CreateRecord(
             fixture.SourceRoot,
@@ -1267,14 +1325,33 @@ internal static class ProjectBrowserProjectionRegressionTests
 
         var newSource = Path.Combine(fixture.Root, "other-source");
         Directory.CreateDirectory(newSource);
+        var observedCurrentNotificationWithOldProjection = false;
+        void ObserveSnapshotAtomicity(
+            object? _,
+            System.ComponentModel.PropertyChangedEventArgs args)
+        {
+            if (args.PropertyName == nameof(BrowsePageViewModel.IsSnapshotSourceCurrent)
+                && fixture.Browse.IsSnapshotSourceCurrent
+                && fixture.Browse.VisibleProjects.Any(project =>
+                    !project.Record.SourceDirectory.StartsWith(
+                        newSource + Path.DirectorySeparatorChar,
+                        StringComparison.OrdinalIgnoreCase)))
+            {
+                observedCurrentNotificationWithOldProjection = true;
+            }
+        }
+
+        fixture.Browse.PropertyChanged += ObserveSnapshotAtomicity;
         await fixture.ScanAsync(
         [
             CreateRecord(newSource, fixture.OutputRoot, "a", "Alpha new source", WallpaperProjectKind.Package),
             CreateRecord(newSource, fixture.OutputRoot, "b", "Beta new source", WallpaperProjectKind.Video)
         ], newSource);
+        fixture.Browse.PropertyChanged -= ObserveSnapshotAtomicity;
         assert(fixture.Browse.CurrentProject is { WorkshopId: "a" }
-               && fixture.Browse.FocusedProjectKey == fixture.Browse.CurrentProject.ProjectKey,
-            "A source-root change falsely restored the same Workshop ID from another source.");
+               && fixture.Browse.FocusedProjectKey == fixture.Browse.CurrentProject.ProjectKey
+               && !observedCurrentNotificationWithOldProjection,
+            "A source-root change falsely restored the same Workshop ID or announced a current identity before atomically replacing the old projection.");
 
         var stableSnapshot = fixture.Scan.ProjectSnapshot;
         var selectedHidden = fixture.Browse.VisibleProjects.Single(project =>

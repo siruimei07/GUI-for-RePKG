@@ -115,6 +115,19 @@ internal static class ProjectBrowserUiRegressionTests
         var matchSummary = FindNamedElement(document, "BrowseSearchMatchCountText");
         var clearFilters = FindNamedElement(document, "BrowseClearFiltersButton");
         var scanCenter = FindNamedElement(document, "BrowseScanCenterButton");
+        var selectVisibleActions = document.Descendants().Where(element =>
+                element.Name.LocalName == "Button"
+                && element.Attributes().Any(attribute => attribute.Value
+                    == "{Binding BrowsePageViewModel.SelectVisibleProjectsCommand}"))
+            .ToArray();
+        var processAction = actionTemplate?.Descendants().FirstOrDefault(element =>
+            element.Attributes().Any(attribute => attribute.Name.LocalName == "Name"
+                && attribute.Value == "BrowseProjectProcessButton"));
+        var folderStatus = actionTemplate?.Descendants().FirstOrDefault(element =>
+            element.Attributes().Any(attribute => attribute.Name.LocalName == "Name"
+                && attribute.Value == "BrowseProjectFolderActionStatusText"));
+        var batchAction = FindNamedElement(document, "BrowseProcessSelectionButton");
+        var targetPath = FindNamedElement(document, "BrowseProcessingTargetPathText");
 
         assert(actionTemplate is not null
                && actionTemplateUses.Length == 2
@@ -125,11 +138,19 @@ internal static class ProjectBrowserUiRegressionTests
                && actionBindings.Count(value => value
                    == "{Binding ProcessCurrentBrowseProjectCommand}") == 1
                && actionBindings.Count(value => value
-                   == "{Binding BrowsePageViewModel.FolderActionStatusText}") == 1,
+                   == "{Binding BrowseProjectActionStatusText}") == 2,
             "Regular and Compact details do not share one complete project-actions template.");
         assert(detailBindings.Contains("{Binding ProcessingTargetLabel}", StringComparer.Ordinal)
                && detailBindings.Contains("{Binding ProcessingTargetPath}", StringComparer.Ordinal),
             "Browse details do not expose the immutable processing write destination.");
+        assert(targetPath is not null
+               && targetPath.Attributes().Any(attribute =>
+                   attribute.Name.LocalName == "TextTrimming"
+                   && attribute.Value == "CharacterEllipsis")
+               && !targetPath.Attributes().Any(attribute =>
+                   attribute.Name.LocalName == "TextWrapping"
+                   && attribute.Value == "Wrap"),
+            "Browse write-target evidence is not constrained to the existing detail height budget.");
         assert(currentSource is not null
                && !currentSource.Attributes().Any(attribute =>
                    (attribute.Name.LocalName is "Width" or "Height")
@@ -139,6 +160,12 @@ internal static class ProjectBrowserUiRegressionTests
                    && attribute.Value == "0")
                && snapshotTime?.Attributes().Any(attribute =>
                    attribute.Value == "{Binding BrowsePageViewModel.SnapshotCompletedAtText}") == true
+               && double.TryParse(
+                   snapshotTime?.Attribute("FontSize")?.Value,
+                   System.Globalization.NumberStyles.Float,
+                   System.Globalization.CultureInfo.InvariantCulture,
+                   out var snapshotFontSize)
+               && snapshotFontSize >= 10
                && matchSummary?.Attributes().Any(attribute =>
                    attribute.Value == "{Binding BrowsePageViewModel.MatchSummaryText}") == true,
             "Browse header/search still hides source identity, completion time, or MATCH M/N.");
@@ -156,6 +183,60 @@ internal static class ProjectBrowserUiRegressionTests
                    .Any(attribute => attribute.Value
                        == "{Binding BrowsePageViewModel.FilteredEmptyDetailText}"),
             "Filtered-empty Browse state lacks a direct clear action and explicit detail reason.");
+        assert(selectVisibleActions.Length == 2
+               && selectVisibleActions.All(element =>
+                   element.Attribute("MinHeight")?.Value == "44"
+                   && element.Attribute("Content")?.Value == "选择匹配项"
+                   && element.Attribute(XName.Get("Name", XamlNamespace)) is not null),
+            "Wide/Regular and Compact do not both expose the 44-DIP filtered-result selection command.");
+        assert(processAction?.Attributes().Any(attribute =>
+                   attribute.Name.LocalName == "AutomationProperties.HelpText"
+                   && attribute.Value == "{Binding CurrentBrowseProjectActionAvailabilityText}") == true
+               && processAction.Attributes().Any(attribute =>
+                   attribute.Name.LocalName == "ToolTip"
+                   && attribute.Value == "{Binding CurrentBrowseProjectActionAvailabilityText}")
+               && batchAction?.Attributes().Any(attribute =>
+                   attribute.Name.LocalName == "AutomationProperties.HelpText"
+                   && attribute.Value == "{Binding BrowseSelectionActionAvailabilityText}") == true
+               && batchAction.Attributes().Any(attribute =>
+                   attribute.Name.LocalName == "ToolTip"
+                   && attribute.Value == "{Binding BrowseSelectionActionAvailabilityText}")
+               && folderStatus?.Attributes().Any(attribute =>
+                   attribute.Name.LocalName == "AutomationProperties.LiveSetting"
+                   && attribute.Value == "Polite") == true
+               && folderStatus.Attributes().Any(attribute =>
+                   attribute.Name.LocalName == "Text"
+                   && attribute.Value == "{Binding BrowseProjectActionStatusText}"),
+            "Browse processing actions do not expose one truthful visible/tooltip/UIA reason or a polite folder outcome region.");
+        VerifyBrowseLabelInNameContract(document, assert);
+    }
+
+    private static void VerifyBrowseLabelInNameContract(
+        XDocument document,
+        Action<bool, string> assert)
+    {
+        var failures = new List<string>();
+        foreach (var element in document.Descendants().Where(candidate =>
+                     candidate.Name.LocalName is "Button" or "ToggleButton"))
+        {
+            var content = element.Attribute("Content")?.Value;
+            var name = element.Attributes().FirstOrDefault(attribute =>
+                attribute.Name.LocalName == "AutomationProperties.Name")?.Value;
+            if (string.IsNullOrWhiteSpace(content)
+                || content.StartsWith("{", StringComparison.Ordinal)
+                || string.IsNullOrWhiteSpace(name))
+            {
+                continue;
+            }
+
+            if (!name.StartsWith(content, StringComparison.Ordinal))
+            {
+                failures.Add($"{element.Attribute(XName.Get("Name", XamlNamespace))?.Value ?? element.Name.LocalName}: '{content}' !<= '{name}'");
+            }
+        }
+
+        assert(failures.Count == 0,
+            "Browse key actions violate Label in Name: " + string.Join("; ", failures));
     }
 
     internal static void VerifyWindow(
@@ -306,6 +387,7 @@ internal static class ProjectBrowserUiRegressionTests
                 shell,
                 assert);
             VerifyTask7Accessibility(window, shell, assert);
+            VerifyFolderActionLiveRegion(window, shell, assert);
             VerifyRecycledRowKeepsCardVisuals(window, assert);
             VerifyHighContrastAndMotion(window, assert);
             VerifyBrowseSnapshotReadiness(window, shell, coordinator, assert);
@@ -559,6 +641,7 @@ internal static class ProjectBrowserUiRegressionTests
         browse.KindFilter = ProjectBrowserKindFilter.Package;
         browse.Sort = ProjectBrowserSort.WorkshopId;
         browse.CurrentProject = browse.VisibleProjects.First(project => project.HasProblems);
+        var currentWithProblems = browse.CurrentProject;
         PumpLayout(window);
             var kind = WpfElementFinder.FindByName<ComboBox>(
                 window,
@@ -627,6 +710,44 @@ internal static class ProjectBrowserUiRegressionTests
             {
                 browse.SearchText = string.Empty;
             }
+
+            browse.KindFilter = ProjectBrowserKindFilter.All;
+            browse.CurrentProject = browse.VisibleProjects.First(project =>
+                project.ProjectKind == WallpaperProjectKind.Video
+                && !project.Title.Contains("超长标题", StringComparison.Ordinal));
+            window.Width = 1190;
+            window.Height = 800;
+            PumpLayout(window);
+            var boundaryDetailsScroller = WpfElementFinder.FindByName<ScrollViewer>(
+                window,
+                "BrowsePersistentDetailsScrollViewer")!;
+            var boundaryTypeValue = FindVisualDescendants<TextBlock>(persistentDetails)
+                .Single(text => BindingOperations.GetBinding(text, TextBlock.TextProperty)
+                    ?.Path.Path == nameof(BrowseProjectViewModel.TypeLabel));
+            var boundaryProcessability = FindVisualDescendants<TextBlock>(persistentDetails)
+                .Single(text => BindingOperations.GetBinding(text, TextBlock.TextProperty)
+                    ?.Path.Path == nameof(BrowseProjectViewModel.ProcessabilityText));
+            var boundaryTypeBounds = BoundsRelativeTo(
+                boundaryTypeValue,
+                boundaryDetailsScroller);
+            var boundaryProcessabilityBounds = BoundsRelativeTo(
+                boundaryProcessability,
+                boundaryDetailsScroller);
+            const double boundaryTolerance = 1.0;
+            var boundaryDetailsReadable = window.LayoutMode == WallpaperField.ShellLayoutMode.Wide
+                                          && IsPositiveAreaVisible(boundaryDetailsScroller)
+                                          && IsPositiveAreaVisible(boundaryTypeValue)
+                                          && IsPositiveAreaVisible(boundaryProcessability)
+                                          && boundaryDetailsScroller.VerticalOffset <= boundaryTolerance
+                                          && boundaryTypeBounds.Top >= -boundaryTolerance
+                                          && boundaryTypeBounds.Bottom
+                                          <= boundaryDetailsScroller.ActualHeight + boundaryTolerance
+                                          && boundaryProcessabilityBounds.Top >= -boundaryTolerance
+                                          && boundaryProcessabilityBounds.Bottom
+                                          <= boundaryDetailsScroller.ActualHeight + boundaryTolerance;
+
+            browse.KindFilter = ProjectBrowserKindFilter.Package;
+            browse.CurrentProject = currentWithProblems;
 
             window.Width = 920;
             window.Height = 680;
@@ -703,12 +824,21 @@ internal static class ProjectBrowserUiRegressionTests
                     + $"columns={visualLayout.ColumnCount}; grid={visualLayout.GridWidth:0.###}; "
                     + $"panels=[{string.Join(',', visualLayout.RealizedColumns)}]");
             }
+            if (!boundaryDetailsReadable)
+            {
+                failures.Add(
+                    "1190x800 Wide details did not fully expose the type/process status at the initial scroll position: "
+                    + $"viewport={boundaryDetailsScroller.ActualHeight:0.###}; "
+                    + $"type={boundaryTypeBounds}; processability={boundaryProcessabilityBounds}; "
+                    + $"offset={boundaryDetailsScroller.VerticalOffset:0.###}");
+            }
 
             Console.WriteLine(
                 "TASK7_VISUAL_CAPTURE "
                 + $"combo_labels={wideLabels && compactLabels} "
                 + $"contrast={persistentContrast:0.###}/{compactContrast:0.###} "
                 + $"search={searchClearContract} "
+                + $"boundary_details={boundaryDetailsReadable} "
                 + $"cli_columns={visualLayout.ColumnCount} grid={visualLayout.GridWidth:0.###}");
             assert(failures.Count == 0,
                 "Task 7 visual capture contracts failed: " + string.Join(" || ", failures));
@@ -2665,6 +2795,12 @@ internal static class ProjectBrowserUiRegressionTests
                 + $"header={headerBounds}; toolbar={toolbarBounds}; main={mainBounds}; tray={trayBounds}.");
 
             var search = WpfElementFinder.FindByName<TextBox>(window, "BrowseSearchTextBox")!;
+            var searchWatermark = WpfElementFinder.FindByName<TextBlock>(
+                window,
+                "BrowseSearchWatermark")!;
+            var advancedFilters = WpfElementFinder.FindByName<StackPanel>(
+                window,
+                "BrowseAdvancedFilters")!;
             var compactFilter = WpfElementFinder.FindByName<Button>(window, "BrowseFilterButton")!;
             var kindFilter = WpfElementFinder.FindByName<ComboBox>(
                 window,
@@ -2674,6 +2810,17 @@ internal static class ProjectBrowserUiRegressionTests
                        ? compactFilter.IsVisible && compactFilter.ActualHeight >= 44 - tolerance
                        : kindFilter.IsVisible && kindFilter.ActualHeight >= 44 - tolerance),
                 $"Task 7 state {state} hid its unique search/filter action at {item.Width:0} DIP.");
+            if (item.Mode == "Regular")
+            {
+                var searchBounds = BoundsRelativeTo(search, toolbar);
+                var advancedBounds = BoundsRelativeTo(advancedFilters, toolbar);
+                assert(search.ActualWidth >= 420
+                       && searchWatermark.ActualWidth >= 160
+                       && advancedBounds.Top >= searchBounds.Bottom + 7,
+                    $"Task 7 Regular toolbar did not keep search and filters on two readable rows at {item.Width:0} DIP: "
+                    + $"search={searchBounds}/{search.ActualWidth:0.###}; watermark={searchWatermark.ActualWidth:0.###}; "
+                    + $"filters={advancedBounds}.");
+            }
 
             if (expectedReady)
             {
@@ -2830,6 +2977,96 @@ internal static class ProjectBrowserUiRegressionTests
         return true;
     }
 
+    private static void VerifySelectVisibleProjectActions(
+        WallpaperField.MainWindow window,
+        ShellViewModel shell,
+        Action<bool, string> assert)
+    {
+        var browse = shell.BrowsePageViewModel;
+        browse.SearchText = string.Empty;
+        browse.KindFilter = ProjectBrowserKindFilter.All;
+        browse.ShowOnlyProcessable = false;
+        browse.ShowOnlyProblems = false;
+        browse.TryClearSelection();
+        var representative = browse.VisibleProjects.First(project => project.IsProcessable);
+        browse.SearchText = representative.WorkshopId;
+        PumpLayout(window);
+        assert(browse.MatchCount == 1
+               && ReferenceEquals(browse.VisibleProjects[0], representative),
+            "The select-matching UI fixture did not isolate one processable filtered project.");
+
+        var cases = new[]
+        {
+            (Width: 920d, ButtonName: "BrowseCompactSelectVisibleProjectsButton", Activation: "click"),
+            (Width: 1060d, ButtonName: "BrowseSelectVisibleProjectsButton", Activation: "space"),
+            (Width: 1190d, ButtonName: "BrowseSelectVisibleProjectsButton", Activation: "enter")
+        };
+        foreach (var item in cases)
+        {
+            browse.TryClearSelection();
+            window.Width = item.Width;
+            window.Height = item.Width < 1060 ? 680 : 800;
+            PumpLayout(window);
+            var action = WpfElementFinder.FindByName<Button>(window, item.ButtonName)!;
+            var hiddenPeer = WpfElementFinder.FindByName<Button>(
+                window,
+                item.ButtonName == "BrowseSelectVisibleProjectsButton"
+                    ? "BrowseCompactSelectVisibleProjectsButton"
+                    : "BrowseSelectVisibleProjectsButton")!;
+            assert(action.IsVisible
+                   && action.IsEnabled
+                   && action.ActualHeight >= 43.5
+                   && !hiddenPeer.IsVisible,
+                $"The responsive select-matching action was not singular and operable at {item.Width:0} DIP.");
+
+            if (item.Activation == "click")
+            {
+                assert(EnsureForegroundWindow(window),
+                    "The select-matching pointer fixture could not foreground its WPF window.");
+                ClickPointer(action);
+            }
+            else
+            {
+                assert(action.Focus(),
+                    $"The select-matching action could not take keyboard focus at {item.Width:0} DIP.");
+                RaiseButtonKeyboardActivation(
+                    action,
+                    item.Activation == "space" ? Key.Space : Key.Enter);
+            }
+
+            PumpLayout(window);
+            assert(representative.IsSelected
+                   && browse.SelectedCount == 1
+                   && browse.HiddenSelectedCount == 0,
+                $"The {item.Activation} select-matching action did not select only the current filtered result at {item.Width:0} DIP "
+                + $"(selected={representative.IsSelected}/{browse.SelectedCount}; hidden={browse.HiddenSelectedCount}; "
+                + $"command={browse.SelectVisibleProjectsCommand.CanExecute(null)}).");
+        }
+
+        browse.TryClearSelection();
+        browse.SearchText = string.Empty;
+        window.Width = 1190;
+        window.Height = 800;
+        browse.KindFilter = ProjectBrowserKindFilter.Website;
+        PumpLayout(window);
+        var disabledAction = WpfElementFinder.FindByName<Button>(
+            window,
+            "BrowseSelectVisibleProjectsButton")!;
+        assert(disabledAction.IsVisible
+               && !disabledAction.IsEnabled
+               && !browse.SelectVisibleProjectsCommand.CanExecute(null)
+               && browse.SelectionAvailabilityText.Contains(
+                   "没有可处理项目",
+                   StringComparison.Ordinal)
+               && string.Equals(
+                   AutomationProperties.GetHelpText(disabledAction),
+                   browse.SelectionAvailabilityText,
+                   StringComparison.Ordinal),
+            "A no-processable filtered result did not expose the truthful disabled reason for Select matching.");
+        browse.KindFilter = ProjectBrowserKindFilter.All;
+        PumpLayout(window);
+    }
+
     private static void VerifyTask7Accessibility(
         WallpaperField.MainWindow window,
         ShellViewModel shell,
@@ -2843,6 +3080,7 @@ internal static class ProjectBrowserUiRegressionTests
         browse.CloseDetails();
         browse.CloseFilterLayer();
         browse.TryClearSelection();
+        VerifySelectVisibleProjectActions(window, shell, assert);
         var currentSelectedProblem = browse.VisibleProjects.First(project =>
             project.IsProcessable && project.WarningCount > 0);
         var processable = browse.VisibleProjects.First(project =>
@@ -2917,10 +3155,10 @@ internal static class ProjectBrowserUiRegressionTests
             "BrowseAdvancedFilters")!;
         var processableFilter = FindVisualDescendants<ToggleButton>(advancedFilters)
             .Single(toggle => AutomationProperties.GetName(toggle)
-                == "仅显示可处理项目");
+                == "仅可处理（仅显示可处理项目）");
         var problemFilter = FindVisualDescendants<ToggleButton>(advancedFilters)
             .Single(toggle => AutomationProperties.GetName(toggle)
-                == "仅显示有问题项目");
+                == "有问题（仅显示有问题项目）");
         var selectionTray = WpfElementFinder.FindByName<FrameworkElement>(
             window,
             "BrowseSelectionTray")!;
@@ -2949,15 +3187,16 @@ internal static class ProjectBrowserUiRegressionTests
             WpfElementFinder.FindByName<ComboBox>(window, "BrowseKindFilterComboBox")!,
             processableFilter,
             problemFilter,
+            WpfElementFinder.FindByName<Button>(window, "BrowseSelectVisibleProjectsButton")!,
             WpfElementFinder.FindByName<ComboBox>(window, "BrowseSortComboBox")!,
             currentCard,
             persistentActions["BrowseProjectOpenFolderButton"],
             persistentActions["BrowseProjectProblemsButton"],
             persistentActions["BrowseProjectProcessButton"],
             trayButtons.Single(button => AutomationProperties.GetName(button)
-                == "清空项目处理选择"),
+                == "清空选择（项目处理）"),
             trayButtons.Single(button => AutomationProperties.GetName(button)
-                == "处理全部已选项目")
+                .StartsWith("处理已选 · ", StringComparison.Ordinal))
         };
         var expectedIdentities = sequence
             .Select(CaptureFocusIdentity)
@@ -3047,6 +3286,168 @@ internal static class ProjectBrowserUiRegressionTests
         VerifyQueuedDirectionalFocus(window, shell, assert);
         VerifyRovingTabEntryAndResponsiveFocus(window, shell, assert);
         VerifyCompactModalAndFilter(window, shell, assert);
+    }
+
+    private static void VerifyFolderActionLiveRegion(
+        WallpaperField.MainWindow window,
+        ShellViewModel restoreShell,
+        Action<bool, string> assert)
+    {
+        var testRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"WallpaperField-Task7-FolderLive-{Guid.NewGuid():N}");
+        var sourceRoot = Path.Combine(testRoot, "source");
+        var outputRoot = Path.Combine(testRoot, "output");
+        Directory.CreateDirectory(sourceRoot);
+        Directory.CreateDirectory(outputRoot);
+        var resolver = new SequentialFolderOutcomeResolver(sourceRoot);
+        using var shell = CreateShell(
+            new BrowserScanService(sourceRoot, outputRoot, previewPath: null, projectCount: 1),
+            sourceRoot,
+            outputRoot,
+            folderResolver: resolver);
+        try
+        {
+            WaitForDispatcherTask(window, shell.ScanSession.ScanAsync());
+            window.DataContext = shell;
+            shell.NavigateTo("BROWSE");
+            window.Width = 1060;
+            window.Height = 760;
+            PumpLayout(window);
+            var targetDeadline = Stopwatch.StartNew();
+            while (shell.BrowsePageViewModel.CurrentFolderTarget is null
+                   && targetDeadline.Elapsed < TimeSpan.FromSeconds(2))
+            {
+                Thread.Sleep(2);
+                PumpLayout(window);
+            }
+
+            var details = WpfElementFinder.FindByName<FrameworkElement>(
+                window,
+                "BrowsePersistentDetails")!;
+            var region = FindVisualDescendants<TextBlock>(details).Single(text =>
+                text.Name == "BrowseProjectFolderActionStatusText" && text.IsVisible);
+            var action = FindVisualDescendants<Button>(details).Single(button =>
+                button.Name == "BrowseProjectOpenFolderButton" && button.IsVisible);
+            assert(shell.BrowsePageViewModel.CurrentFolderTarget is not null
+                   && action.IsEnabled
+                   && region.ActualWidth > 0
+                   && region.ActualHeight > 0
+                   && AutomationProperties.GetLiveSetting(region)
+                       == AutomationLiveSetting.Polite,
+                "The folder-outcome UIA fixture did not realize one operable action and polite live region.");
+
+            var automationRoot = AutomationElement.FromHandle(
+                new WindowInteropHelper(window).Handle);
+            var eventCount = 0;
+            var eventNames = new ConcurrentQueue<string>();
+            AutomationEventHandler handler = (sender, _) =>
+            {
+                try
+                {
+                    if (sender is AutomationElement element
+                        && string.Equals(
+                            element.Current.AutomationId,
+                            "BrowseProjectFolderActionLiveRegion",
+                            StringComparison.Ordinal))
+                    {
+                        eventNames.Enqueue(element.Current.Name);
+                        Interlocked.Increment(ref eventCount);
+                    }
+                }
+                catch (ElementNotAvailableException)
+                {
+                }
+            };
+            Automation.AddAutomationEventHandler(
+                AutomationElementIdentifiers.LiveRegionChangedEvent,
+                automationRoot,
+                TreeScope.Subtree,
+                handler);
+            try
+            {
+                foreach (var expected in SequentialFolderOutcomeResolver.ExpectedStatusTexts)
+                {
+                    var before = Volatile.Read(ref eventCount);
+                    WaitForDispatcherTask(
+                        window,
+                        shell.BrowsePageViewModel.OpenCurrentFolderCommand.ExecuteAsync());
+                    PumpLayout(window);
+                    var raised = WaitForFolderAutomationEventCount(
+                        window,
+                        () => Volatile.Read(ref eventCount),
+                        before + 1);
+                    WaitForFolderAutomationEventQuietPeriod(window);
+                    var after = Volatile.Read(ref eventCount);
+                    var announced = eventNames.ToArray().Skip(before).FirstOrDefault();
+                    var peer = UIElementAutomationPeer.CreatePeerForElement(region)
+                               ?? new TextBlockAutomationPeer(region);
+                    assert(raised
+                           && after == before + 1
+                           && string.Equals(
+                               shell.BrowsePageViewModel.FolderActionStatusText,
+                               expected,
+                               StringComparison.Ordinal)
+                           && string.Equals(
+                               shell.BrowseProjectActionStatusText,
+                               expected,
+                               StringComparison.Ordinal)
+                           && string.Equals(region.Text, expected, StringComparison.Ordinal)
+                           && string.Equals(announced, expected, StringComparison.Ordinal)
+                           && string.Equals(peer.GetName(), expected, StringComparison.Ordinal),
+                        "A success/missing/unsafe/shell folder outcome was not published exactly once "
+                        + $"through visible text and UIA: expected='{expected}'; events={after - before}; "
+                        + $"announced='{announced}'; text='{region.Text}'; name='{peer.GetName()}'.");
+                }
+
+                assert(resolver.OpenCount == SequentialFolderOutcomeResolver.ExpectedStatusTexts.Count,
+                    "The folder-outcome UIA fixture did not execute every frozen-target outcome exactly once.");
+                Console.WriteLine(
+                    $"FOLDER_ACTION_LIVE_REGION events={eventCount} outcomes={resolver.OpenCount} result=PASS");
+            }
+            finally
+            {
+                Automation.RemoveAutomationEventHandler(
+                    AutomationElementIdentifiers.LiveRegionChangedEvent,
+                    automationRoot,
+                    handler);
+            }
+        }
+        finally
+        {
+            window.DataContext = restoreShell;
+            restoreShell.NavigateTo("BROWSE");
+            window.Width = 1190;
+            window.Height = 800;
+            PumpLayout(window);
+            TryDeleteDirectory(testRoot);
+        }
+    }
+
+    private static bool WaitForFolderAutomationEventCount(
+        WallpaperField.MainWindow window,
+        Func<int> readCount,
+        int expected)
+    {
+        var timeout = Stopwatch.StartNew();
+        while (readCount() < expected && timeout.Elapsed < TimeSpan.FromSeconds(2))
+        {
+            PumpLayout(window);
+            Thread.Sleep(10);
+        }
+
+        return readCount() >= expected;
+    }
+
+    private static void WaitForFolderAutomationEventQuietPeriod(
+        WallpaperField.MainWindow window)
+    {
+        var timeout = Stopwatch.StartNew();
+        while (timeout.Elapsed < TimeSpan.FromMilliseconds(180))
+        {
+            PumpLayout(window);
+            Thread.Sleep(10);
+        }
     }
 
     private static Button RealizeProjectCard(
@@ -3599,16 +4000,22 @@ internal static class ProjectBrowserUiRegressionTests
 
         var details = WpfElementFinder.FindByName<FrameworkElement>(
             window, "BrowsePersistentDetails")!;
+        var detailsContent = WpfElementFinder.FindByName<ScrollViewer>(
+            window, "BrowsePersistentDetailsScrollViewer")!;
+        assert(!details.Focusable
+               && !KeyboardNavigation.GetIsTabStop(details)
+               && detailsContent.Focusable,
+            "Persistent details reverted to a naked focusable Border or lost its content fallback.");
         pending = StartPendingProjectFocus(
             window, browseView, viewModel, grid, scrollViewer, focusMethod, 902, out offsetBefore);
         _ = window.Dispatcher.BeginInvoke(
-            () => details.Focus(),
+            () => detailsContent.Focus(),
             DispatcherPriority.Input);
         WaitForDispatcherTask(window, pending);
         assert(!pending.Result
-               && details.IsKeyboardFocusWithin
+               && detailsContent.IsKeyboardFocusWithin
                && Math.Abs(scrollViewer.VerticalOffset - offsetBefore) < 0.5,
-            "Persistent-details focus did not cancel the pending exact-key lease before scroll/focus.");
+            "Persistent-details content focus did not cancel the pending exact-key lease before scroll/focus.");
         search.Focus();
         window.Width = 920;
         window.Height = 680;
@@ -4437,7 +4844,7 @@ internal static class ProjectBrowserUiRegressionTests
         var filterLayer = WpfElementFinder.FindByName<FrameworkElement>(
             window, "BrowseCompactFilterLayer")!;
         var compactToggle = FindVisualDescendants<ToggleButton>(filterLayer).First(toggle =>
-            AutomationProperties.GetName(toggle) == "仅显示可处理项目");
+            AutomationProperties.GetName(toggle) == "仅可处理（仅显示可处理项目）");
         assert(compactToggle.Focus(),
             "The same-band filter fixture could not focus the second Compact filter control.");
         PumpLayout(window);
@@ -4482,8 +4889,13 @@ internal static class ProjectBrowserUiRegressionTests
         var outputRoot = Path.Combine(testRoot, "output");
         Directory.CreateDirectory(sourceRoot);
         Directory.CreateDirectory(outputRoot);
+        var replacementScanService = new BrowserScanService(
+            sourceRoot,
+            outputRoot,
+            null,
+            4);
         var emptyShell = CreateShell(
-            new BrowserScanService(sourceRoot, outputRoot, null, 0),
+            replacementScanService,
             sourceRoot,
             outputRoot);
         try
@@ -4495,10 +4907,39 @@ internal static class ProjectBrowserUiRegressionTests
             window.Height = 680;
             PumpLayout(window);
             var viewModel = emptyShell.BrowsePageViewModel;
+            viewModel.OpenDetails();
+            PumpLayout(window);
+            var targetDeadline = DateTime.UtcNow.AddSeconds(2);
+            while (viewModel.CurrentFolderTarget is null
+                   && DateTime.UtcNow < targetDeadline)
+            {
+                Thread.Sleep(2);
+                PumpLayout(window);
+            }
+
+            var compactDetails = WpfElementFinder.FindByName<FrameworkElement>(
+                window,
+                "BrowseCompactDetailsOverlay")!;
+            assert(viewModel.CurrentProject is not null
+                   && viewModel.CurrentFolderTarget is not null
+                   && viewModel.IsDetailsOpen
+                   && compactDetails.Visibility == Visibility.Visible,
+                "The empty-replacement fixture did not establish open Compact details with a frozen folder target.");
+
+            replacementScanService.ProjectCount = 0;
+            WaitForDispatcherTask(window, emptyShell.ScanSession.ScanAsync());
+            PumpLayout(window);
             var emptyState = WpfElementFinder.FindByName<FrameworkElement>(
                 window, "BrowseEmptyState")!;
             var readyState = WpfElementFinder.FindByName<FrameworkElement>(
                 window, "BrowseReadyState")!;
+            assert(viewModel.CurrentProject is null
+                   && viewModel.CurrentFolderTarget is null
+                   && !viewModel.IsFolderTargetResolving
+                   && !viewModel.IsDetailsOpen
+                   && compactDetails.Visibility == Visibility.Collapsed
+                   && emptyState.Visibility == Visibility.Visible,
+                "A successful empty snapshot retained stale Compact details or its executable folder target.");
             RaiseClick(WpfElementFinder.FindByName<Button>(window, "BrowseFilterButton"));
             PumpLayout(window);
             var filterLayer = WpfElementFinder.FindByName<FrameworkElement>(
@@ -4576,8 +5017,12 @@ internal static class ProjectBrowserUiRegressionTests
             firstCard.Focus();
             RaiseKey(firstCard, Key.Enter);
             PumpLayout(window);
-            assert(details.IsKeyboardFocusWithin,
-                "Enter waited on the disabled folder action instead of focusing a stable details surface.");
+            var firstExpectedAction = FindVisualDescendants<Button>(details)
+                .First(button => button.Name.StartsWith("BrowseProject", StringComparison.Ordinal)
+                                 && button.IsVisible
+                                 && button.IsEnabled);
+            assert(ReferenceEquals(Keyboard.FocusedElement, firstExpectedAction),
+                "Enter did not focus the first visible enabled details action while folder resolution was pending.");
 
             var second = viewModel.VisibleProjects[1];
             var secondCard = FindCardButtons(grid).First(candidate =>
@@ -4586,10 +5031,14 @@ internal static class ProjectBrowserUiRegressionTests
             secondCard.Focus();
             RaiseKey(secondCard, Key.Enter);
             PumpLayout(window);
+            var secondExpectedAction = FindVisualDescendants<Button>(details)
+                .First(button => button.Name.StartsWith("BrowseProject", StringComparison.Ordinal)
+                                 && button.IsVisible
+                                 && button.IsEnabled);
             assert(ReferenceEquals(viewModel.CurrentProject, second)
                    && resolver.HasEntered(second.ProjectKey)
-                   && details.IsKeyboardFocusWithin,
-                "A newer Enter did not immediately focus details while its own folder target was pending.");
+                   && ReferenceEquals(Keyboard.FocusedElement, secondExpectedAction),
+                "A newer Enter did not focus its first actionable detail control while its folder target was pending.");
             var focusedForSecond = Keyboard.FocusedElement;
 
             resolver.Release(first.ProjectKey);
@@ -4846,7 +5295,8 @@ internal static class ProjectBrowserUiRegressionTests
                     focusWindow,
                     "BrowseSelectionTray")!;
                 var trayAction = FindVisualDescendants<Button>(tray)
-                    .Single(button => AutomationProperties.GetName(button) == "处理全部已选项目");
+                    .Single(button => AutomationProperties.GetName(button)
+                        .StartsWith("处理已选 · ", StringComparison.Ordinal));
                 assert(tray.IsVisible,
                     $"High Contrast selection tray was not visible at {item.Width:0} DIP.");
                 VerifyFocusedHighContrastSurface(
@@ -7301,95 +7751,107 @@ internal static class ProjectBrowserUiRegressionTests
     private static async Task VerifyFrozenFolderTargetAsync(Action<bool, string> assert)
     {
         var callerThread = Environment.CurrentManagedThreadId;
-        var sourcePath = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "task5-source"));
-        var outputPath = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "task5-output"));
-        var outputExists = true;
-        var sourceExists = true;
-        var observedThread = 0;
-        var openProbeThread = 0;
-        var probeOpen = false;
-        var pathsChecked = new List<string>();
-        using var entered = new ManualResetEventSlim();
-        using var release = new ManualResetEventSlim();
-        using var openEntered = new ManualResetEventSlim();
-        using var openRelease = new ManualResetEventSlim();
-        var folderService = new TrackingSystemFolderService();
-        var resolver = new ProjectFolderTargetResolver(
-            folderService,
-            path =>
+        var testRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"wallpaper-field-task5-folder-target-{Guid.NewGuid():N}");
+        try
+        {
+            var sourcePath = Path.Combine(testRoot, "source");
+            var outputPath = Path.Combine(testRoot, "output");
+            Directory.CreateDirectory(sourcePath);
+            Directory.CreateDirectory(outputPath);
+            var outputExists = true;
+            var sourceExists = true;
+            var observedThread = 0;
+            var openProbeThread = 0;
+            var probeOpen = false;
+            var pathsChecked = new List<string>();
+            using var entered = new ManualResetEventSlim();
+            using var release = new ManualResetEventSlim();
+            using var openEntered = new ManualResetEventSlim();
+            using var openRelease = new ManualResetEventSlim();
+            var folderService = new TrackingSystemFolderService();
+            var resolver = new ProjectFolderTargetResolver(
+                folderService,
+                path =>
+                {
+                    lock (pathsChecked)
+                    {
+                        pathsChecked.Add(path);
+                    }
+
+                    Interlocked.CompareExchange(ref observedThread, Environment.CurrentManagedThreadId, 0);
+                    if (Volatile.Read(ref probeOpen))
+                    {
+                        Interlocked.Exchange(ref openProbeThread, Environment.CurrentManagedThreadId);
+                        openEntered.Set();
+                        openRelease.Wait(TimeSpan.FromSeconds(2));
+                    }
+
+                    entered.Set();
+                    release.Wait(TimeSpan.FromSeconds(2));
+                    return string.Equals(path, outputPath, StringComparison.OrdinalIgnoreCase)
+                        ? Volatile.Read(ref outputExists)
+                        : Volatile.Read(ref sourceExists);
+                });
+            var record = new WallpaperRecord
             {
-                lock (pathsChecked)
-                {
-                    pathsChecked.Add(path);
-                }
+                WorkshopId = "folder-race",
+                Title = "Folder race",
+                SourceDirectory = sourcePath,
+                OutputDirectory = outputPath,
+                HasScenePackage = true,
+                ScenePackagePath = Path.Combine(sourcePath, "scene.pkg")
+            };
+            var resolveTask = resolver.ResolveAsync(record);
+            assert(entered.Wait(TimeSpan.FromSeconds(2))
+                   && observedThread != callerThread && !resolveTask.IsCompleted,
+                "Folder target resolution did not execute behind the worker-side boundary.");
+            release.Set();
+            var frozenTarget = await resolveTask;
+            assert(frozenTarget.Kind == ProjectFolderTargetKind.Output
+                   && string.Equals(frozenTarget.Path, outputPath, StringComparison.OrdinalIgnoreCase),
+                "Folder resolution did not freeze the existing output target.");
 
-                Interlocked.CompareExchange(ref observedThread, Environment.CurrentManagedThreadId, 0);
-                if (Volatile.Read(ref probeOpen))
-                {
-                    Interlocked.Exchange(ref openProbeThread, Environment.CurrentManagedThreadId);
-                    openEntered.Set();
-                    openRelease.Wait(TimeSpan.FromSeconds(2));
-                }
+            outputExists = false;
+            sourceExists = true;
+            lock (pathsChecked)
+            {
+                pathsChecked.Clear();
+            }
 
-                entered.Set();
-                release.Wait(TimeSpan.FromSeconds(2));
-                return string.Equals(path, outputPath, StringComparison.OrdinalIgnoreCase)
-                    ? Volatile.Read(ref outputExists)
-                    : Volatile.Read(ref sourceExists);
-            });
-        var record = new WallpaperRecord
-        {
-            WorkshopId = "folder-race",
-            Title = "Folder race",
-            SourceDirectory = sourcePath,
-            OutputDirectory = outputPath,
-            HasScenePackage = true,
-            ScenePackagePath = Path.Combine(sourcePath, "scene.pkg")
-        };
-        var resolveTask = resolver.ResolveAsync(record);
-        assert(entered.Wait(TimeSpan.FromSeconds(2))
-               && observedThread != callerThread && !resolveTask.IsCompleted,
-            "Folder target resolution did not execute behind the worker-side boundary.");
-        release.Set();
-        var frozenTarget = await resolveTask;
-        assert(frozenTarget.Kind == ProjectFolderTargetKind.Output
-               && string.Equals(frozenTarget.Path, outputPath, StringComparison.OrdinalIgnoreCase),
-            "Folder resolution did not freeze the existing output target.");
+            var missing = await resolver.OpenAsync(frozenTarget);
+            string[] checkedDuringOpen;
+            lock (pathsChecked)
+            {
+                checkedDuringOpen = pathsChecked.ToArray();
+            }
 
-        outputExists = false;
-        sourceExists = true;
-        lock (pathsChecked)
-        {
-            pathsChecked.Clear();
+            assert(!missing.Succeeded && missing.FailureCode == "BROWSE_FOLDER_TARGET_MISSING"
+                   && folderService.OpenedPath is null && checkedDuringOpen.Length == 1
+                   && string.Equals(checkedDuringOpen[0], outputPath, StringComparison.OrdinalIgnoreCase),
+                "A vanished frozen output target fell back to source or escaped controlled failure.");
+            outputExists = true;
+            probeOpen = true;
+            var executeCallerThread = Environment.CurrentManagedThreadId;
+            var openTask = resolver.OpenAsync(frozenTarget);
+            assert(openEntered.Wait(TimeSpan.FromSeconds(2))
+                   && openProbeThread != executeCallerThread
+                   && !openTask.IsCompleted,
+                "Folder execution revalidation did not cross the worker-side boundary.");
+            openRelease.Set();
+            var opened = await openTask;
+            assert(opened.Succeeded
+                   && string.Equals(folderService.OpenedPath, outputPath, StringComparison.OrdinalIgnoreCase)
+                   && folderService.OpenThreadId == openProbeThread,
+                "Folder execution did not revalidate and open the same frozen path on a worker. "
+                + $"succeeded={opened.Succeeded}; opened={folderService.OpenedPath ?? "<null>"}; "
+                + $"expected={outputPath}; openThread={folderService.OpenThreadId}; probeThread={openProbeThread}.");
         }
-
-        var missing = await resolver.OpenAsync(frozenTarget);
-        string[] checkedDuringOpen;
-        lock (pathsChecked)
+        finally
         {
-            checkedDuringOpen = pathsChecked.ToArray();
+            TryDeleteDirectory(testRoot);
         }
-
-        assert(!missing.Succeeded && missing.FailureCode == "BROWSE_FOLDER_TARGET_MISSING"
-               && folderService.OpenedPath is null && checkedDuringOpen.Length == 1
-               && string.Equals(checkedDuringOpen[0], outputPath, StringComparison.OrdinalIgnoreCase),
-            "A vanished frozen output target fell back to source or escaped controlled failure.");
-        outputExists = true;
-        probeOpen = true;
-        var executeCallerThread = Environment.CurrentManagedThreadId;
-        var openTask = resolver.OpenAsync(frozenTarget);
-        assert(openEntered.Wait(TimeSpan.FromSeconds(2))
-               && openProbeThread != executeCallerThread
-               && !openTask.IsCompleted,
-            "Folder execution revalidation did not cross the worker-side boundary.");
-        openRelease.Set();
-        var opened = await openTask;
-        assert(opened.Succeeded
-               && string.Equals(folderService.OpenedPath, outputPath, StringComparison.OrdinalIgnoreCase)
-               && folderService.OpenThreadId == openProbeThread,
-            "Folder execution did not revalidate and open the same frozen path on a worker. "
-            + $"succeeded={opened.Succeeded}; opened={folderService.OpenedPath ?? "<null>"}; "
-            + $"expected={outputPath}; openThread={folderService.OpenThreadId}; probeThread={openProbeThread}.");
     }
 
     private static async Task VerifyFolderFailurePublicationAsync(Action<bool, string> assert)
@@ -7545,6 +8007,28 @@ internal static class ProjectBrowserUiRegressionTests
             Keyboard.PrimaryDevice, source, Environment.TickCount, key)
         {
             RoutedEvent = Keyboard.PreviewKeyDownEvent
+        });
+    }
+
+    private static void RaiseButtonKeyboardActivation(Button button, Key key)
+    {
+        var source = PresentationSource.FromVisual(button)
+                     ?? throw new InvalidOperationException("The WPF button has no presentation source.");
+        button.RaiseEvent(new KeyEventArgs(
+            Keyboard.PrimaryDevice,
+            source,
+            Environment.TickCount,
+            key)
+        {
+            RoutedEvent = Keyboard.KeyDownEvent
+        });
+        button.RaiseEvent(new KeyEventArgs(
+            Keyboard.PrimaryDevice,
+            source,
+            Environment.TickCount,
+            key)
+        {
+            RoutedEvent = Keyboard.KeyUpEvent
         });
     }
 
@@ -7940,6 +8424,8 @@ internal static class ProjectBrowserUiRegressionTests
         string? previewPath,
         int projectCount) : IWallpaperScanService
     {
+        internal int ProjectCount { get; set; } = projectCount;
+
         public Task<ScanResult> ScanAsync(
             WallpaperScanRequest request,
             IProgress<ScanProgress>? progress = null,
@@ -7950,7 +8436,7 @@ internal static class ProjectBrowserUiRegressionTests
             var previewMtime = previewPath is null
                 ? (DateTimeOffset?)null
                 : File.GetLastWriteTimeUtc(previewPath);
-            var items = Enumerable.Range(0, projectCount).Select(index =>
+            var items = Enumerable.Range(0, ProjectCount).Select(index =>
             {
                 var projectSource = Path.Combine(sourceRoot, index.ToString("D4"));
                 var hasPreview = previewPath is not null && index == 0;
@@ -8117,6 +8603,60 @@ internal static class ProjectBrowserUiRegressionTests
                 target,
                 "BROWSE_FOLDER_TARGET_MISSING",
                 "此前显示的目录已不存在；未切换到其他目录。"));
+    }
+
+    private sealed class SequentialFolderOutcomeResolver(string sourcePath)
+        : IProjectFolderTargetResolver
+    {
+        private int _openCount;
+
+        internal static IReadOnlyList<string> ExpectedStatusTexts { get; } =
+        [
+            "已打开此前显示的目录。",
+            "此前显示的目录已不存在；未切换到其他目录。",
+            "此前显示的目录未通过安全路径检查；未打开任何目录。",
+            "无法打开此前显示的目录：Shell 启动失败。"
+        ];
+
+        internal int OpenCount => Volatile.Read(ref _openCount);
+
+        public Task<ProjectFolderTarget> ResolveAsync(
+            WallpaperRecord record,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(new ProjectFolderTarget(
+                record.ProjectKey,
+                sourcePath,
+                ProjectFolderTargetKind.Source));
+        }
+
+        public Task<ProjectFolderOpenResult> OpenAsync(
+            ProjectFolderTarget target,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var index = Interlocked.Increment(ref _openCount) - 1;
+            var result = index switch
+            {
+                0 => ProjectFolderOpenResult.Success(target),
+                1 => ProjectFolderOpenResult.Failure(
+                    target,
+                    "BROWSE_FOLDER_TARGET_MISSING",
+                    ExpectedStatusTexts[index]),
+                2 => ProjectFolderOpenResult.Failure(
+                    target,
+                    "BROWSE_FOLDER_TARGET_UNSAFE",
+                    ExpectedStatusTexts[index]),
+                3 => ProjectFolderOpenResult.Failure(
+                    target,
+                    "BROWSE_FOLDER_OPEN_FAILED",
+                    ExpectedStatusTexts[index]),
+                _ => throw new InvalidOperationException(
+                    "The folder-outcome fixture received an unexpected extra open request.")
+            };
+            return Task.FromResult(result);
+        }
     }
 
     private sealed class BlockingFolderResolver(string sourcePath)

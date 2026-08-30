@@ -85,6 +85,13 @@ public sealed class ProjectFolderTargetResolver : IProjectFolderTargetResolver
                 exactPath,
                 "浏览目录");
         }
+        catch (DirectoryNotFoundException)
+        {
+            return ProjectFolderOpenResult.Failure(
+                target,
+                "BROWSE_FOLDER_TARGET_MISSING",
+                "此前显示的目录已不存在；未切换到其他目录。");
+        }
         catch (Exception exception) when (exception is
                    ArgumentException or InvalidDataException
                    or UnauthorizedAccessException or IOException
@@ -99,12 +106,26 @@ public sealed class ProjectFolderTargetResolver : IProjectFolderTargetResolver
         cancellationToken.ThrowIfCancellationRequested();
         try
         {
+            using var lease = DirectoryPathLease.Acquire(exactPath);
             _systemFolderService.OpenFolder(exactPath);
             return ProjectFolderOpenResult.Success(target with { Path = exactPath });
         }
+        catch (PathPolicyReparsePointException)
+        {
+            return ProjectFolderOpenResult.Failure(
+                target,
+                "BROWSE_FOLDER_TARGET_UNSAFE",
+                "此前显示的目录未通过安全路径检查；未打开任何目录。");
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return ProjectFolderOpenResult.Failure(
+                target,
+                "BROWSE_FOLDER_TARGET_MISSING",
+                "此前显示的目录已不存在；未切换到其他目录。");
+        }
         catch (Exception exception) when (exception is
-                   ArgumentException or DirectoryNotFoundException
-                   or UnauthorizedAccessException or IOException
+                   ArgumentException or UnauthorizedAccessException or IOException
                    or InvalidOperationException or System.ComponentModel.Win32Exception)
         {
             return ProjectFolderOpenResult.Failure(

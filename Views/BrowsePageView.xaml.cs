@@ -918,7 +918,7 @@ public sealed partial class BrowsePageView : UserControl
                     }
                     else
                     {
-                        FocusElement(BrowsePersistentDetails);
+                        FocusPersistentDetailsActionOrContent();
                     }
                 }
                 else if (viewModel.IsCompactLayout)
@@ -1226,6 +1226,8 @@ public sealed partial class BrowsePageView : UserControl
                 OnBrowseProjectFocusRequested;
             _subscribedShell.UnpackSession.PropertyChanged -=
                 OnUnpackSessionPropertyChanged;
+            _subscribedShell.BrowsePageViewModel.PropertyChanged -=
+                OnBrowsePageViewModelPropertyChanged;
         }
 
         Interlocked.Increment(ref _processingLiveRegionGeneration);
@@ -1248,7 +1250,58 @@ public sealed partial class BrowsePageView : UserControl
                 OnBrowseProjectFocusRequested;
             _subscribedShell.UnpackSession.PropertyChanged +=
                 OnUnpackSessionPropertyChanged;
+            _subscribedShell.BrowsePageViewModel.PropertyChanged +=
+                OnBrowsePageViewModelPropertyChanged;
         }
+    }
+
+    private void OnBrowsePageViewModelPropertyChanged(
+        object? sender,
+        PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(BrowsePageViewModel.FolderActionStatusText)
+            || _subscribedShell is not { } shell
+            || !ReferenceEquals(sender, shell.BrowsePageViewModel))
+        {
+            return;
+        }
+
+        if (!Dispatcher.CheckAccess())
+        {
+            _ = Dispatcher.BeginInvoke(
+                () => RaiseFolderActionLiveRegionChanged(shell),
+                DispatcherPriority.DataBind);
+            return;
+        }
+
+        RaiseFolderActionLiveRegionChanged(shell);
+    }
+
+    private void RaiseFolderActionLiveRegionChanged(ShellViewModel shell)
+    {
+        if (!ReferenceEquals(_subscribedShell, shell)
+            || !ReferenceEquals(DataContext, shell)
+            || !BrowseView.IsVisible
+            || string.IsNullOrWhiteSpace(
+                shell.BrowsePageViewModel.FolderActionStatusText))
+        {
+            return;
+        }
+
+        var text = shell.BrowsePageViewModel.FolderActionStatusText;
+        var region = FindVisualDescendants<TextBlock>(BrowseView)
+            .FirstOrDefault(candidate =>
+                candidate.Name == "BrowseProjectFolderActionStatusText"
+                && candidate.IsVisible);
+        if (region is null)
+        {
+            return;
+        }
+
+        region.SetCurrentValue(AutomationProperties.NameProperty, text);
+        var peer = UIElementAutomationPeer.CreatePeerForElement(region)
+                   ?? new TextBlockAutomationPeer(region);
+        peer.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
     }
 
     private void OnUnpackSessionPropertyChanged(
@@ -1535,7 +1588,7 @@ public sealed partial class BrowsePageView : UserControl
                 else
                 {
                     await Dispatcher.InvokeAsync(
-                        () => FocusElement(BrowsePersistentDetails),
+                        () => FocusPersistentDetailsActionOrContent(),
                         DispatcherPriority.Input);
                 }
 
@@ -1971,6 +2024,27 @@ public sealed partial class BrowsePageView : UserControl
         var scope = FocusManager.GetFocusScope(control);
         FocusManager.SetFocusedElement(scope, control);
         return control.Focus();
+    }
+
+    private bool FocusPersistentDetailsActionOrContent()
+    {
+        foreach (var name in new[]
+                 {
+                     "BrowseProjectOpenFolderButton",
+                     "BrowseProjectProblemsButton",
+                     "BrowseProjectProcessButton"
+                 })
+        {
+            var button = FindVisualDescendants<Button>(BrowsePersistentDetails)
+                .FirstOrDefault(candidate => candidate.Name == name);
+            if (button is { IsVisible: true, IsEnabled: true, Focusable: true }
+                && FocusElement(button))
+            {
+                return true;
+            }
+        }
+
+        return FocusElement(BrowsePersistentDetailsScrollViewer);
     }
 
     private void UpdateModalBackgroundState()

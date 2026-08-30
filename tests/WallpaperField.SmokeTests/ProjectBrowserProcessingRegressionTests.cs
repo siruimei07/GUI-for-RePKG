@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Xml.Linq;
@@ -14,6 +15,7 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Threading;
+using Microsoft.Win32.SafeHandles;
 using WallpaperField.Application;
 using WallpaperField.Contracts;
 using WallpaperField.Models;
@@ -38,6 +40,10 @@ internal static class ProjectBrowserProcessingRegressionTests
         await VerifyActiveScopeAndCompletionOwnershipAsync(failures);
         VerifyExactProjectIssueLifecycle(failures);
         await VerifyFolderOpenRejectsReparseSwapAsync(failures);
+        await VerifyFolderLeaseBlocksPostValidationReplacementAsync(failures);
+        VerifySystemFolderServiceHoldsLeaseThroughShellCall(failures);
+        VerifySystemFolderServiceBlocksConcurrentDirectoryWrite(failures);
+        await VerifyFolderOpenFailureContractsAsync(failures);
         await VerifyScanAndUnpackIssuesUseExactProjectKeysAsync(failures);
         await VerifyUnpackErrorPathsAreAmbiguitySafeAsync(failures);
         await VerifyRejectedLegacyFallbackResolvesNothingAsync(failures);
@@ -104,6 +110,331 @@ internal static class ProjectBrowserProcessingRegressionTests
             }
         }
     }
+
+    private static async Task VerifyFolderLeaseBlocksPostValidationReplacementAsync(
+        ICollection<string> failures)
+    {
+        var testRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"WallpaperField-BrowseFolderLease-{Guid.NewGuid():N}");
+        var protectedParent = Path.Combine(testRoot, "protected-parent");
+        var movedParent = Path.Combine(testRoot, "moved-parent");
+        var frozenSource = Path.Combine(protectedParent, "frozen-source");
+        var outsideTarget = Path.Combine(testRoot, "outside-target");
+        Directory.CreateDirectory(frozenSource);
+        Directory.CreateDirectory(outsideTarget);
+
+        try
+        {
+            var record = new WallpaperRecord
+            {
+                WorkshopId = "folder-lease",
+                Title = "Folder lease",
+                SourceDirectory = frozenSource,
+                OutputDirectory = Path.Combine(testRoot, "absent-output"),
+                WallpaperType = "scene",
+                HasScenePackage = true,
+                ScenePackagePath = Path.Combine(frozenSource, "scene.pkg")
+            };
+            var systemFolder = new PostValidationReplacingSystemFolderService(
+                protectedParent,
+                movedParent,
+                outsideTarget);
+            var resolver = new ProjectFolderTargetResolver(systemFolder);
+            var frozenTarget = await resolver.ResolveAsync(record);
+
+            var result = await resolver.OpenAsync(frozenTarget);
+            var targetAttributes = Directory.Exists(frozenSource)
+                ? File.GetAttributes(frozenSource)
+                : 0;
+            if (!result.Succeeded
+                || systemFolder.ParentReplacementSucceeded
+                || !systemFolder.ParentReplacementBlocked
+                || systemFolder.LeafReplacementSucceeded
+                || !systemFolder.LeafReplacementBlocked
+                || !Directory.Exists(frozenSource)
+                || (targetAttributes & FileAttributes.ReparsePoint) != 0)
+            {
+                failures.Add(
+                    "the frozen Browse path could be replaced after policy validation "
+                    + "and before the shell-open call completed");
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(frozenSource)
+                && (File.GetAttributes(frozenSource) & FileAttributes.ReparsePoint) != 0)
+            {
+                Directory.Delete(frozenSource);
+            }
+
+            if (Directory.Exists(testRoot))
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+        }
+    }
+
+    private static void VerifySystemFolderServiceHoldsLeaseThroughShellCall(
+        ICollection<string> failures)
+    {
+        var testRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"WallpaperField-SystemFolderLease-{Guid.NewGuid():N}");
+        var parentCase = Path.Combine(testRoot, "parent-case");
+        var protectedParent = Path.Combine(parentCase, "protected-parent");
+        var movedParent = Path.Combine(parentCase, "moved-parent");
+        var parentTarget = Path.Combine(protectedParent, "target");
+        var leafTarget = Path.Combine(testRoot, "leaf-case", "target");
+        Directory.CreateDirectory(parentTarget);
+        Directory.CreateDirectory(leafTarget);
+
+        try
+        {
+            var parentShellCalled = false;
+            var parentShellPathExact = false;
+            var parentMoveBlocked = false;
+            var parentMoveSucceeded = false;
+            var parentService = new SystemFolderService(startInfo =>
+            {
+                parentShellCalled = true;
+                parentShellPathExact = startInfo.UseShellExecute
+                                       && string.Equals(
+                                           startInfo.FileName,
+                                           Path.GetFullPath(parentTarget),
+                                           StringComparison.OrdinalIgnoreCase);
+                try
+                {
+                    Directory.Move(protectedParent, movedParent);
+                    parentMoveSucceeded = true;
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                    parentMoveBlocked = true;
+                }
+            });
+            parentService.OpenFolder(parentTarget);
+
+            var parentLeaseReleased = false;
+            if (Directory.Exists(protectedParent))
+            {
+                Directory.Move(protectedParent, movedParent);
+                parentLeaseReleased = true;
+            }
+
+            var leafShellCalled = false;
+            var leafDeleteBlocked = false;
+            var leafDeleteSucceeded = false;
+            var leafService = new SystemFolderService(_ =>
+            {
+                leafShellCalled = true;
+                try
+                {
+                    Directory.Delete(leafTarget);
+                    leafDeleteSucceeded = true;
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                    leafDeleteBlocked = true;
+                }
+            });
+            leafService.OpenFolder(leafTarget);
+
+            var leafLeaseReleased = false;
+            if (Directory.Exists(leafTarget))
+            {
+                Directory.Delete(leafTarget);
+                leafLeaseReleased = true;
+            }
+
+            if (!parentShellCalled
+                || !parentShellPathExact
+                || parentMoveSucceeded
+                || !parentMoveBlocked
+                || !parentLeaseReleased
+                || !leafShellCalled
+                || leafDeleteSucceeded
+                || !leafDeleteBlocked
+                || !leafLeaseReleased)
+            {
+                failures.Add(
+                    "SystemFolderService did not retain every no-delete-share directory "
+                    + "handle through the shell call or release it afterwards");
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(testRoot))
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+        }
+    }
+
+    private static async Task VerifyFolderOpenFailureContractsAsync(
+        ICollection<string> failures)
+    {
+        var testRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"WallpaperField-FolderContracts-{Guid.NewGuid():N}");
+        var safeTarget = Path.Combine(testRoot, "safe-target");
+        var outsideTarget = Path.Combine(testRoot, "outside-target");
+        var unsafeTarget = Path.Combine(testRoot, "unsafe-target");
+        Directory.CreateDirectory(safeTarget);
+        Directory.CreateDirectory(outsideTarget);
+
+        try
+        {
+            var missingService = new NullSystemFolderService();
+            var missingTarget = new ProjectFolderTarget(
+                "folder-contract-missing",
+                Path.Combine(testRoot, "missing-target"),
+                ProjectFolderTargetKind.Output);
+            var missing = await new ProjectFolderTargetResolver(missingService)
+                .OpenAsync(missingTarget);
+
+            var dynamicallyMissingService = new NullSystemFolderService();
+            var dynamicallyMissing = await new ProjectFolderTargetResolver(
+                    dynamicallyMissingService,
+                    _ => true)
+                .OpenAsync(missingTarget);
+
+            CreateDirectoryJunction(unsafeTarget, outsideTarget);
+            var unsafeShellCalled = false;
+            var unsafeResult = await new ProjectFolderTargetResolver(
+                    new SystemFolderService(_ => unsafeShellCalled = true))
+                .OpenAsync(new ProjectFolderTarget(
+                    "folder-contract-unsafe",
+                    unsafeTarget,
+                    ProjectFolderTargetKind.Source));
+
+            var shellFailure = await new ProjectFolderTargetResolver(
+                    new SystemFolderService(_ => throw new System.ComponentModel.Win32Exception(
+                        2,
+                        "fixture shell failure")))
+                .OpenAsync(new ProjectFolderTarget(
+                    "folder-contract-shell",
+                    safeTarget,
+                    ProjectFolderTargetKind.Source));
+
+            if (missing.Succeeded
+                || missing.FailureCode != "BROWSE_FOLDER_TARGET_MISSING"
+                || missingService.OpenCount != 0
+                || dynamicallyMissing.Succeeded
+                || dynamicallyMissing.FailureCode != "BROWSE_FOLDER_TARGET_MISSING"
+                || dynamicallyMissingService.OpenCount != 0
+                || unsafeResult.Succeeded
+                || unsafeResult.FailureCode != "BROWSE_FOLDER_TARGET_UNSAFE"
+                || unsafeShellCalled
+                || shellFailure.Succeeded
+                || shellFailure.FailureCode != "BROWSE_FOLDER_OPEN_FAILED")
+            {
+                failures.Add(
+                    "folder lease hardening changed the missing, unsafe, or shell-failure contract");
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(unsafeTarget))
+            {
+                Directory.Delete(unsafeTarget);
+            }
+
+            if (Directory.Exists(testRoot))
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+        }
+    }
+
+    private static void VerifySystemFolderServiceBlocksConcurrentDirectoryWrite(
+        ICollection<string> failures)
+    {
+        const int errorSharingViolation = 32;
+        var testRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"WallpaperField-SystemFolderWriteLease-{Guid.NewGuid():N}");
+        var target = Path.Combine(testRoot, "target");
+        Directory.CreateDirectory(target);
+
+        try
+        {
+            var callbackInvoked = false;
+            var callbackWriteOpened = false;
+            var callbackError = 0;
+            var service = new SystemFolderService(_ =>
+            {
+                callbackInvoked = true;
+                using var writeHandle = OpenDirectoryForGenericWrite(target);
+                callbackWriteOpened = !writeHandle.IsInvalid;
+                if (writeHandle.IsInvalid)
+                {
+                    callbackError = Marshal.GetLastPInvokeError();
+                }
+            });
+
+            service.OpenFolder(target);
+
+            using var releasedWriteHandle = OpenDirectoryForGenericWrite(target);
+            var releasedWriteOpened = !releasedWriteHandle.IsInvalid;
+            var releasedWriteError = releasedWriteOpened
+                ? 0
+                : Marshal.GetLastPInvokeError();
+
+            if (!callbackInvoked
+                || callbackWriteOpened
+                || callbackError != errorSharingViolation
+                || !releasedWriteOpened)
+            {
+                failures.Add(
+                    "SystemFolderService did not reject GENERIC_WRITE with sharing violation "
+                    + "while the directory lease was held and release that write access afterwards "
+                    + $"(callback_open={callbackWriteOpened}, callback_error={callbackError}, "
+                    + $"released_open={releasedWriteOpened}, released_error={releasedWriteError})");
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(testRoot))
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+        }
+    }
+
+    private static SafeFileHandle OpenDirectoryForGenericWrite(string path)
+    {
+        const uint genericWrite = 0x40000000;
+        const uint shareRead = 0x00000001;
+        const uint shareWrite = 0x00000002;
+        const uint shareDelete = 0x00000004;
+        const uint openExisting = 3;
+        const uint backupSemantics = 0x02000000;
+        return CreateFileForFolderLeaseTest(
+            path,
+            genericWrite,
+            shareRead | shareWrite | shareDelete,
+            IntPtr.Zero,
+            openExisting,
+            backupSemantics,
+            IntPtr.Zero);
+    }
+
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [DllImport(
+        "kernel32.dll",
+        EntryPoint = "CreateFileW",
+        CharSet = CharSet.Unicode,
+        ExactSpelling = true,
+        SetLastError = true)]
+    private static extern SafeFileHandle CreateFileForFolderLeaseTest(
+        string fileName,
+        uint desiredAccess,
+        uint shareMode,
+        IntPtr securityAttributes,
+        uint creationDisposition,
+        uint flagsAndAttributes,
+        IntPtr templateFile);
 
     private static void VerifyContextResolversAreLegacyOnly(
         ICollection<string> failures)
@@ -2127,9 +2458,17 @@ internal static class ProjectBrowserProcessingRegressionTests
             || shellType.GetProperty("ShowBrowseProjectProblemsCommand")
                 ?.PropertyType != typeof(RelayCommand)
             || shellType.GetProperty("RevealProblemProjectCommand")
-                ?.PropertyType != typeof(RelayCommand))
+                ?.PropertyType != typeof(RelayCommand)
+            || shellType.GetProperty("CurrentBrowseProjectActionAvailabilityText")
+                ?.PropertyType != typeof(string)
+            || shellType.GetProperty("BrowseSelectionActionAvailabilityText")
+                ?.PropertyType != typeof(string)
+            || shellType.GetProperty("BrowseSelectionTrayStatusText")
+                ?.PropertyType != typeof(string)
+            || shellType.GetProperty("BrowseProjectActionStatusText")
+                ?.PropertyType != typeof(string))
         {
-            failures.Add("Shell lacks current/batch processing or exact problem navigation commands");
+            failures.Add("Shell lacks current/batch processing commands, truthful availability text, or exact problem navigation commands");
             return;
         }
 
@@ -2163,11 +2502,13 @@ internal static class ProjectBrowserProcessingRegressionTests
                     Title = "Gamma current C"
                 }
             };
+            Directory.CreateDirectory(records[2].SourceDirectory);
             var service = new RecordingSuccessUnpackService();
+            var coordinator = new TaskLifecycleCoordinator();
             using var shell = CreateShell(
                 records,
                 service,
-                new TaskLifecycleCoordinator(),
+                coordinator,
                 sourceRoot,
                 outputRoot);
             await shell.ScanSession.ScanAsync();
@@ -2181,9 +2522,57 @@ internal static class ProjectBrowserProcessingRegressionTests
                 [projectA.Card, projectB.Card],
                 selected: true);
             shell.BrowsePageViewModel.CurrentProject = projectC;
+            var folderTargetDeadline = DateTime.UtcNow.AddSeconds(2);
+            while (shell.BrowsePageViewModel.CurrentFolderTarget is null
+                   && DateTime.UtcNow < folderTargetDeadline)
+            {
+                await Task.Delay(5);
+            }
+            await shell.BrowsePageViewModel.OpenCurrentFolderCommand.ExecuteAsync();
+            if (!shell.BrowsePageViewModel.FolderActionStatusText.Contains(
+                    "已打开",
+                    StringComparison.Ordinal))
+            {
+                failures.Add("current Browse folder outcome fixture did not establish a prior visible success");
+            }
             var currentCommand = (AsyncRelayCommand)shellType
                 .GetProperty("ProcessCurrentBrowseProjectCommand")!
                 .GetValue(shell)!;
+            var currentAvailability = (string)shellType
+                .GetProperty("CurrentBrowseProjectActionAvailabilityText")!
+                .GetValue(shell)!;
+            if (!currentCommand.CanExecute(null)
+                || !currentAvailability.Contains(
+                    projectC.ProcessabilityText,
+                    StringComparison.Ordinal))
+            {
+                failures.Add("current Browse action did not expose its positive processability fact");
+            }
+
+            var changedOutput = Path.Combine(testRoot, "changed-output");
+            Directory.CreateDirectory(changedOutput);
+            shell.OutputPath = changedOutput;
+            currentAvailability = (string)shellType
+                .GetProperty("CurrentBrowseProjectActionAvailabilityText")!
+                .GetValue(shell)!;
+            if (currentCommand.CanExecute(null)
+                || !shell.BrowsePageViewModel.FolderActionStatusText.Contains(
+                    "已打开",
+                    StringComparison.Ordinal)
+                || !currentAvailability.Contains(
+                    "源目录或输出目录",
+                    StringComparison.Ordinal)
+                || !shell.BrowseProjectActionStatusText.Contains(
+                    "源目录或输出目录",
+                    StringComparison.Ordinal)
+                || shell.BrowseProjectActionStatusText.Contains(
+                    "已打开",
+                    StringComparison.Ordinal))
+            {
+                failures.Add("an immediately stale folder success hid or replaced the current Browse processing identity reason");
+            }
+
+            shell.OutputPath = outputRoot;
             await currentCommand.ExecuteAsync();
             if (service.CapturedRequests.Count != 1
                 || !service.CapturedRequests[0].Items
@@ -2200,6 +2589,14 @@ internal static class ProjectBrowserProcessingRegressionTests
             var batchCommand = (AsyncRelayCommand)shellType
                 .GetProperty("ProcessBrowseSelectionCommand")!
                 .GetValue(shell)!;
+            var batchAvailability = (string)shellType
+                .GetProperty("BrowseSelectionActionAvailabilityText")!
+                .GetValue(shell)!;
+            if (!batchCommand.CanExecute(null)
+                || !batchAvailability.Contains("已选", StringComparison.Ordinal))
+            {
+                failures.Add("batch Browse action did not expose its positive frozen-selection fact");
+            }
             await batchCommand.ExecuteAsync();
             if (service.CapturedRequests.Count != 2
                 || service.CapturedRequests[1].Items.Count != 3
@@ -2213,6 +2610,78 @@ internal static class ProjectBrowserProcessingRegressionTests
             shell.ScanSession.TrySetUnpackSelection(
                 [projectA.Card, projectB.Card],
                 selected: true);
+
+            shell.OutputPath = changedOutput;
+            currentAvailability = (string)shellType
+                .GetProperty("CurrentBrowseProjectActionAvailabilityText")!
+                .GetValue(shell)!;
+            batchAvailability = (string)shellType
+                .GetProperty("BrowseSelectionActionAvailabilityText")!
+                .GetValue(shell)!;
+            if (currentCommand.CanExecute(null)
+                || batchCommand.CanExecute(null)
+                || shell.BrowsePageViewModel.IsSnapshotSourceCurrent
+                || !currentAvailability.Contains("源目录或输出目录", StringComparison.Ordinal)
+                || !batchAvailability.Contains("源目录或输出目录", StringComparison.Ordinal)
+                || !shell.BrowseProjectActionStatusText.Contains(
+                    "源目录或输出目录",
+                    StringComparison.Ordinal)
+                || shell.BrowseProjectActionStatusText.Contains(
+                    "已打开",
+                    StringComparison.Ordinal))
+            {
+                failures.Add("output-path drift left Browse snapshot/actions current or let a stale folder outcome hide the exact identity reason");
+            }
+
+            shell.OutputPath = outputRoot;
+            if (!currentCommand.CanExecute(null) || !batchCommand.CanExecute(null))
+            {
+                failures.Add("restoring the frozen source/output identity did not re-enable Browse processing");
+            }
+
+            foreach (var operationKind in new[]
+                     {
+                         ForegroundOperationKind.Scan,
+                         ForegroundOperationKind.LibraryRefresh
+                     })
+            {
+                var started = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                var release = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                var operation = coordinator.RunAsync(
+                    operationKind,
+                    async (_, _) =>
+                    {
+                        started.TrySetResult();
+                        await release.Task;
+                    });
+                await started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+                try
+                {
+                    currentAvailability = (string)shellType
+                        .GetProperty("CurrentBrowseProjectActionAvailabilityText")!
+                        .GetValue(shell)!;
+                    batchAvailability = (string)shellType
+                        .GetProperty("BrowseSelectionActionAvailabilityText")!
+                        .GetValue(shell)!;
+                    var expectedReason = operationKind == ForegroundOperationKind.Scan
+                        ? "扫描更新中"
+                        : "前台任务运行中";
+                    if (currentCommand.CanExecute(null)
+                        || batchCommand.CanExecute(null)
+                        || !currentAvailability.Contains(expectedReason, StringComparison.Ordinal)
+                        || !batchAvailability.Contains(expectedReason, StringComparison.Ordinal))
+                    {
+                        failures.Add($"{operationKind} disabled Browse processing without the truthful shared reason");
+                    }
+                }
+                finally
+                {
+                    release.TrySetResult();
+                    await operation.WaitAsync(TimeSpan.FromSeconds(2));
+                }
+            }
 
             var problems = shell.ProblemCenterSession;
             var baseTime = new DateTimeOffset(2026, 8, 29, 13, 0, 0, TimeSpan.Zero);
@@ -4136,6 +4605,47 @@ internal static class ProjectBrowserProcessingRegressionTests
         public void OpenFolder(string folderPath)
         {
             OpenCount++;
+        }
+    }
+
+    private sealed class PostValidationReplacingSystemFolderService(
+        string protectedParent,
+        string movedParent,
+        string outsideTarget) : ISystemFolderService
+    {
+        internal bool ParentReplacementSucceeded { get; private set; }
+
+        internal bool ParentReplacementBlocked { get; private set; }
+
+        internal bool LeafReplacementSucceeded { get; private set; }
+
+        internal bool LeafReplacementBlocked { get; private set; }
+
+        public void OpenFolder(string folderPath)
+        {
+            try
+            {
+                Directory.Move(protectedParent, movedParent);
+                Directory.CreateDirectory(protectedParent);
+                CreateDirectoryJunction(folderPath, outsideTarget);
+                ParentReplacementSucceeded = true;
+                return;
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                ParentReplacementBlocked = true;
+            }
+
+            try
+            {
+                Directory.Delete(folderPath);
+                CreateDirectoryJunction(folderPath, outsideTarget);
+                LeafReplacementSucceeded = true;
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                LeafReplacementBlocked = true;
+            }
         }
     }
 

@@ -462,7 +462,11 @@ public sealed class ShellViewModel : ObservableObject, IDisposable
                     nameof(UnpackWorkText),
                     nameof(CanScan),
                     nameof(CanRefreshOutput),
-                    nameof(IsUnpackAvailable));
+                    nameof(IsUnpackAvailable),
+                    nameof(CurrentBrowseProjectActionAvailabilityText),
+                    nameof(BrowseSelectionActionAvailabilityText),
+                    nameof(BrowseSelectionTrayStatusText),
+                    nameof(BrowseProjectActionStatusText));
             }
         }
     }
@@ -490,7 +494,11 @@ public sealed class ShellViewModel : ObservableObject, IDisposable
                     nameof(UnpackButtonText),
                     nameof(CanScan),
                     nameof(CanRefreshOutput),
-                    nameof(IsUnpackAvailable));
+                    nameof(IsUnpackAvailable),
+                    nameof(CurrentBrowseProjectActionAvailabilityText),
+                    nameof(BrowseSelectionActionAvailabilityText),
+                    nameof(BrowseSelectionTrayStatusText),
+                    nameof(BrowseProjectActionStatusText));
                 UpdateCommandStates();
             }
         }
@@ -521,6 +529,35 @@ public sealed class ShellViewModel : ObservableObject, IDisposable
         : $"解包选中项 · {SelectedUnpackCount:00}";
 
     public string UnpackToolTip => ScanSession.UnpackToolTip;
+
+    public string CurrentBrowseProjectActionAvailabilityText
+        => GetCurrentBrowseProjectAvailability().Message;
+
+    public string BrowseSelectionActionAvailabilityText
+        => GetBrowseSelectionAvailability().Message;
+
+    public string BrowseSelectionTrayStatusText
+    {
+        get
+        {
+            var availability = GetBrowseSelectionAvailability();
+            return availability.IsAvailable
+                ? BrowsePageViewModel.SelectionTraySummaryText
+                : $"{BrowsePageViewModel.SelectionTraySummaryText} · {availability.Message}";
+        }
+    }
+
+    public string BrowseProjectActionStatusText
+    {
+        get
+        {
+            var availability = GetCurrentBrowseProjectAvailability();
+            return !availability.IsAvailable
+                || string.IsNullOrWhiteSpace(BrowsePageViewModel.FolderActionStatusText)
+                    ? availability.Message
+                    : BrowsePageViewModel.FolderActionStatusText;
+        }
+    }
 
     public string StateLabel => IsClosing
         ? "CLOSING"
@@ -796,7 +833,11 @@ public sealed class ShellViewModel : ObservableObject, IDisposable
                     nameof(StateLabel),
                     nameof(CanScan),
                     nameof(CanRefreshOutput),
-                    nameof(IsUnpackAvailable));
+                    nameof(IsUnpackAvailable),
+                    nameof(CurrentBrowseProjectActionAvailabilityText),
+                    nameof(BrowseSelectionActionAvailabilityText),
+                    nameof(BrowseSelectionTrayStatusText),
+                    nameof(BrowseProjectActionStatusText));
                 UpdateCommandStates();
             }
         }
@@ -943,6 +984,17 @@ public sealed class ShellViewModel : ObservableObject, IDisposable
                 IsBusy = ScanSession.IsScanning;
                 OnPropertiesChanged(nameof(StateLabel), nameof(IsUnpackAvailable));
                 break;
+        }
+
+        if (args.PropertyName is nameof(ScanSession.SourcePath)
+            or nameof(ScanSession.OutputPath)
+            or nameof(ScanSession.ScanIdentity)
+            or nameof(ScanSession.IsCurrentIdentity)
+            or nameof(ScanSession.IsScanning)
+            or nameof(ScanSession.SelectedUnpackCount)
+            or nameof(ScanSession.ProjectSnapshot))
+        {
+            NotifyBrowseProcessingAvailabilityChanged();
         }
 
         UpdateCommandStates();
@@ -1121,6 +1173,17 @@ public sealed class ShellViewModel : ObservableObject, IDisposable
         {
             ProcessCurrentBrowseProjectCommand.NotifyCanExecuteChanged();
             ShowBrowseProjectProblemsCommand.NotifyCanExecuteChanged();
+            NotifyBrowseProcessingAvailabilityChanged();
+        }
+        else if (args.PropertyName is nameof(BrowsePageViewModel.SelectedCount)
+                 or nameof(BrowsePageViewModel.SelectionTraySummaryText))
+        {
+            ProcessBrowseSelectionCommand.NotifyCanExecuteChanged();
+            NotifyBrowseProcessingAvailabilityChanged();
+        }
+        else if (args.PropertyName == nameof(BrowsePageViewModel.FolderActionStatusText))
+        {
+            OnPropertyChanged(nameof(BrowseProjectActionStatusText));
         }
     }
 
@@ -1244,11 +1307,7 @@ public sealed class ShellViewModel : ObservableObject, IDisposable
             : Task.CompletedTask;
 
     private bool CanProcessCurrentBrowseProject()
-        => !IsClosing
-           && !HasActiveForegroundOperation
-           && !IsBusy
-           && ScanSession.IsCurrentScanIdentity()
-           && BrowsePageViewModel.CurrentProject is { IsProcessable: true };
+        => GetCurrentBrowseProjectAvailability().IsAvailable;
 
     private Task ProcessCurrentBrowseProjectAsync()
         => BrowsePageViewModel.CurrentProject is { } project
@@ -1258,17 +1317,96 @@ public sealed class ShellViewModel : ObservableObject, IDisposable
             : Task.CompletedTask;
 
     private bool CanProcessBrowseSelection()
-        => !IsClosing
-           && !HasActiveForegroundOperation
-           && !IsBusy
-           && ScanSession.IsCurrentScanIdentity()
-           && ScanSession.SelectedUnpackCount > 0;
+        => GetBrowseSelectionAvailability().IsAvailable;
 
     private Task ProcessBrowseSelectionAsync()
         => ScanSession.TryFreezeSelectedRequest(out var request)
            && request is not null
             ? UnpackSession.UnpackAsync(request)
             : Task.CompletedTask;
+
+    private BrowseProcessingAvailability GetCurrentBrowseProjectAvailability()
+    {
+        if (GetCommonBrowseProcessingBlock() is { } blocked)
+        {
+            return blocked;
+        }
+
+        var project = BrowsePageViewModel.CurrentProject;
+        if (project is null)
+        {
+            return new BrowseProcessingAvailability(false, "尚未选择当前项目。");
+        }
+
+        return new BrowseProcessingAvailability(
+            project.IsProcessable,
+            project.ProcessabilityText);
+    }
+
+    private BrowseProcessingAvailability GetBrowseSelectionAvailability()
+    {
+        if (GetCommonBrowseProcessingBlock() is { } blocked)
+        {
+            return blocked;
+        }
+
+        return ScanSession.SelectedUnpackCount > 0
+            ? new BrowseProcessingAvailability(
+                true,
+                $"已选 {ScanSession.SelectedUnpackCount:N0} 个可处理项目。")
+            : new BrowseProcessingAvailability(false, "请先选择至少一个可处理项目。");
+    }
+
+    private BrowseProcessingAvailability? GetCommonBrowseProcessingBlock()
+    {
+        if (IsClosing)
+        {
+            return new BrowseProcessingAvailability(
+                false,
+                "应用正在安全关闭，不能开始新的项目处理。");
+        }
+
+        if (HasActiveForegroundOperation)
+        {
+            if (ActiveOperationKind == ForegroundOperationKind.Scan)
+            {
+                return new BrowseProcessingAvailability(
+                    false,
+                    "扫描更新中，完成后可处理项目。");
+            }
+
+            return new BrowseProcessingAvailability(
+                false,
+                IsCancellationPending
+                    ? "正在安全停止前台任务，完成后可处理项目。"
+                    : "前台任务运行中，完成或取消后可处理项目。");
+        }
+
+        if (IsBusy)
+        {
+            return new BrowseProcessingAvailability(
+                false,
+                "前台任务运行中，完成后可处理项目。");
+        }
+
+        if (!BrowsePageViewModel.IsSnapshotSourceCurrent)
+        {
+            return new BrowseProcessingAvailability(
+                false,
+                ScanSession.ScanIdentity is null
+                    ? "请先完成一次成功扫描。"
+                    : "源目录或输出目录已在扫描后更改；请恢复扫描时的路径或重新扫描。");
+        }
+
+        return null;
+    }
+
+    private void NotifyBrowseProcessingAvailabilityChanged()
+        => OnPropertiesChanged(
+            nameof(CurrentBrowseProjectActionAvailabilityText),
+            nameof(BrowseSelectionActionAvailabilityText),
+            nameof(BrowseSelectionTrayStatusText),
+            nameof(BrowseProjectActionStatusText));
 
     private bool CanShowBrowseProjectProblems(object? parameter)
     {
@@ -1477,5 +1615,9 @@ public sealed class ShellViewModel : ObservableObject, IDisposable
         ShowBrowseProjectProblemsCommand.NotifyCanExecuteChanged();
         RevealProblemProjectCommand.NotifyCanExecuteChanged();
     }
+
+    private readonly record struct BrowseProcessingAvailability(
+        bool IsAvailable,
+        string Message);
 
 }
