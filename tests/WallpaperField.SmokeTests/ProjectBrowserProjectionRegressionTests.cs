@@ -59,6 +59,12 @@ internal static class ProjectBrowserProjectionRegressionTests
                          "SelectedVideoCount",
                          "HasSnapshot",
                          "HasVisibleProjects",
+                         "MatchSummaryText",
+                         "SnapshotCompletedAtText",
+                         "HasActiveFilters",
+                         "ShowClearFiltersAction",
+                         "ShowScanCenterAction",
+                         "FilteredEmptyDetailText",
                          "EmptyTitle",
                          "EmptyDescription"
                      })
@@ -72,6 +78,10 @@ internal static class ProjectBrowserProjectionRegressionTests
             Require(
                 pageType.GetMethod("SetColumnCount", [typeof(int)]) is not null,
                 $"{BrowsePageTypeName}.SetColumnCount",
+                missing);
+            Require(
+                pageType.GetProperty("ClearFiltersCommand") is not null,
+                $"{BrowsePageTypeName}.ClearFiltersCommand",
                 missing);
             Require(
                 pageType.GetMethod(
@@ -99,6 +109,17 @@ internal static class ProjectBrowserProjectionRegressionTests
                 "CreateBrowsePageViewModel") is not null,
             "AppComposition.CreateBrowsePageViewModel",
             missing);
+        if (projectType is not null)
+        {
+            Require(
+                projectType.GetProperty("ProcessingTargetLabel") is not null,
+                $"{BrowseProjectTypeName}.ProcessingTargetLabel",
+                missing);
+            Require(
+                projectType.GetProperty("ProcessingTargetPath") is not null,
+                $"{BrowseProjectTypeName}.ProcessingTargetPath",
+                missing);
+        }
 
         assert(
             missing.Count == 0,
@@ -106,11 +127,164 @@ internal static class ProjectBrowserProjectionRegressionTests
 
         VerifyProjectionHasNoFileSystemCalls(assert);
         await VerifyProjectionFilteringSortingAndRowsAsync(assert);
+        await VerifyDirectUnavailabilityReasonsAsync(assert);
+        await VerifyWriteTargetsAndBrowseSummariesAsync(assert);
         await VerifyCurrentAndSharedSelectionAsync(assert);
         await VerifySnapshotRecoveryAndDisposalAsync(assert);
         await VerifyIdentityCommitFailureIsAtomicAsync(assert);
         await VerifyThousandItemProjectionPerformanceAsync(assert);
     }
+
+    private static async Task VerifyDirectUnavailabilityReasonsAsync(
+        Action<bool, string> assert)
+    {
+        using var fixture = new ProjectionFixture();
+        var invalidVideo = new WallpaperRecord
+        {
+            WorkshopId = "invalid-video",
+            Title = "Invalid video",
+            SourceDirectory = Path.Combine(fixture.SourceRoot, "invalid-video"),
+            OutputDirectory = Path.Combine(fixture.OutputRoot, "invalid-video"),
+            WallpaperType = "video",
+            HasVideoFile = false,
+            VideoRelativePath = "missing.mp4"
+        };
+        var unknown = CreateRecord(
+            fixture.SourceRoot,
+            fixture.OutputRoot,
+            "unknown",
+            "Unknown",
+            WallpaperProjectKind.Other);
+
+        await fixture.ScanAsync([invalidVideo, unknown]);
+        var invalidVideoProject = fixture.Browse.VisibleProjects.Single(project =>
+            project.WorkshopId == "invalid-video");
+        var unknownProject = fixture.Browse.VisibleProjects.Single(project =>
+            project.WorkshopId == "unknown");
+
+        assert(invalidVideoProject.ProjectKind == WallpaperProjectKind.Other
+               && invalidVideoProject.ProcessabilityText
+                   == "视频引用缺失或无效，无法复制"
+               && invalidVideoProject.AutomationSummary.Contains(
+                   invalidVideoProject.ProcessabilityText,
+                   StringComparison.Ordinal)
+               && unknownProject.ProcessabilityText
+                   == "未发现有效 scene.pkg，无法解包"
+               && unknownProject.AutomationSummary.Contains(
+                   unknownProject.ProcessabilityText,
+                   StringComparison.Ordinal),
+            "Browse did not expose direct, distinct reasons for an invalid video "
+            + "reference and a project without a valid package.");
+    }
+
+    private static async Task VerifyWriteTargetsAndBrowseSummariesAsync(
+        Action<bool, string> assert)
+    {
+        using var fixture = new ProjectionFixture();
+        var clearFilters = (RelayCommand)ReadRequiredProperty(
+            fixture.Browse,
+            "ClearFiltersCommand");
+        assert(ReadRequiredString(fixture.Browse, "MatchSummaryText") == "MATCH 0 / 0"
+               && ReadRequiredString(fixture.Browse, "SnapshotCompletedAtText")
+                   == "尚无成功扫描时间"
+               && ReadRequiredBoolean(fixture.Browse, "ShowScanCenterAction")
+               && !ReadRequiredBoolean(fixture.Browse, "ShowClearFiltersAction")
+               && !clearFilters.CanExecute(null),
+            "The never-scanned Browse summary exposed stale snapshot/filter actions.");
+
+        var package = CreateRecord(
+            fixture.SourceRoot,
+            fixture.OutputRoot,
+            "package",
+            "Package",
+            WallpaperProjectKind.Package);
+        var video = CreateRecord(
+            fixture.SourceRoot,
+            fixture.OutputRoot,
+            "video",
+            "Video",
+            WallpaperProjectKind.Video);
+        var website = CreateRecord(
+            fixture.SourceRoot,
+            fixture.OutputRoot,
+            "website",
+            "Website",
+            WallpaperProjectKind.Website);
+        var other = CreateRecord(
+            fixture.SourceRoot,
+            fixture.OutputRoot,
+            "other",
+            "Other",
+            WallpaperProjectKind.Other);
+        await fixture.ScanAsync([package, video, website, other]);
+
+        var packageProject = fixture.Browse.VisibleProjects.Single(project =>
+            project.WorkshopId == package.WorkshopId);
+        var videoProject = fixture.Browse.VisibleProjects.Single(project =>
+            project.WorkshopId == video.WorkshopId);
+        var expectedCompletedAt = fixture.Scan.ProjectSnapshot!.Identity.CompletedAtUtc
+            .ToLocalTime()
+            .ToString(
+                "yyyy-MM-dd HH:mm:ss",
+                System.Globalization.CultureInfo.InvariantCulture);
+        assert(ReadRequiredString(packageProject, "ProcessingTargetLabel")
+                   == "解包写入目录"
+               && ReadRequiredString(packageProject, "ProcessingTargetPath")
+                   == package.OutputDirectory
+               && ReadRequiredString(videoProject, "ProcessingTargetLabel")
+                   == "视频复制写入目录"
+               && ReadRequiredString(videoProject, "ProcessingTargetPath")
+                   == video.OutputDirectory
+               && ReadRequiredString(fixture.Browse, "SnapshotCompletedAtText")
+                   == $"扫描完成 {expectedCompletedAt}"
+               && ReadRequiredString(fixture.Browse, "MatchSummaryText")
+                   == "MATCH 4 / 4"
+               && !ReadRequiredBoolean(fixture.Browse, "ShowScanCenterAction"),
+            "Browse did not expose the immutable processing destination or complete snapshot summary.");
+
+        assert(fixture.Browse.TrySetSelection(packageProject, true)
+               && fixture.Browse.TrySetSelection(videoProject, true),
+            "The Browse summary fixture could not establish its shared selection.");
+        fixture.Browse.KindFilter = ProjectBrowserKindFilter.Package;
+        assert(fixture.Browse.SelectionTraySummaryText
+                   == "已选 2 · 当前匹配 1 · 隐藏 1 · Package 1 / Video 1"
+               && ReadRequiredString(fixture.Browse, "MatchSummaryText")
+                   == "MATCH 1 / 4",
+            "The selection tray did not distinguish total, current-match and hidden selection.");
+
+        fixture.Browse.SearchText = "no-match";
+        fixture.Browse.ShowOnlyProcessable = true;
+        fixture.Browse.ShowOnlyProblems = true;
+        assert(ReadRequiredBoolean(fixture.Browse, "HasActiveFilters")
+               && ReadRequiredBoolean(fixture.Browse, "ShowClearFiltersAction")
+               && !ReadRequiredBoolean(fixture.Browse, "ShowScanCenterAction")
+               && ReadRequiredString(fixture.Browse, "FilteredEmptyDetailText")
+                   == "当前详情 · 当前筛选无结果"
+               && clearFilters.CanExecute(null),
+            "A filtered-empty snapshot did not expose a direct clear action and detail reason.");
+
+        clearFilters.Execute(null);
+        assert(fixture.Browse.SearchText.Length == 0
+               && fixture.Browse.KindFilter == ProjectBrowserKindFilter.All
+               && !fixture.Browse.ShowOnlyProcessable
+               && !fixture.Browse.ShowOnlyProblems
+               && fixture.Browse.MatchCount == 4
+               && !ReadRequiredBoolean(fixture.Browse, "HasActiveFilters")
+               && !ReadRequiredBoolean(fixture.Browse, "ShowClearFiltersAction")
+               && !clearFilters.CanExecute(null),
+            "Clear filters did not restore the complete in-memory snapshot in one command.");
+    }
+
+    private static object ReadRequiredProperty(object owner, string propertyName)
+        => owner.GetType().GetProperty(propertyName)?.GetValue(owner)
+           ?? throw new InvalidOperationException(
+               $"Missing required projection property {owner.GetType().Name}.{propertyName}.");
+
+    private static string ReadRequiredString(object owner, string propertyName)
+        => (string)ReadRequiredProperty(owner, propertyName);
+
+    private static bool ReadRequiredBoolean(object owner, string propertyName)
+        => (bool)ReadRequiredProperty(owner, propertyName);
 
     private static async Task VerifyIdentityCommitFailureIsAtomicAsync(
         Action<bool, string> assert)

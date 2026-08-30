@@ -79,6 +79,23 @@ public sealed class ProjectFolderTargetResolver : IProjectFolderTargetResolver
                 "此前显示的目录已不存在；未切换到其他目录。");
         }
 
+        try
+        {
+            OutputPathPolicy.RejectReparsePointsInExistingPath(
+                exactPath,
+                "浏览目录");
+        }
+        catch (Exception exception) when (exception is
+                   ArgumentException or InvalidDataException
+                   or UnauthorizedAccessException or IOException
+                   or System.Security.SecurityException)
+        {
+            return ProjectFolderOpenResult.Failure(
+                target,
+                "BROWSE_FOLDER_TARGET_UNSAFE",
+                "此前显示的目录未通过安全路径检查；未打开任何目录。");
+        }
+
         cancellationToken.ThrowIfCancellationRequested();
         try
         {

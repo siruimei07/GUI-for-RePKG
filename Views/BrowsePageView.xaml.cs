@@ -499,11 +499,8 @@ public sealed partial class BrowsePageView : UserControl
             }
 
             var folderTarget = viewModel.CurrentFolderTarget;
-            var openFolderButtonName = name == "persistent-details"
-                ? "BrowseOpenFolderButton"
-                : "BrowseCompactOpenFolderButton";
             var openFolderButton = FindVisualDescendants<Button>(details)
-                .SingleOrDefault(button => button.Name == openFolderButtonName);
+                .SingleOrDefault(button => button.Name == "BrowseProjectOpenFolderButton");
             var visibleTexts = FindVisualDescendants<TextBlock>(details)
                 .Where(text => text.IsLoaded && text.IsVisible)
                 .Select(text => text.Text)

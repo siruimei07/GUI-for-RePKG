@@ -198,13 +198,31 @@ internal static class ProjectBrowserFoundationRegressionTests
                 OutputPath = outputRoot
             };
 
+            var observedAtomicPublications = new List<bool>();
+            shell.ScannedWallpapers.CollectionChanged += (_, _) =>
+            {
+                var observedSnapshot = shell.ScanSession.ProjectSnapshot;
+                observedAtomicPublications.Add(
+                    observedSnapshot is not null
+                    && ReferenceEquals(
+                        observedSnapshot.Identity,
+                        shell.ScanSession.ScanIdentity)
+                    && observedSnapshot.Revision > 0
+                    && observedSnapshot.Projects.Count
+                        == shell.ScannedWallpapers.Count
+                    && observedSnapshot.Projects
+                        .Zip(shell.ScannedWallpapers)
+                        .All(pair => ReferenceEquals(pair.First, pair.Second)));
+            };
+
             await shell.ScanSession.ScanAsync();
             var firstSnapshot = shell.ScanSession.ProjectSnapshot!;
             var firstCard = shell.ScannedWallpapers.Single();
-            assert(firstSnapshot.Revision == 1
+            assert(observedAtomicPublications is [true]
+                   && firstSnapshot.Revision == 1
                    && ReferenceEquals(firstSnapshot.Projects.Single(), firstCard)
                    && ReferenceEquals(firstSnapshot.Projects.Single().Record, firstCard.Record),
-                "Successful scan did not atomically publish revision 1 with shared cards.");
+                "A successful scan exposed new cards before their matching identity and snapshot.");
             FrozenWallpaperProcessRequest? firstRequest = null;
             assert(shell.ScanSession.TrySetUnpackSelection(firstCard, true)
                    && shell.ScanSession.TryFreezeSelectedRequest(out firstRequest)
@@ -266,8 +284,11 @@ internal static class ProjectBrowserFoundationRegressionTests
             var duplicateTargetCards = duplicateTargetSnapshot.Projects.ToArray();
             assert(duplicateTargetSnapshot.Revision == 3
                    && shell.ScanSession.TrySetUnpackSelection(duplicateTargetCards, true)
-                   && !shell.ScanSession.TryFreezeSelectedRequest(out _),
-                "A current selection with duplicate output targets froze an insecure request.");
+                   && !shell.ScanSession.TryFreezeSelectedRequest(out _)
+                   && observedAtomicPublications.Count == 3
+                   && observedAtomicPublications.All(observation => observation),
+                "A current selection with duplicate output targets froze an insecure request, "
+                + "or a rescan exposed mismatched collection/snapshot facts.");
         }
         finally
         {

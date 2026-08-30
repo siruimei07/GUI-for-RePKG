@@ -37,6 +37,7 @@ internal static class ProjectBrowserProcessingRegressionTests
         await VerifyTerminalResultsCannotClearReselectionAsync(failures);
         await VerifyActiveScopeAndCompletionOwnershipAsync(failures);
         VerifyExactProjectIssueLifecycle(failures);
+        await VerifyFolderOpenRejectsReparseSwapAsync(failures);
         await VerifyScanAndUnpackIssuesUseExactProjectKeysAsync(failures);
         await VerifyUnpackErrorPathsAreAmbiguitySafeAsync(failures);
         await VerifyRejectedLegacyFallbackResolvesNothingAsync(failures);
@@ -50,6 +51,58 @@ internal static class ProjectBrowserProcessingRegressionTests
         assert(failures.Count == 0,
             "Project processing authorization races remain: "
             + string.Join("; ", failures));
+    }
+
+    private static async Task VerifyFolderOpenRejectsReparseSwapAsync(
+        ICollection<string> failures)
+    {
+        var testRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"WallpaperField-BrowseFolderReparse-{Guid.NewGuid():N}");
+        var frozenSource = Path.Combine(testRoot, "frozen-source");
+        var outsideTarget = Path.Combine(testRoot, "outside-target");
+        Directory.CreateDirectory(frozenSource);
+        Directory.CreateDirectory(outsideTarget);
+
+        try
+        {
+            var record = new WallpaperRecord
+            {
+                WorkshopId = "folder-reparse",
+                Title = "Folder reparse",
+                SourceDirectory = frozenSource,
+                OutputDirectory = Path.Combine(testRoot, "absent-output"),
+                WallpaperType = "scene",
+                HasScenePackage = true,
+                ScenePackagePath = Path.Combine(frozenSource, "scene.pkg")
+            };
+            var systemFolder = new NullSystemFolderService();
+            var resolver = new ProjectFolderTargetResolver(systemFolder);
+            var frozenTarget = await resolver.ResolveAsync(record);
+            Directory.Delete(frozenSource);
+            CreateDirectoryJunction(frozenSource, outsideTarget);
+
+            var result = await resolver.OpenAsync(frozenTarget);
+            if (result.Succeeded
+                || result.FailureCode != "BROWSE_FOLDER_TARGET_UNSAFE"
+                || systemFolder.OpenCount != 0)
+            {
+                failures.Add(
+                    "a frozen Browse folder replaced by a junction reached the shell open service");
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(frozenSource))
+            {
+                Directory.Delete(frozenSource);
+            }
+
+            if (Directory.Exists(testRoot))
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+        }
     }
 
     private static void VerifyContextResolversAreLegacyOnly(
@@ -895,18 +948,19 @@ internal static class ProjectBrowserProcessingRegressionTests
         PumpWindow(window);
         VerifyProblemSelectionSurvivesBoundReset(window, assert);
 
-        var currentButton = WpfElementFinder.FindByName<Button>(
+        var persistentDetails = WpfElementFinder.FindByName<FrameworkElement>(
             window,
-            "BrowseCurrentProcessButton");
-        var compactCurrentButton = WpfElementFinder.FindByName<Button>(
+            "BrowsePersistentDetails");
+        var persistentActionsHost = WpfElementFinder.FindByName<ContentControl>(
             window,
-            "BrowseCompactCurrentProcessButton");
-        var problemsButton = WpfElementFinder.FindByName<Button>(
+            "BrowsePersistentActionsHost");
+        var compactActionsHost = WpfElementFinder.FindByName<ContentControl>(
             window,
-            "BrowseCurrentProblemsButton");
-        var compactProblemsButton = WpfElementFinder.FindByName<Button>(
-            window,
-            "BrowseCompactCurrentProblemsButton");
+            "BrowseCompactActionsHost");
+        var currentButton = FindVisualDescendants<Button>(persistentDetails)
+            .SingleOrDefault(button => button.Name == "BrowseProjectProcessButton");
+        var problemsButton = FindVisualDescendants<Button>(persistentDetails)
+            .SingleOrDefault(button => button.Name == "BrowseProjectProblemsButton");
         var tray = WpfElementFinder.FindByName<Border>(
             window,
             "BrowseProcessingTraySlot");
@@ -920,18 +974,18 @@ internal static class ProjectBrowserProcessingRegressionTests
             window,
             "BrowseCompletionTray");
         assert(currentButton is not null
-               && compactCurrentButton is not null
                && problemsButton is not null
-               && compactProblemsButton is not null
+               && persistentActionsHost is not null
+               && compactActionsHost is not null
                && tray is not null
                && selectionTray is not null
                && activeTray is not null
                && completionTray is not null,
             "Task 6 RED: Browse processing/problem actions and three-state tray are missing.");
         if (currentButton is null
-            || compactCurrentButton is null
             || problemsButton is null
-            || compactProblemsButton is null
+            || persistentActionsHost is null
+            || compactActionsHost is null
             || tray is null
             || selectionTray is null
             || activeTray is null
@@ -944,8 +998,8 @@ internal static class ProjectBrowserProcessingRegressionTests
                        currentButton.Command,
                        shell.ProcessCurrentBrowseProjectCommand)
                    && ReferenceEquals(
-                       compactCurrentButton.Command,
-                       shell.ProcessCurrentBrowseProjectCommand)
+                       persistentActionsHost.ContentTemplate,
+                       compactActionsHost.ContentTemplate)
                    && currentButton.IsEnabled,
             "Both Browse detail actions do not share the Shell current-process command.");
         assert(!tray.IsHitTestVisible
@@ -4077,8 +4131,45 @@ internal static class ProjectBrowserProcessingRegressionTests
 
     private sealed class NullSystemFolderService : ISystemFolderService
     {
+        internal int OpenCount { get; private set; }
+
         public void OpenFolder(string folderPath)
         {
+            OpenCount++;
+        }
+    }
+
+    private static void CreateDirectoryJunction(
+        string junctionPath,
+        string targetPath)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+        startInfo.ArgumentList.Add("/d");
+        startInfo.ArgumentList.Add("/c");
+        startInfo.ArgumentList.Add("mklink");
+        startInfo.ArgumentList.Add("/J");
+        startInfo.ArgumentList.Add(junctionPath);
+        startInfo.ArgumentList.Add(targetPath);
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException(
+                "Could not start the Browse folder junction fixture helper.");
+        var standardOutput = process.StandardOutput.ReadToEnd();
+        var standardError = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        if (process.ExitCode != 0 || !Directory.Exists(junctionPath))
+        {
+            throw new InvalidOperationException(
+                $"Could not create Browse folder junction fixture ({process.ExitCode}): "
+                + standardOutput
+                + standardError);
         }
     }
 }

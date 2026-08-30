@@ -316,6 +316,26 @@ $worktreeStatusEntries = @($worktreeStatusEntries | ForEach-Object { [string] $_
     -not [string]::IsNullOrWhiteSpace($_)
 })
 
+# MSBuild imports project user files even when Git intentionally hides them
+# from porcelain status. A release must contain only commit-addressed inputs.
+$ignoredUserPaths = @(& git -C $projectRoot ls-files --others --ignored --exclude-standard -- `
+    ':(glob)*.user' ':(glob)**/*.user' 2>&1)
+if ($LASTEXITCODE -ne 0)
+{
+    throw 'Could not inspect ignored MSBuild user files.'
+}
+$ignoredUserPaths = @($ignoredUserPaths | ForEach-Object { [string] $_ } | Where-Object {
+    -not [string]::IsNullOrWhiteSpace($_)
+} | Sort-Object -Unique)
+if ($ignoredUserPaths.Count -gt 0)
+{
+    $displayLimit = 20
+    $displayPaths = @($ignoredUserPaths | Select-Object -First $displayLimit)
+    $remainingCount = $ignoredUserPaths.Count - $displayPaths.Count
+    $remainingSuffix = if ($remainingCount -gt 0) { " (+$remainingCount more)" } else { '' }
+    throw "Release builds reject ignored MSBuild user files. Ignored paths: $($displayPaths -join ', ')$remainingSuffix"
+}
+
 if ($trackedDiffExitCode -eq 1 -or $worktreeStatusEntries.Count -gt 0)
 {
     $dirtyPathEvidence = @(@(

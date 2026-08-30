@@ -72,10 +72,90 @@ internal static class ProjectBrowserUiRegressionTests
                    .SequenceEqual(Enumerable.Range(0, 6).Select(index => $"{{Binding Slot{index}}}")),
             "Browse rows must use exactly six fixed ContentTemplate slots and no nested ItemsControl.");
 
+        VerifyReviewClosureSurface(browseDocument, assert);
+
         VerifyProductionSurface(assert);
         await VerifyFocusModelAsync(assert);
         await VerifyFrozenFolderTargetAsync(assert);
         await VerifyFolderFailurePublicationAsync(assert);
+    }
+
+    private static void VerifyReviewClosureSurface(
+        XDocument document,
+        Action<bool, string> assert)
+    {
+        var actionTemplate = document.Descendants().FirstOrDefault(element =>
+            element.Name.LocalName == "DataTemplate"
+            && element.Attributes().Any(attribute =>
+                attribute.Name.LocalName == "Key"
+                && attribute.Value == "BrowseProjectActionsTemplate"));
+        var actionTemplateUses = document.Descendants().Where(element =>
+                element.Name.LocalName == "ContentControl"
+                && element.Attributes().Any(attribute =>
+                    attribute.Name.LocalName == "ContentTemplate"
+                    && attribute.Value.Contains(
+                        "BrowseProjectActionsTemplate",
+                        StringComparison.Ordinal)))
+            .ToArray();
+        var actionBindings = actionTemplate?.Descendants()
+            .SelectMany(element => element.Attributes())
+            .Select(attribute => attribute.Value)
+            .ToArray() ?? [];
+        var detailsTemplate = document.Descendants().FirstOrDefault(element =>
+            element.Name.LocalName == "DataTemplate"
+            && element.Attributes().Any(attribute =>
+                attribute.Name.LocalName == "Key"
+                && attribute.Value == "BrowseProjectDetailsTemplate"));
+        var detailBindings = detailsTemplate?.Descendants()
+            .SelectMany(element => element.Attributes())
+            .Select(attribute => attribute.Value)
+            .ToArray() ?? [];
+        var currentSource = FindNamedElement(document, "BrowseCurrentSourcePathText");
+        var snapshotTime = FindNamedElement(document, "BrowseSnapshotCompletedAtText");
+        var matchSummary = FindNamedElement(document, "BrowseSearchMatchCountText");
+        var clearFilters = FindNamedElement(document, "BrowseClearFiltersButton");
+        var scanCenter = FindNamedElement(document, "BrowseScanCenterButton");
+
+        assert(actionTemplate is not null
+               && actionTemplateUses.Length == 2
+               && actionBindings.Count(value => value
+                   == "{Binding BrowsePageViewModel.OpenCurrentFolderCommand}") == 1
+               && actionBindings.Count(value => value
+                   == "{Binding ShowBrowseProjectProblemsCommand}") == 1
+               && actionBindings.Count(value => value
+                   == "{Binding ProcessCurrentBrowseProjectCommand}") == 1
+               && actionBindings.Count(value => value
+                   == "{Binding BrowsePageViewModel.FolderActionStatusText}") == 1,
+            "Regular and Compact details do not share one complete project-actions template.");
+        assert(detailBindings.Contains("{Binding ProcessingTargetLabel}", StringComparer.Ordinal)
+               && detailBindings.Contains("{Binding ProcessingTargetPath}", StringComparer.Ordinal),
+            "Browse details do not expose the immutable processing write destination.");
+        assert(currentSource is not null
+               && !currentSource.Attributes().Any(attribute =>
+                   (attribute.Name.LocalName is "Width" or "Height")
+                   && attribute.Value == "1")
+               && !currentSource.Attributes().Any(attribute =>
+                   attribute.Name.LocalName == "Opacity"
+                   && attribute.Value == "0")
+               && snapshotTime?.Attributes().Any(attribute =>
+                   attribute.Value == "{Binding BrowsePageViewModel.SnapshotCompletedAtText}") == true
+               && matchSummary?.Attributes().Any(attribute =>
+                   attribute.Value == "{Binding BrowsePageViewModel.MatchSummaryText}") == true,
+            "Browse header/search still hides source identity, completion time, or MATCH M/N.");
+        assert(clearFilters?.Attributes().Any(attribute =>
+                   attribute.Value == "{Binding BrowsePageViewModel.ClearFiltersCommand}") == true
+               && clearFilters.DescendantsAndSelf().SelectMany(element => element.Attributes())
+                   .Any(attribute => attribute.Value.Contains(
+                       "BrowsePageViewModel.ShowClearFiltersAction",
+                       StringComparison.Ordinal))
+               && scanCenter?.DescendantsAndSelf().SelectMany(element => element.Attributes())
+                   .Any(attribute => attribute.Value.Contains(
+                       "BrowsePageViewModel.ShowScanCenterAction",
+                       StringComparison.Ordinal)) == true
+               && document.Descendants().SelectMany(element => element.Attributes())
+                   .Any(attribute => attribute.Value
+                       == "{Binding BrowsePageViewModel.FilteredEmptyDetailText}"),
+            "Filtered-empty Browse state lacks a direct clear action and explicit detail reason.");
     }
 
     internal static void VerifyWindow(
@@ -494,9 +574,8 @@ internal static class ProjectBrowserUiRegressionTests
             var persistentDetails = WpfElementFinder.FindByName<Border>(
                 window,
                 "BrowsePersistentDetails")!;
-            var persistentProblems = WpfElementFinder.FindByName<Button>(
-                window,
-                "BrowseCurrentProblemsButton")!;
+            var persistentProblems = FindVisualDescendants<Button>(persistentDetails)
+                .Single(button => button.Name == "BrowseProjectProblemsButton");
             var persistentContrast = BrushContrastRatio(
                 persistentProblems.Foreground,
                 persistentDetails.Background);
@@ -583,9 +662,8 @@ internal static class ProjectBrowserUiRegressionTests
             var compactDetails = WpfElementFinder.FindByName<Border>(
                 window,
                 "BrowseCompactDetailsOverlay")!;
-            var compactProblems = WpfElementFinder.FindByName<Button>(
-                window,
-                "BrowseCompactCurrentProblemsButton")!;
+            var compactProblems = FindVisualDescendants<Button>(compactDetails)
+                .Single(button => button.Name == "BrowseProjectProblemsButton");
             var compactContrast = BrushContrastRatio(
                 compactProblems.Foreground,
                 compactDetails.Background);
@@ -2213,9 +2291,11 @@ internal static class ProjectBrowserUiRegressionTests
 
             resolver.Release(target.ProjectKey);
             WaitForDispatcherTask(window, pending);
-            var openFolder = WpfElementFinder.FindByName<Button>(
+            var persistentDetails = WpfElementFinder.FindByName<FrameworkElement>(
                 window,
-                "BrowseOpenFolderButton")!;
+                "BrowsePersistentDetails")!;
+            var openFolder = FindVisualDescendants<Button>(persistentDetails)
+                .Single(button => button.Name == "BrowseProjectOpenFolderButton");
             assert(pending.GetAwaiter().GetResult()
                    && !shell.BrowsePageViewModel.IsFolderTargetResolving
                    && shell.BrowsePageViewModel.CurrentFolderTarget is { } folderTarget
@@ -2613,7 +2693,18 @@ internal static class ProjectBrowserUiRegressionTests
                 var scanAction = WpfElementFinder.FindByName<Button>(
                     window,
                     "BrowseScanCenterButton")!;
-                assert(scanAction.IsVisible && scanAction.ActualHeight >= 44 - tolerance,
+                var clearFiltersAction = WpfElementFinder.FindByName<Button>(
+                    window,
+                    "BrowseClearFiltersButton")!;
+                var expectedRecoveryVisible = browse.ShowClearFiltersAction
+                    ? clearFiltersAction.IsVisible
+                      && clearFiltersAction.ActualHeight >= 44 - tolerance
+                      && !scanAction.IsVisible
+                    : browse.ShowScanCenterAction
+                      && scanAction.IsVisible
+                      && scanAction.ActualHeight >= 44 - tolerance
+                      && !clearFiltersAction.IsVisible;
+                assert(expectedRecoveryVisible,
                     $"Task 7 state {state} hid its empty-state recovery action at {item.Width:0} DIP.");
             }
 
@@ -2836,6 +2927,12 @@ internal static class ProjectBrowserUiRegressionTests
         var trayButtons = FindVisualDescendants<Button>(selectionTray)
             .Where(button => button.IsVisible)
             .ToArray();
+        var persistentDetails = WpfElementFinder.FindByName<FrameworkElement>(
+            window,
+            "BrowsePersistentDetails")!;
+        var persistentActions = FindVisualDescendants<Button>(persistentDetails)
+            .Where(button => button.Name.StartsWith("BrowseProject", StringComparison.Ordinal))
+            .ToDictionary(button => button.Name, StringComparer.Ordinal);
         var sequence = new UIElement[]
         {
             WpfElementFinder.FindByName<Button>(window, "ScanNavButton")!,
@@ -2854,9 +2951,9 @@ internal static class ProjectBrowserUiRegressionTests
             problemFilter,
             WpfElementFinder.FindByName<ComboBox>(window, "BrowseSortComboBox")!,
             currentCard,
-            WpfElementFinder.FindByName<Button>(window, "BrowseOpenFolderButton")!,
-            WpfElementFinder.FindByName<Button>(window, "BrowseCurrentProblemsButton")!,
-            WpfElementFinder.FindByName<Button>(window, "BrowseCurrentProcessButton")!,
+            persistentActions["BrowseProjectOpenFolderButton"],
+            persistentActions["BrowseProjectProblemsButton"],
+            persistentActions["BrowseProjectProcessButton"],
             trayButtons.Single(button => AutomationProperties.GetName(button)
                 == "清空项目处理选择"),
             trayButtons.Single(button => AutomationProperties.GetName(button)
@@ -4294,8 +4391,10 @@ internal static class ProjectBrowserUiRegressionTests
         PumpLayout(window);
         RaiseKey(card, Key.Enter);
         PumpLayout(window);
-        var compactFolder = WpfElementFinder.FindByName<Button>(
-            window, "BrowseCompactOpenFolderButton")!;
+        var compactDetails = WpfElementFinder.FindByName<FrameworkElement>(
+            window, "BrowseCompactDetailsOverlay")!;
+        var compactFolder = FindVisualDescendants<Button>(compactDetails)
+            .Single(button => button.Name == "BrowseProjectOpenFolderButton");
         var compactFolderFocused = compactFolder.IsEnabled && compactFolder.Focus();
         PumpLayout(window);
         window.Width = 1059;
@@ -4308,8 +4407,10 @@ internal static class ProjectBrowserUiRegressionTests
 
         window.Width = 1060;
         PumpLayout(window);
-        var persistentFolder = WpfElementFinder.FindByName<Button>(
-            window, "BrowseOpenFolderButton")!;
+        var persistentDetails = WpfElementFinder.FindByName<FrameworkElement>(
+            window, "BrowsePersistentDetails")!;
+        var persistentFolder = FindVisualDescendants<Button>(persistentDetails)
+            .Single(button => button.Name == "BrowseProjectOpenFolderButton");
         assert(persistentFolder.IsEnabled && persistentFolder.Focus(),
             "The same-band details fixture could not focus the persistent folder action.");
         PumpLayout(window);
@@ -4463,17 +4564,18 @@ internal static class ProjectBrowserUiRegressionTests
             var firstCard = FindCardButtons(grid).First(candidate =>
                 candidate.DataContext is BrowseProjectViewModel project
                 && project.ProjectKey == first.ProjectKey);
+            var details = WpfElementFinder.FindByName<FrameworkElement>(
+                window, "BrowsePersistentDetails")!;
+            var openFolder = FindVisualDescendants<Button>(details)
+                .Single(button => button.Name == "BrowseProjectOpenFolderButton");
             assert(resolver.HasEntered(first.ProjectKey)
                    && viewModel.IsFolderTargetResolving
-                   && !WpfElementFinder.FindByName<Button>(
-                       window, "BrowseOpenFolderButton")!.IsEnabled,
+                   && !openFolder.IsEnabled,
                 "The blocked folder fixture did not hold the first detail target unresolved.");
 
             firstCard.Focus();
             RaiseKey(firstCard, Key.Enter);
             PumpLayout(window);
-            var details = WpfElementFinder.FindByName<FrameworkElement>(
-                window, "BrowsePersistentDetails")!;
             assert(details.IsKeyboardFocusWithin,
                 "Enter waited on the disabled folder action instead of focusing a stable details surface.");
 
@@ -4706,7 +4808,7 @@ internal static class ProjectBrowserUiRegressionTests
                         focusWindow,
                         "BrowsePersistentDetails")!;
                     detailsAction = FindVisualDescendants<Button>(detailsSurface)
-                        .Single(button => button.Name == "BrowseOpenFolderButton" && button.IsVisible);
+                        .Single(button => button.Name == "BrowseProjectOpenFolderButton" && button.IsVisible);
                     assert(detailsSurface.IsVisible,
                         $"High Contrast persistent details were not visible at {item.Width:0} DIP.");
                 }

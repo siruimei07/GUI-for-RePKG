@@ -66,8 +66,24 @@ public sealed class BrowseProjectViewModel : ObservableObject
         WallpaperProjectKind.Package => "可解包 scene.pkg",
         WallpaperProjectKind.Video => "可复制视频文件",
         WallpaperProjectKind.Website => "v1.3 暂不支持网站输出",
-        _ => "扫描时未发现可处理内容"
+        WallpaperProjectKind.Other when string.Equals(
+            Record.WallpaperType?.Trim(),
+            "video",
+            StringComparison.OrdinalIgnoreCase)
+            => "视频引用缺失或无效，无法复制",
+        _ => "未发现有效 scene.pkg，无法解包"
     };
+
+    public string ProcessingTargetLabel => ProjectKind switch
+    {
+        WallpaperProjectKind.Package => "解包写入目录",
+        WallpaperProjectKind.Video => "视频复制写入目录",
+        _ => "无写入动作"
+    };
+
+    public string ProcessingTargetPath => IsProcessable
+        ? Record.OutputDirectory
+        : "此类型不会创建输出";
 
     public int WarningCount => Card.WarningCount;
 

@@ -145,23 +145,9 @@ public sealed class ScanSession : ObservableObject
 
     public long PathValidationVersion => _pathValidationVersion;
 
-    public ScanSnapshotIdentity? ScanIdentity
-    {
-        get => _scanIdentity;
-        private set
-        {
-            if (SetProperty(ref _scanIdentity, value))
-            {
-                OnPropertiesChanged(nameof(IsCurrentIdentity), nameof(UnpackToolTip));
-            }
-        }
-    }
+    public ScanSnapshotIdentity? ScanIdentity => _scanIdentity;
 
-    public ScanProjectSnapshot? ProjectSnapshot
-    {
-        get => _projectSnapshot;
-        private set => SetProperty(ref _projectSnapshot, value);
-    }
+    public ScanProjectSnapshot? ProjectSnapshot => _projectSnapshot;
 
     public string ScanSearchText
     {
@@ -673,13 +659,7 @@ public sealed class ScanSession : ObservableObject
                     () => IsSelectionWritable))
                 .ToArray();
 
-            ReplaceItems(cards);
-            ScanIdentity = identity;
-            _snapshotRevision = revision;
-            ProjectSnapshot = new ScanProjectSnapshot(
-                identity,
-                revision,
-                Array.AsReadOnly(cards));
+            PublishSnapshot(identity, revision, cards);
             SuccessCount = result.SuccessCount;
             FailureCount = result.FailedCount;
             ScannedCount = result.SuccessCount + result.FailedCount;
@@ -968,6 +948,26 @@ public sealed class ScanSession : ObservableObject
         FailureCount = 0;
         CurrentFolder = string.Empty;
         CurrentTitle = string.Empty;
+    }
+
+    private void PublishSnapshot(
+        ScanSnapshotIdentity identity,
+        long revision,
+        WallpaperCardViewModel[] cards)
+    {
+        _scanIdentity = identity;
+        _snapshotRevision = revision;
+        _projectSnapshot = new ScanProjectSnapshot(
+            identity,
+            revision,
+            Array.AsReadOnly(cards));
+
+        ReplaceItems(cards);
+        OnPropertiesChanged(
+            nameof(ScanIdentity),
+            nameof(IsCurrentIdentity),
+            nameof(UnpackToolTip),
+            nameof(ProjectSnapshot));
     }
 
     private void ReplaceItems(IEnumerable<WallpaperCardViewModel> cards)

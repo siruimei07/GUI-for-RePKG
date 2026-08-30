@@ -86,6 +86,9 @@ function Invoke-ReleaseItemEvaluationProbe
         'obj/release-integrity-root-obj.cs',
         'nested/obj/release-integrity-nested-obj.cs'
     )
+    $userProjectRelativePath = 'WallpaperField.csproj.user'
+    $userProjectPath = Join-Path $repositoryPath $userProjectRelativePath
+    $userCompileSentinel = 'release-integrity-user-import-sentinel.cs'
     [System.IO.Directory]::CreateDirectory($CaseRoot) | Out-Null
 
     $cloneOutput = @(& $realGit -c core.longpaths=true clone --quiet --no-hardlinks $sourceRepositoryPath $repositoryPath 2>&1)
@@ -98,16 +101,16 @@ function Invoke-ReleaseItemEvaluationProbe
     # CI evaluates the committed checkout. Local TDD may have an uncommitted
     # project contract, so snapshot only its two input owners into a local
     # fixture commit before proving the clone clean.
-    Copy-Item -LiteralPath $sourceProjectPath -Destination (Join-Path $repositoryPath 'WallpaperField.csproj') -Force
-    Copy-Item -LiteralPath $sourceIgnorePath -Destination (Join-Path $repositoryPath '.gitignore') -Force
-    $null = @(& $realGit -C $repositoryPath diff --quiet -- WallpaperField.csproj .gitignore 2>&1)
-    $snapshotDiffExitCode = $LASTEXITCODE
-    if ($snapshotDiffExitCode -ne 0 -and $snapshotDiffExitCode -ne 1)
+    $null = @(& $realGit -C $sourceRepositoryPath diff --quiet HEAD -- WallpaperField.csproj .gitignore 2>&1)
+    $sourceOwnerDiffExitCode = $LASTEXITCODE
+    if ($sourceOwnerDiffExitCode -ne 0 -and $sourceOwnerDiffExitCode -ne 1)
     {
-        throw 'Could not inspect the item-evaluation fixture snapshot.'
+        throw 'Could not inspect the source item-evaluation owners.'
     }
-    if ($snapshotDiffExitCode -eq 1)
+    if ($sourceOwnerDiffExitCode -eq 1)
     {
+        Copy-Item -LiteralPath $sourceProjectPath -Destination (Join-Path $repositoryPath 'WallpaperField.csproj') -Force
+        Copy-Item -LiteralPath $sourceIgnorePath -Destination (Join-Path $repositoryPath '.gitignore') -Force
         Invoke-GitChecked -RepositoryPath $repositoryPath -Arguments @('config', 'user.name', 'Wallpaper Field Release Probe') | Out-Null
         Invoke-GitChecked -RepositoryPath $repositoryPath -Arguments @('config', 'user.email', 'release-probe@example.invalid') | Out-Null
         Invoke-GitChecked -RepositoryPath $repositoryPath -Arguments @('add', '--', 'WallpaperField.csproj', '.gitignore') | Out-Null
@@ -133,6 +136,20 @@ function Invoke-ReleaseItemEvaluationProbe
         {
             throw "The release integrity probe is not ignored by Git: $probeRelativePath"
         }
+    }
+
+    $userProject = @'
+<Project>
+  <ItemGroup>
+    <Compile Include="release-integrity-user-import-sentinel.cs" />
+  </ItemGroup>
+</Project>
+'@
+    [System.IO.File]::WriteAllText($userProjectPath, $userProject, $utf8NoBom)
+    $null = @(& $realGit -C $repositoryPath check-ignore --quiet -- $userProjectRelativePath 2>&1)
+    if ($LASTEXITCODE -ne 0)
+    {
+        throw "The MSBuild user import probe is not ignored by Git: $userProjectRelativePath"
     }
 
     $cleanWithProbe = @(Invoke-GitChecked -RepositoryPath $repositoryPath -Arguments @('status', '--porcelain=v1', '--untracked-files=all'))
@@ -185,6 +202,16 @@ function Invoke-ReleaseItemEvaluationProbe
         throw "Ignored release integrity probes entered Compile items: $($compiledProbePaths -join ', ')"
     }
 
+    $userCompileMatches = @($compileItems | Where-Object {
+        ([string] $_.Identity).Replace('/', '\').Equals(
+            $userCompileSentinel,
+            [StringComparison]::OrdinalIgnoreCase)
+    })
+    if ($userCompileMatches.Count -ne 1)
+    {
+        throw "MSBuild did not consume the ignored user import exactly once: $userProjectRelativePath"
+    }
+
     $cleanAfterEvaluation = @(Invoke-GitChecked -RepositoryPath $repositoryPath -Arguments @('status', '--porcelain=v1', '--untracked-files=all'))
     if ($cleanAfterEvaluation.Count -ne 0)
     {
@@ -192,6 +219,7 @@ function Invoke-ReleaseItemEvaluationProbe
     }
 
     Write-Output ("RELEASE_ITEM_EVALUATION probes={0} ignored=True git_clean=True compile_contains_probes=False compile_count={1} result=PASS" -f $probeRelativePaths.Count, $compileItems.Count)
+    Write-Output ("RELEASE_IGNORED_USER_IMPORT path={0} ignored=True git_clean=True compile_sentinel=True result=OBSERVED" -f $userProjectRelativePath)
 }
 
 function Invoke-ReleaseProbe
@@ -213,11 +241,12 @@ function Invoke-ReleaseProbe
 
     Copy-Item -LiteralPath $resolvedReleaseScript -Destination (Join-Path $repositoryPath 'build-release.ps1')
     [System.IO.File]::WriteAllText((Join-Path $repositoryPath 'tracked.txt'), "baseline`r`n", $utf8NoBom)
+    [System.IO.File]::WriteAllText((Join-Path $repositoryPath '.gitignore'), "*.user`r`n", $utf8NoBom)
     Invoke-GitChecked -RepositoryPath $repositoryPath -Arguments @('-c', 'core.longpaths=true', 'init', '--quiet') | Out-Null
     Invoke-GitChecked -RepositoryPath $repositoryPath -Arguments @('config', 'core.longpaths', 'true') | Out-Null
     Invoke-GitChecked -RepositoryPath $repositoryPath -Arguments @('config', 'user.name', 'Wallpaper Field Release Probe') | Out-Null
     Invoke-GitChecked -RepositoryPath $repositoryPath -Arguments @('config', 'user.email', 'release-probe@example.invalid') | Out-Null
-    Invoke-GitChecked -RepositoryPath $repositoryPath -Arguments @('add', '--', 'build-release.ps1', 'tracked.txt') | Out-Null
+    Invoke-GitChecked -RepositoryPath $repositoryPath -Arguments @('add', '--', 'build-release.ps1', 'tracked.txt', '.gitignore') | Out-Null
     Invoke-GitChecked -RepositoryPath $repositoryPath -Arguments @('commit', '--quiet', '-m', 'fixture baseline') | Out-Null
 
     switch ($Mutation)
@@ -234,6 +263,24 @@ function Invoke-ReleaseProbe
         'untracked'
         {
             [System.IO.File]::WriteAllText((Join-Path $repositoryPath 'untracked.txt'), "untracked`r`n", $utf8NoBom)
+        }
+        'ignored-user'
+        {
+            $userProjectPath = Join-Path $repositoryPath 'WallpaperField.csproj.user'
+            [System.IO.File]::WriteAllText(
+                $userProjectPath,
+                "<Project><PropertyGroup><ReleaseIntegrityProbe>true</ReleaseIntegrityProbe></PropertyGroup></Project>`r`n",
+                $utf8NoBom)
+            $null = @(& $realGit -C $repositoryPath check-ignore --quiet -- 'WallpaperField.csproj.user' 2>&1)
+            if ($LASTEXITCODE -ne 0)
+            {
+                throw 'The release-child MSBuild user file was not ignored by Git.'
+            }
+            $ignoredUserStatus = @(Invoke-GitChecked -RepositoryPath $repositoryPath -Arguments @('status', '--porcelain=v1', '--untracked-files=all'))
+            if ($ignoredUserStatus.Count -ne 0)
+            {
+                throw "The ignored MSBuild user file made the release-child fixture dirty: $($ignoredUserStatus -join ', ')"
+            }
         }
         'none'
         {
@@ -255,6 +302,7 @@ if /I "%RELEASE_GATE_GIT_MODE%"=="diff-dirty-empty" if /I "%~3"=="diff" if /I "%
 if /I "%RELEASE_GATE_GIT_MODE%"=="diff-dirty-empty" if /I "%~3"=="diff" if /I "%~4"=="--name-only" exit /b 0
 if /I "%RELEASE_GATE_GIT_MODE%"=="name-only-error" if /I "%~3"=="diff" if /I "%~4"=="--name-only" exit /b 2
 if /I "%RELEASE_GATE_GIT_MODE%"=="status-error" if /I "%~3"=="status" exit /b 3
+if /I "%RELEASE_GATE_GIT_MODE%"=="ignored-user-enumeration-error" if /I "%~3"=="ls-files" exit /b 4
 "%REAL_GIT_EXE%" %*
 set "RELEASE_GATE_GIT_EXIT=%ERRORLEVEL%"
 exit /b %RELEASE_GATE_GIT_EXIT%
@@ -340,6 +388,8 @@ $cases = @(
     [pscustomobject]@{ Name = 'diff-error'; Mutation = 'none'; GitMode = 'diff-error'; DotnetMode = 'normal'; Expected = 'error'; DirtyPath = ''; Message = 'Could not inspect tracked source changes.' },
     [pscustomobject]@{ Name = 'name-only-error'; Mutation = 'unstaged'; GitMode = 'name-only-error'; DotnetMode = 'normal'; Expected = 'error'; DirtyPath = ''; Message = 'Could not enumerate tracked source changes.' },
     [pscustomobject]@{ Name = 'status-error'; Mutation = 'none'; GitMode = 'status-error'; DotnetMode = 'normal'; Expected = 'error'; DirtyPath = ''; Message = 'Could not inspect the source worktree state.' },
+    [pscustomobject]@{ Name = 'ignored-user'; Mutation = 'ignored-user'; GitMode = 'normal'; DotnetMode = 'normal'; Expected = 'dirty'; DirtyPath = 'WallpaperField.csproj.user'; Message = 'ignored MSBuild user files' },
+    [pscustomobject]@{ Name = 'ignored-user-enumeration-error'; Mutation = 'none'; GitMode = 'ignored-user-enumeration-error'; DotnetMode = 'normal'; Expected = 'error'; DirtyPath = ''; Message = 'Could not inspect ignored MSBuild user files.' },
     [pscustomobject]@{ Name = 'clean-control'; Mutation = 'none'; GitMode = 'normal'; DotnetMode = 'normal'; Expected = 'clean'; DirtyPath = ''; Message = 'Could not determine the .NET SDK version.' },
     [pscustomobject]@{ Name = 'clean-silent-dotnet-error'; Mutation = 'none'; GitMode = 'normal'; DotnetMode = 'silent-error'; Expected = 'clean'; DirtyPath = ''; Message = 'Could not determine the .NET SDK version.' }
 )

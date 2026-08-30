@@ -116,6 +116,9 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
         ClearSelectionCommand = new RelayCommand(
             () => TryClearSelection(),
             () => IsSelectionWritable && SelectedCount > 0);
+        ClearFiltersCommand = new RelayCommand(
+            ClearFilters,
+            () => HasActiveFilters);
         ApplySnapshot(_scanSession.ProjectSnapshot);
     }
 
@@ -136,6 +139,8 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
     public RelayCommand SelectVisibleProjectsCommand { get; }
 
     public RelayCommand ClearSelectionCommand { get; }
+
+    public RelayCommand ClearFiltersCommand { get; }
 
     public IReadOnlyList<ProjectBrowserKindFilterOption> KindFilterOptions { get; }
         = Array.AsReadOnly(new[]
@@ -356,6 +361,9 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
 
     public int MatchCount => VisibleProjects.Count;
 
+    public string MatchSummaryText
+        => $"MATCH {MatchCount:N0} / {TotalProjectCount:N0}";
+
     public int SelectedCount => _allProjects.Count(project => project.Card.IsSelectedForUnpack);
 
     public bool HasSelection => SelectedCount > 0;
@@ -375,10 +383,19 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
         && project.ProjectKind == WallpaperProjectKind.Video);
 
     public string SelectionTraySummaryText
-        => $"可见 {VisibleSelectedCount:N0} · 隐藏 {HiddenSelectedCount:N0}"
+        => $"已选 {SelectedCount:N0} · 当前匹配 {VisibleSelectedCount:N0}"
+           + $" · 隐藏 {HiddenSelectedCount:N0}"
            + $" · Package {SelectedPackageCount:N0} / Video {SelectedVideoCount:N0}";
 
     public bool HasSnapshot => _snapshot is not null;
+
+    public string SnapshotCompletedAtText => _snapshot is null
+        ? "尚无成功扫描时间"
+        : "扫描完成 " + _snapshot.Identity.CompletedAtUtc
+            .ToLocalTime()
+            .ToString(
+                "yyyy-MM-dd HH:mm:ss",
+                System.Globalization.CultureInfo.InvariantCulture);
 
     public string CurrentSourcePath => _scanSession.SourcePath;
 
@@ -410,6 +427,25 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
             : "当前输入已变更 · 正在显示上一次成功扫描的快照";
 
     public bool HasVisibleProjects => VisibleProjects.Count > 0;
+
+    public bool HasActiveFilters
+        => SearchText.Trim().Length > 0
+           || KindFilter != ProjectBrowserKindFilter.All
+           || ShowOnlyProcessable
+           || ShowOnlyProblems;
+
+    public bool ShowClearFiltersAction
+        => HasSnapshot
+           && TotalProjectCount > 0
+           && !HasVisibleProjects
+           && HasActiveFilters;
+
+    public bool ShowScanCenterAction
+        => !HasSnapshot || TotalProjectCount == 0;
+
+    public string FilteredEmptyDetailText => ShowClearFiltersAction
+        ? "当前详情 · 当前筛选无结果"
+        : string.Empty;
 
     public string EmptyTitle => !HasSnapshot
         ? "尚无可浏览项目"
@@ -567,6 +603,30 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
     public bool TryClearSelection()
         => RunSelectionBatch(_scanSession.TryClearUnpackSelection);
 
+    private void ClearFilters()
+    {
+        var changed = SetProperty(
+            ref _searchText,
+            string.Empty,
+            nameof(SearchText));
+        changed |= SetProperty(
+            ref _kindFilter,
+            ProjectBrowserKindFilter.All,
+            nameof(KindFilter));
+        changed |= SetProperty(
+            ref _showOnlyProcessable,
+            false,
+            nameof(ShowOnlyProcessable));
+        changed |= SetProperty(
+            ref _showOnlyProblems,
+            false,
+            nameof(ShowOnlyProblems));
+        if (changed)
+        {
+            RefreshProjection();
+        }
+    }
+
     private void ScheduleFolderTargetResolution()
     {
         _folderResolutionCancellation?.Cancel();
@@ -667,6 +727,7 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
         foreach (var code in new[]
                  {
                      "BROWSE_FOLDER_TARGET_MISSING",
+                     "BROWSE_FOLDER_TARGET_UNSAFE",
                      "BROWSE_FOLDER_OPEN_FAILED"
                  })
         {
@@ -860,9 +921,13 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
             nameof(TotalProjectCount),
             nameof(ThumbnailGeneration),
             nameof(HasSnapshot),
+            nameof(SnapshotCompletedAtText),
             nameof(SnapshotSourcePath),
             nameof(IsSnapshotSourceCurrent),
             nameof(SnapshotSourceStatusText),
+            nameof(ShowClearFiltersAction),
+            nameof(ShowScanCenterAction),
+            nameof(FilteredEmptyDetailText),
             nameof(EmptyTitle),
             nameof(EmptyDescription));
         NotifySelectionChanged();
@@ -1024,12 +1089,18 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
         OnPropertiesChanged(
             nameof(VisibleProjects),
             nameof(MatchCount),
+            nameof(MatchSummaryText),
             nameof(VisibleSelectedCount),
             nameof(HiddenSelectedCount),
             nameof(SelectionTraySummaryText),
             nameof(HasVisibleProjects),
+            nameof(HasActiveFilters),
+            nameof(ShowClearFiltersAction),
+            nameof(ShowScanCenterAction),
+            nameof(FilteredEmptyDetailText),
             nameof(EmptyTitle),
             nameof(EmptyDescription));
+        ClearFiltersCommand.NotifyCanExecuteChanged();
     }
 
     private bool MatchesFilters(BrowseProjectViewModel project)
