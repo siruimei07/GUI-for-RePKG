@@ -9,6 +9,8 @@ public sealed class ProblemCenterSession : ObservableObject
 {
     private readonly AppIssueStore _store = new();
     private AppIssue? _selectedIssue;
+    private bool _isSynchronizingIssues;
+    private AppIssue? _selectionRestoreIssue;
     private string _searchText = string.Empty;
     private string _severityFilter = "ALL";
     private string _sourceFilter = "ALL";
@@ -88,7 +90,10 @@ public sealed class ProblemCenterSession : ObservableObject
         issue.ResolutionState == AppIssueResolutionState.Resolved);
 
     public int ScanIssueCount
-        => CountOpenIssues(AppIssueSource.Scan, AppIssueSource.Unpack);
+        => CountOpenIssues(
+            AppIssueSource.Scan,
+            AppIssueSource.Unpack,
+            AppIssueSource.Browse);
 
     public int LibraryIssueCount => CountOpenIssues(AppIssueSource.Library);
 
@@ -101,7 +106,10 @@ public sealed class ProblemCenterSession : ObservableObject
     public string ScanSummary
         => FormatSummary(
             ScanIssueCount,
-            HighestOpenSeverityFor(AppIssueSource.Scan, AppIssueSource.Unpack));
+            HighestOpenSeverityFor(
+                AppIssueSource.Scan,
+                AppIssueSource.Unpack,
+                AppIssueSource.Browse));
 
     public string LibrarySummary
         => FormatSummary(
@@ -113,6 +121,22 @@ public sealed class ProblemCenterSession : ObservableObject
         get => _selectedIssue;
         set
         {
+            if (_isSynchronizingIssues)
+            {
+                if (_selectionRestoreIssue is null)
+                {
+                    value = null;
+                }
+                else if (value?.Id != _selectionRestoreIssue.Id)
+                {
+                    return;
+                }
+                else
+                {
+                    value = _selectionRestoreIssue;
+                }
+            }
+
             if (SetProperty(ref _selectedIssue, value))
             {
                 OnPropertyChanged(nameof(HasSelectedIssue));
@@ -127,6 +151,95 @@ public sealed class ProblemCenterSession : ObservableObject
         ArgumentNullException.ThrowIfNull(issues);
         _store.Publish(issues);
         Synchronize();
+    }
+
+    public AppIssue PublishProjectIssue(AppIssue issue)
+    {
+        var published = _store.PublishProjectIssue(issue);
+        Synchronize();
+        return Issues.FirstOrDefault(item => item.Id == published.Id) ?? published;
+    }
+
+    internal AppIssueBatchResult ApplyBatch(
+        IEnumerable<AppIssue> publications,
+        IEnumerable<AppIssueResolutionRequest> resolutions)
+    {
+        var result = _store.ApplyBatch(publications, resolutions);
+        if (result.Changed)
+        {
+            Synchronize();
+        }
+
+        return result;
+    }
+
+    public int ResolveProjectIssues(
+        AppIssueSource source,
+        string code,
+        string projectKey,
+        string? contextKey = null,
+        DateTimeOffset? resolvedAtUtc = null)
+    {
+        var resolved = _store.ResolveProjectMatching(
+            source,
+            code,
+            projectKey,
+            contextKey,
+            resolvedAtUtc);
+        if (resolved > 0)
+        {
+            Synchronize();
+        }
+
+        return resolved;
+    }
+
+    public IReadOnlyList<AppIssue> GetProjectIssues(string projectKey)
+        => _store.ProjectSnapshot(projectKey);
+
+    public AppIssue? SelectPreferredProjectIssue(
+        string projectKey,
+        bool clearBlockingFilters)
+    {
+        var issue = GetProjectIssues(projectKey)
+            .OrderBy(item => item.ResolutionState == AppIssueResolutionState.Open ? 0 : 1)
+            .ThenByDescending(item => item.Severity)
+            .ThenByDescending(item => item.TimestampUtc)
+            .ThenBy(item => item.Id)
+            .FirstOrDefault();
+        if (issue is null)
+        {
+            return null;
+        }
+
+        if (clearBlockingFilters)
+        {
+            if (!string.Equals(SourceFilter, "ALL", StringComparison.Ordinal)
+                && !string.Equals(
+                    SourceFilter,
+                    issue.Source.ToString(),
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                SourceFilter = "ALL";
+            }
+
+            if (!string.Equals(SeverityFilter, "ALL", StringComparison.Ordinal)
+                && !string.Equals(
+                    SeverityFilter,
+                    issue.Severity.ToString(),
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                SeverityFilter = "ALL";
+            }
+
+            if (HasSearchText && !MatchesSearch(issue, SearchText.Trim()))
+            {
+                SearchText = string.Empty;
+            }
+        }
+
+        SelectedIssue = Issues.FirstOrDefault(item => item.Id == issue.Id) ?? issue;
+        return SelectedIssue;
     }
 
     public void Resolve(
@@ -149,6 +262,9 @@ public sealed class ProblemCenterSession : ObservableObject
                + $"{issue.Summary}{Environment.NewLine}"
                + $"{issue.Details}{Environment.NewLine}"
                + $"磁盘：{issue.DiskFact} · 建议：{issue.SuggestedAction}"
+               + (string.IsNullOrWhiteSpace(issue.ProjectKey)
+                   ? string.Empty
+                   : $"{Environment.NewLine}项目：{issue.ProjectKey}")
                + (string.IsNullOrWhiteSpace(issue.PathContext)
                    ? string.Empty
                    : $"{Environment.NewLine}路径：{issue.PathContext}");
@@ -175,6 +291,25 @@ public sealed class ProblemCenterSession : ObservableObject
         return resolved;
     }
 
+    internal int ResolveLegacyMatching(
+        AppIssueSource source,
+        string code,
+        string contextKey,
+        DateTimeOffset? resolvedAtUtc = null)
+    {
+        var resolved = _store.ResolveLegacyMatching(
+            source,
+            code,
+            contextKey,
+            resolvedAtUtc);
+        if (resolved > 0)
+        {
+            Synchronize();
+        }
+
+        return resolved;
+    }
+
     internal int ClearResolvedCount()
     {
         var removed = _store.ClearResolved();
@@ -188,23 +323,37 @@ public sealed class ProblemCenterSession : ObservableObject
 
     private void Synchronize()
     {
-        Issues.ReplaceRange(_store.Snapshot());
-        if (SelectedIssue is { } selected)
+        var snapshot = _store.Snapshot();
+        var selectedIssueId = SelectedIssue?.Id;
+        var restoredSelection = selectedIssueId is { } id
+            ? snapshot.FirstOrDefault(issue => issue.Id == id)
+            : null;
+        _isSynchronizingIssues = true;
+        _selectionRestoreIssue = restoredSelection;
+        try
         {
-            SelectedIssue = Issues.FirstOrDefault(issue => issue.Id == selected.Id);
+            Issues.ReplaceRange(snapshot);
+            SelectedIssue = restoredSelection;
+
+            OnPropertiesChanged(
+                nameof(FilteredIssues),
+                nameof(FilteredIssueCount),
+                nameof(OpenIssueCount),
+                nameof(ResolvedIssueCount),
+                nameof(ScanIssueCount),
+                nameof(LibraryIssueCount),
+                nameof(HighestOpenIssueSeverity),
+                nameof(SummaryText),
+                nameof(ScanSummary),
+                nameof(LibrarySummary));
+            OnPropertyChanged(nameof(SelectedIssue));
+        }
+        finally
+        {
+            _selectionRestoreIssue = null;
+            _isSynchronizingIssues = false;
         }
 
-        OnPropertiesChanged(
-            nameof(FilteredIssues),
-            nameof(FilteredIssueCount),
-            nameof(OpenIssueCount),
-            nameof(ResolvedIssueCount),
-            nameof(ScanIssueCount),
-            nameof(LibraryIssueCount),
-            nameof(HighestOpenIssueSeverity),
-            nameof(SummaryText),
-            nameof(ScanSummary),
-            nameof(LibrarySummary));
         ClearResolvedCommand.NotifyCanExecuteChanged();
         Changed?.Invoke(this, EventArgs.Empty);
     }
@@ -230,13 +379,16 @@ public sealed class ProblemCenterSession : ObservableObject
         }
 
         var search = SearchText.Trim();
-        return search.Length == 0
-            || issue.Code.Contains(search, StringComparison.OrdinalIgnoreCase)
-            || issue.Summary.Contains(search, StringComparison.CurrentCultureIgnoreCase)
-            || issue.Details.Contains(search, StringComparison.CurrentCultureIgnoreCase)
-            || issue.Source.ToString().Contains(search, StringComparison.OrdinalIgnoreCase)
-            || (issue.PathContext?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false);
+        return search.Length == 0 || MatchesSearch(issue, search);
     }
+
+    private static bool MatchesSearch(AppIssue issue, string search)
+        => issue.Code.Contains(search, StringComparison.OrdinalIgnoreCase)
+           || issue.Summary.Contains(search, StringComparison.CurrentCultureIgnoreCase)
+           || issue.Details.Contains(search, StringComparison.CurrentCultureIgnoreCase)
+           || issue.Source.ToString().Contains(search, StringComparison.OrdinalIgnoreCase)
+           || (issue.ProjectKey?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false)
+           || (issue.PathContext?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false);
 
     private int CountOpenIssues(params AppIssueSource[] sources)
         => Issues.Count(issue =>

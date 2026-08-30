@@ -28,6 +28,7 @@ internal static class AccessibilityRegressionTests
         foreach (var titleName in new[]
                  {
                      "ScanPageTitle",
+                     "BrowsePageTitle",
                      "LibraryPageTitle",
                      "ProblemsPageTitle"
                  })
@@ -42,6 +43,7 @@ internal static class AccessibilityRegressionTests
         foreach (var (name, expected) in new[]
                  {
                      ("ScanNavButton", "扫描中心"),
+                     ("BrowseNavButton", "项目浏览"),
                      ("LibraryNavButton", "输出壁纸库"),
                      ("ProblemNavButton", "问题中心"),
                      ("RefreshLibraryButton", "刷新输出壁纸库")
@@ -67,6 +69,7 @@ internal static class AccessibilityRegressionTests
                      "CalibrationInstrument",
                      "CalibrationRotation",
                      "ScanPage",
+                     "BrowsePage",
                      "LibraryPage",
                      "ProblemCenterPage"
                  })
@@ -139,6 +142,11 @@ internal static class AccessibilityRegressionTests
                          "SelectCurrentMatchesButton",
                          "ClearUnpackSelectionButton",
                          "CompactDensityToggle"
+                     }),
+                     ("BROWSE", new[]
+                     {
+                         "BrowseNavButton",
+                         "BrowseScanCenterButton"
                      }),
                      ("LIBRARY", new[]
                      {
@@ -229,6 +237,7 @@ internal static class AccessibilityRegressionTests
         foreach (var (document, header, title, expectedText) in new[]
                  {
                      (XDocument.Load(FindRepositoryFile(Path.Combine("Views", "ScanPageView.xaml"))), "ScanPageHeader", "ScanPageTitle", "扫描壁纸项目"),
+                     (XDocument.Load(FindRepositoryFile(Path.Combine("Views", "BrowsePageView.xaml"))), "BrowsePageHeader", "BrowsePageTitle", "项目浏览"),
                      (XDocument.Load(FindRepositoryFile(Path.Combine("Views", "LibraryPageView.xaml"))), "LibraryPageHeader", "LibraryPageTitle", "输出壁纸库"),
                      (XDocument.Load(FindRepositoryFile(Path.Combine("Views", "ProblemCenterView.xaml"))), "ProblemsPageHeader", "ProblemsPageTitle", "问题中心")
                  })
@@ -246,6 +255,7 @@ internal static class AccessibilityRegressionTests
         foreach (var (command, expectedName) in new[]
                  {
                      ("{Binding NavigateScanCommand}", "扫描中心"),
+                     ("{Binding NavigateBrowseCommand}", "项目浏览"),
                      ("{Binding NavigateLibraryCommand}", "输出壁纸库"),
                      ("{Binding NavigateProblemsCommand}", "问题中心")
                  })

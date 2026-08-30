@@ -2,10 +2,14 @@
 
 一款面向 Windows 的 Wallpaper Engine 本地壁纸整理与 `scene.pkg` 解包工具。程序使用 C# / WPF 编写，可以只读扫描 Workshop 壁纸目录、直接显示源 preview，并按用户勾选解包场景壁纸或复制视频壁纸。
 
-当前维护版本为 **v1.2.2**；完整改进与已知限制见 [v1.2.2 release notes](docs/releases/v1.2.2.md)。
+当前维护版本为 **v1.3.0**；完整改进与已知限制见 [v1.3.0 release notes](docs/releases/v1.3.0.md)。
 
 > [!NOTE]
 > 这是一个非官方社区项目，与 Wallpaper Engine、Arknights: Endfield、Hypergryph 或其关联公司无隶属或背书关系。界面采用原创的 Endfield-inspired 技术终端风格，不包含官方徽标、角色图、宣传素材或字体。
+
+![项目浏览器：高密度网格、组合筛选、详情与批量处理托盘](docs/images/project-browser.png)
+
+_项目浏览器：成功扫描后以虚拟化网格浏览同一份稳定快照；当前项、键盘焦点和批量选择彼此独立。_
 
 ![紧凑扫描中心：组合筛选并选择当前匹配的可处理壁纸](docs/images/scan-center.png)
 
@@ -22,9 +26,10 @@ _问题中心：集中浏览完整问题、磁盘事实与下一步操作；扫�
 ## 功能概览
 
 - 扫描 Wallpaper Engine Workshop 根目录下的所有直接子文件夹。
+- 新增“项目浏览器”第四页：用 3–6 列虚拟化网格、搜索、类型/可处理/问题筛选和三种排序浏览当前成功扫描快照。
 - 从 `project.json` 读取 `title`、`workshopid`、`type` 和 `file`，字符串或数字形式的 Workshop ID 均可识别。
 - 识别 `preview.png`、`preview.jpg`、`preview.jpeg` 和 `preview.gif`；卡片直接读取源文件，不复制 preview。
-- GIF preview 会在可见卡片中逐帧播放；离屏卡片暂停播放，系统启用“减少动态效果”时显示静态帧。
+- 扫描/输出库中的 GIF preview 会在可见卡片中逐帧播放；项目浏览器统一显示受预算保护的静态首帧。离屏卡片停止占用预览租约，系统启用“减少动态效果”时所有页面都使用静态帧。
 - 正常关闭程序时记住源壁纸目录和输出目录，下次启动自动恢复，无需重复输入。
 - 扫描全程只读，结果保存在当前运行会话的内存中，不会创建输出根目录、项目目录或任何索引文件。
 - 所有扫描卡片均提供复选框且默认不选；只有勾选的可处理项目才会进入后续操作。
@@ -35,6 +40,7 @@ _问题中心：集中浏览完整问题、磁盘事实与下一步操作；扫�
 - 仅在单个项目处理成功后写入该项目的 `metadata.json`，供输出壁纸库重新加载。
 - 从输出目录递归重建已成功处理的壁纸库；重复 Workshop ID 整组排除并进入问题中心，点击任意合法卡片可定位到对应目录。
 - 扫描页可组合标题、仅可处理、仅有问题筛选，并支持选择当前匹配、清除选择；过滤不会清除隐藏的已勾选项目。
+- 项目浏览器把当前详情、键盘焦点和批量勾选分开；隐藏选择仍计入批处理并在固定托盘中明确显示。
 - Comfortable/Compact 两档密度在扫描与图库间共享并保存；Compact 只隐藏重复的次级说明，不隐藏操作或核心状态。
 - 独立问题中心支持严重度/来源/文本筛选、复制、清理已解决问题、打开日志/输出目录、查看版本与导出默认脱敏诊断。
 - 大型壁纸库使用回收式列表虚拟化和异步图片解码，深度滚动时不会反复创建全部卡片。
@@ -60,15 +66,13 @@ _问题中心：集中浏览完整问题、磁盘事实与下一步操作；扫�
 ## 快速开始
 
 1. 下载 Windows x64 完整发布 ZIP 并解压后运行 `WallpaperField.exe`；如果直接获取源码，请先按“从源码构建”生成当前版本。
-2. 在左侧打开“扫描中心”。
-3. 选择 Wallpaper Engine 壁纸根目录。
-4. 选择一个专门的输出目录。
-5. 点击“开始扫描”，等待卡片和统计信息出现。扫描不会修改输出目录。
-6. 使用标题、仅可处理、仅有问题筛选缩小范围；需要时切换 Compact 密度。
-7. 勾选要处理的壁纸，或选择当前匹配；所有复选框默认不选，过滤不会清除隐藏选择。
-8. 点击“解包选中项”。程序只处理已勾选的 `PKG READY` 或 `VIDEO READY` 项目。
-9. 打开左侧“输出壁纸库”，刷新、搜索并浏览已成功处理的内容。
-10. 如果页面摘要提示问题，打开“问题中心”查看完整证据、复制详情或导出诊断。
+2. 在左侧打开“扫描中心”，选择 Wallpaper Engine 壁纸根目录和一个专门的输出目录。
+3. 点击“开始扫描”，等待成功快照和统计信息出现。扫描不会修改输出目录。
+4. 打开“项目浏览器”，用标题/ID 搜索、类型、仅可处理、仅有问题和排序缩小网格；需要时切换 Compact 密度。
+5. 用方向键移动焦点，Enter 查看当前项，Space 切换批量选择；筛选隐藏的选择仍会保留并在托盘中计数。
+6. 在详情中处理当前可处理项，或从批量托盘处理全部已选 `PKG READY` / `VIDEO READY` 项目。
+7. 打开左侧“输出壁纸库”，刷新、搜索并浏览已成功处理的内容。
+8. 如果页面摘要提示问题，打开“问题中心”查看完整证据、复制详情或导出诊断。
 
 下面是每一步的详细说明。
 
@@ -143,7 +147,28 @@ D:\WallpaperFieldOutput
 
 如果多个源文件夹最终得到相同的 Workshop ID，程序会保留先处理的项目，并把后续重复项记录为失败，避免不同壁纸覆盖到同一个输出目录。
 
-### 4. 理解输入文件规则
+### 4. 使用项目浏览器
+
+扫描成功后，打开左侧“项目浏览器”。它消费扫描一次性发布的同一份稳定快照；新扫描失败或取消时不会把上一份可用浏览上下文清空。网格支持标题/Workshop ID 搜索、类型、仅可处理、仅有问题和名称/ID/类型排序；按类型排序时固定为 **Package → Video → Website → Other**。
+
+项目类型按安全优先级唯一判定：
+
+1. `type` 为 `web` / `website` 时始终是 Website，只能浏览，v1.3 不处理其输出。
+2. 声明为 `video` 且 `file` 指向项目内存在的安全相对文件时是 Video，处理时复制该文件。
+3. 声明为 `video` 但文件缺失、非法或越界时是 Other；即使目录里碰巧存在 `scene.pkg`，也不会回退为 Package。
+4. 其余项目只有在根目录存在有效 `scene.pkg` 时才是 Package；否则是 Other。
+
+“当前项”、键盘焦点和批量选择是三种独立状态。移动焦点或打开详情不会自动勾选；“选择匹配项”会一次选择当前筛选出的全部可处理项目，筛选隐藏的已选项目仍参与批处理，固定托盘会显示总选择数和隐藏选择数。详情中的处理动作只处理当前项，批量动作则使用已冻结的整组选中项；扫描身份、revision、成员和输出目录在真正进入任务槽前会再次校验。动作不可执行时，界面会直接说明正在扫描、快照过期、输出目录变化、已有前台任务或当前类型不可处理等原因。
+
+- 卡片获得焦点后，用方向键在网格移动，Space 切换批量选择，Enter 把该卡设为当前项并进入详情。
+- Compact 模式下 Enter 打开侧边详情；在 Compact 详情或筛选层按 Escape 会关闭该层，并把焦点恢复到打开它的控件。卡片本身不把 Escape 解释为“返回搜索”。
+- 搜索框非空时可用清除按钮恢复全部项目并把焦点还给搜索框。Compact 把筛选与详情放入独立侧层，但不会隐藏清除、取消或处理等唯一入口。
+- 从项目详情打开问题，或从问题中心选择“定位项目”，会按稳定 ProjectKey 跳回精确项目；必要时自动清除阻挡的搜索/类型/问题筛选，而不会改变批量选择。
+- “打开文件夹”会在启动 Explorer 前重新验证并锁定目标路径；目标消失、不安全或 Shell 启动失败时，结果会同时显示在页面状态与辅助技术可感知的 live region 中。
+
+项目浏览器只显示预览的静态首帧，并在后台 worker 中解码。单个输入最大 64 MiB，宽高各不超过 4096，源画布不超过 16M 像素；同时最多 4 个解码，缓存最多 128 项且估算解码内存最多 128 MiB。缺失、损坏、变化、reparse-point 或超预算预览会安全降级为占位和逐项问题，不会拖垮整个快照。
+
+### 5. 理解输入文件规则
 
 每个壁纸项目的典型结构如下：
 
@@ -162,7 +187,7 @@ D:\WallpaperFieldOutput
 | `scene.pkg` | 场景壁纸必需 | 只识别项目根目录中的同名文件，文件名不区分大小写 |
 | `file` 指向的视频 | 视频壁纸必需 | `type` 必须为 `video`；`file` 必须是项目目录内存在的安全相对路径 |
 
-preview 的选择优先级为 PNG → JPG → JPEG → GIF。程序直接读取源 preview。GIF 会在当前可见卡片中按原始帧时长与循环设置播放，滚出可视区域后暂停；系统启用“减少动态效果”时保持为静态帧。图片数据先读入内存，因此播放期间不会锁住源文件。
+preview 的选择优先级为 PNG → JPG → JPEG → GIF。程序直接读取源 preview。仅扫描中心和输出壁纸库会让当前可见卡片中的 GIF 按原始帧时长与循环设置播放，滚出可视区域后暂停；项目浏览器始终只显示受预算保护的静态首帧。系统启用“减少动态效果”时所有页面都保持静态帧。图片数据先读入内存，因此播放期间不会锁住源文件。
 
 一个最小的 `project.json` 示例：
 
@@ -188,7 +213,7 @@ preview 的选择优先级为 PNG → JPG → JPEG → GIF。程序直接读取�
 
 `workshopid` 也可以是 JSON 数字。输出目录以最终识别到的 Workshop ID 命名。视频 `file` 可以包含子目录，但不能是绝对路径，也不能包含 `..` 路径段。
 
-### 5. 勾选并处理壁纸
+### 6. 勾选并处理壁纸
 
 扫描完成后，每张卡片都会显示复选框且默认不选。勾选至少一个 `PKG READY` 或 `VIDEO READY` 项目后，“解包选中项”按钮会变为可用。点击后：
 
@@ -212,7 +237,7 @@ Wallpaper Engine 的 `.tex` 是纹理资源，不是 LaTeX 文档。程序先把
 
 如果某个纹理无法转换，完成信息中会给出警告，但不会为了失败项保留原始 TEX，也不会阻止其他文件继续解包。程序只清理自己在当前 staging 目录中创建的 TEX，不会递归删除已有输出中的同名文件。
 
-### 6. 浏览输出壁纸库
+### 7. 浏览输出壁纸库
 
 打开左侧“输出壁纸库”页面。页面会在所选输出根下递归发现已成功处理项目的 `metadata.json`，恢复标题、Workshop ID、源 preview 路径和输出文件夹位置。仅完成扫描不会向输出库添加记录。
 
@@ -224,15 +249,15 @@ Wallpaper Engine 的 `.tex` 是纹理资源，不是 LaTeX 文档。程序先把
 - 候选按规范化相对路径稳定排序；同一 Workshop ID（忽略大小写）出现多次时，整组不任选一个展示，而是在问题中心列出全部冲突候选。
 - preview 仍从原壁纸目录读取；如果源文件被移动或删除，输出库中的该卡片将无法继续显示预览图。
 
-### 7. 使用问题中心与诊断
+### 8. 使用问题中心与诊断
 
 问题中心保存当前会话中扫描、解包、图库、输入、设置、日志和诊断操作产生的结构化记录。你可以组合文本、严重度和来源筛选，展开完整详情，复制选中或全部问题，并清理已经解决的记录。重复扫描/刷新成功时，只会精确解决同一来源和上下文的旧问题。
 
 “导出诊断”会生成包含版本、完整源 commit、操作系统、架构、DPI、High Contrast、motion、密度和问题计数的 JSON。默认不包含文件内容，并会移除路径 context、脱敏摘要和详情；只有用户显式选择包含路径时才保留本地路径。日志同样对路径做指纹化，并按大小、数量和保留期轮换。
 
-### 8. 键盘、High Contrast 与动态效果
+### 9. 键盘、High Contrast 与动态效果
 
-三个页面的导航、路径、筛选、批量选择、密度、扫描/解包/刷新/取消及问题动作都可通过键盘到达。页面标题提供 Level 1 heading 语义但不会额外占用 Tab；无文字按钮和紧凑导航具有稳定中文名称。
+四个页面的导航、路径、筛选、批量选择、密度、扫描/解包/刷新/取消及问题动作都可通过键盘到达。页面标题提供 Level 1 heading 语义但不会额外占用 Tab；无文字按钮和紧凑导航具有稳定中文名称。项目浏览器卡片使用 roving focus，因此 1000 张卡片不会全部进入 Tab 链，但每张卡片与选择状态仍可由键盘和 UI Automation 操作。
 
 程序在 High Contrast 下使用 Windows 系统窗口、文本、高亮和禁用颜色。Windows 关闭客户端动画或使用 `--reduced-motion` 时，页面、控件和环境动效会停止，GIF 只解码静态首帧；核心状态始终同时由文字/结构表达，不只依赖颜色、hover、Tooltip 或动画。
 
@@ -307,7 +332,7 @@ Wallpaper Engine 的 `.tex` 是纹理资源，不是 LaTeX 文档。程序先把
 
 ### GIF 为什么暂停或只显示静态帧？
 
-GIF preview 不会复制到输出目录。可见卡片会逐帧播放，滚出可视区域或页面隐藏后会自动暂停并在再次可见时继续。如果 Windows 启用了“减少动态效果”，程序会尊重系统设置并保持静态帧；损坏或不受支持的 GIF 会显示占位状态。
+GIF preview 不会复制到输出目录。扫描中心和输出壁纸库的可见卡片会逐帧播放，滚出可视区域或页面隐藏后会自动暂停并在再次可见时继续；项目浏览器始终只解码静态首帧。如果 Windows 启用了“减少动态效果”，程序会尊重系统设置并让所有页面保持静态帧；损坏或不受支持的 GIF 会显示占位状态。
 
 ### 在哪里查看完整错误或导出诊断？
 
@@ -330,7 +355,7 @@ dotnet build .\WallpaperField.slnx --configuration Release
 生成 Windows x64 自包含单文件版本：
 
 ```powershell
-$candidate = Join-Path $PWD 'artifacts\WallpaperField-v1.2.2-local'
+$candidate = Join-Path $PWD 'artifacts\WallpaperField-v1.3.0-local'
 .\build-release.ps1 -OutputDirectory $candidate
 Get-ChildItem -LiteralPath $candidate
 ```
@@ -338,7 +363,7 @@ Get-ChildItem -LiteralPath $candidate
 也可以从 `cmd.exe` 调用同一流程：
 
 ```bat
-build-release.cmd artifacts\WallpaperField-v1.2.2-local
+build-release.cmd artifacts\WallpaperField-v1.3.0-local
 ```
 
 输出目录必须是尚不存在的专用目录。脚本先在同卷 GUID 工作区 restore/publish，验证 PE 版本、真实启动截图、ZIP 精确内容、许可 hash、依赖 JSON、Authenticode 状态与 SHA-256 后，才一次性发布候选目录。默认流程不会覆盖仓库根 `GUI_for_RePKG.exe`。
@@ -347,7 +372,7 @@ build-release.cmd artifacts\WallpaperField-v1.2.2-local
 
 ```text
 WallpaperField.exe
-WallpaperField-v1.2.2-win-x64.zip
+WallpaperField-v1.3.0-win-x64.zip
 release-manifest.json
 dependencies.json
 SHA256SUMS
@@ -371,7 +396,7 @@ dotnet run --project .\tests\WallpaperField.SmokeTests\WallpaperField.SmokeTests
 成功运行的最后一行是可由 CI 严格解析的摘要，例如：
 
 ```text
-SMOKE_RESULT tests=1 assertions=947 passed=1 failed=0
+SMOKE_RESULT tests=1 assertions=10743 passed=1 failed=0
 ```
 
 断言数量会随回归用例增加；`tests` 和 `assertions` 必须都大于零。可用下面的专用自检证明断言失败会返回非零退出码：
@@ -398,7 +423,7 @@ dotnet run --project .\tests\WallpaperField.SmokeTests\WallpaperField.SmokeTests
 
 ```text
 --source <目录> --output <目录> --scan
---page scan|library|problems
+--page scan|browse|library|problems
 --snapshot <png路径> --width <像素> --height <像素>
 --scroll-index <记录索引>
 --reduced-motion
@@ -406,7 +431,7 @@ dotnet run --project .\tests\WallpaperField.SmokeTests\WallpaperField.SmokeTests
 
 这些参数只用于截图和回归测试，不会改变普通用户的使用流程。
 
-所有带值参数都不会把下一个 `--flag` 当作缺失值；首个合法重复值生效，未知、重复和非法参数会成为 Startup 问题。`--page` 只接受 `scan`、`library`、`problems`；宽高必须是有限正数且不大于 16384。启动参数包含路径时，普通日志只记录参数数量与问题数量，不记录完整命令行。
+所有带值参数都不会把下一个 `--flag` 当作缺失值；首个合法重复值生效，未知、重复和非法参数会成为 Startup 问题。`--page` 接受 `scan` / `01`、`browse` / `02`、`library` / `03`、`problems` / `04`；宽高必须是有限正数且不大于 16384。启动参数包含路径时，普通日志只记录参数数量与问题数量，不记录完整命令行。
 
 ## 二次开发
 

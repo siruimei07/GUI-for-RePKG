@@ -21,6 +21,95 @@ if (args.Length == 1
     Assert(false, "Intentional SmokeTests failure-exit verification.");
 }
 
+if (args.Length == 1
+    && string.Equals(args[0], "--project-browser-preview-only", StringComparison.Ordinal))
+{
+    await ProjectBrowserPreviewRegressionTests.RunAsync(Assert);
+    Console.WriteLine(metrics.CreateSuccessSummary());
+    return;
+}
+
+if (args.Length == 1
+    && string.Equals(args[0], "--project-browser-ui-only", StringComparison.Ordinal))
+{
+    UiStructureRegressionTests.VerifyWpfWindow(Assert);
+    Console.WriteLine(metrics.CreateSuccessSummary());
+    return;
+}
+
+if (args.Length == 1
+    && string.Equals(args[0], "--project-browser-processing-only", StringComparison.Ordinal))
+{
+    await ProjectBrowserProcessingRegressionTests.RunAsync(Assert);
+    Console.WriteLine(metrics.CreateSuccessSummary());
+    return;
+}
+
+if (args.Length == 1
+    && string.Equals(args[0], "--project-browser-performance-only", StringComparison.Ordinal))
+{
+    PerformanceRegressionTests.RunProjectBrowserBenchmarks(Assert);
+    Console.WriteLine(metrics.CreateSuccessSummary());
+    return;
+}
+
+if (args.Length == 1
+    && string.Equals(args[0], "--project-browser-task7-wpf-only", StringComparison.Ordinal))
+{
+    UiStructureRegressionTests.VerifyTask7WpfWindow(Assert);
+    Console.WriteLine(metrics.CreateSuccessSummary());
+    return;
+}
+
+if (args.Length == 1
+    && string.Equals(args[0], "--project-browser-task7-host-only", StringComparison.Ordinal))
+{
+    UiStructureRegressionTests.VerifyTask7IsolatedApplicationHost(Assert);
+    Console.WriteLine(metrics.CreateSuccessSummary());
+    return;
+}
+
+if (args.Length == 1
+    && string.Equals(args[0], "--project-browser-task7-host-fault-only", StringComparison.Ordinal))
+{
+    UiStructureRegressionTests.VerifyTask7IsolatedApplicationFailureCleanup(Assert);
+    Console.WriteLine(metrics.CreateSuccessSummary());
+    return;
+}
+
+if (args.Length == 1
+    && string.Equals(args[0], "--project-browser-task7-cleanup-only", StringComparison.Ordinal))
+{
+    ProjectBrowserUiRegressionTests.VerifyTask7ForcedCleanup(Assert);
+    Console.WriteLine(metrics.CreateSuccessSummary());
+    return;
+}
+
+if (args.Length == 1
+    && string.Equals(args[0], "--project-browser-task7-visual-only", StringComparison.Ordinal))
+{
+    UiStructureRegressionTests.VerifyTask7VisualWpfWindow(Assert);
+    Console.WriteLine(metrics.CreateSuccessSummary());
+    return;
+}
+
+if (args.Length == 1
+    && string.Equals(args[0], "--project-browser-task7-readiness-only", StringComparison.Ordinal))
+{
+    UiStructureRegressionTests.VerifyTask7ReadinessWpfWindow(Assert);
+    Console.WriteLine(metrics.CreateSuccessSummary());
+    return;
+}
+
+if (args.Length == 1
+    && string.Equals(args[0], "--project-browser-task7-atomic-only", StringComparison.Ordinal))
+{
+    SnapshotCaptureRegressionTests.Run(Assert);
+    UiStructureRegressionTests.VerifyTask7SnapshotCaptureWpfWindow(Assert);
+    Console.WriteLine(metrics.CreateSuccessSummary());
+    return;
+}
+
 var testRoot = Path.Combine(
     Path.GetTempPath(),
     $"WallpaperField-Smoke-{Guid.NewGuid():N}");
@@ -35,6 +124,12 @@ try
     await RoadmapBehaviorRegressionTests.RunAsync(Assert);
     await CoordinatorRegressionTests.RunAsync(Assert);
     await SessionBoundaryRegressionTests.RunAsync(Assert);
+    await ProjectBrowserFoundationRegressionTests.RunAsync(Assert);
+    await ProjectBrowserProjectionRegressionTests.RunAsync(Assert);
+    ProjectBrowserNavigationRegressionTests.Run(Assert);
+    await ProjectBrowserPreviewRegressionTests.RunAsync(Assert);
+    await ProjectBrowserUiRegressionTests.RunAsync(Assert);
+    await ProjectBrowserProcessingRegressionTests.RunAsync(Assert);
     await TaskLifecycleRegressionTests.RunAsync(Assert);
     await ScanLifecycleRegressionTests.RunAsync(Assert);
     await LibraryLifecycleRegressionTests.RunAsync(Assert);
@@ -374,6 +469,10 @@ try
     await shell.ScanCommand.ExecuteAsync();
     Assert(shell.ScannedWallpapers.Count == 6 && shell.PackageReadyCount == 5,
         "The scan command did not project PKG and video eligibility into the UI model.");
+    Assert(shell.IsScanPage
+           && shell.BrowsePageViewModel.HasSnapshot
+           && shell.BrowsePageViewModel.TotalProjectCount == 6,
+        "A successful scan did not populate Browse in place while retaining the Scan route.");
     Assert(!Directory.Exists(viewModelOutputRoot),
         "View-model scanning must not create its output root.");
     shell.ScanSearchText = "  gif  ";

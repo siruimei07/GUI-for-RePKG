@@ -96,7 +96,8 @@ public sealed class DiagnosticExportService(
                 DiagnosticPrivacy.Fingerprint(issue.ContextKey),
                 issue.ResolutionState,
                 issue.ResolvedAtUtc,
-                issue.OccurrenceCount))
+                issue.OccurrenceCount,
+                issue.ProjectKey))
             .ToArray();
         var counts = new DiagnosticIssueCounts(
             issues.Length,

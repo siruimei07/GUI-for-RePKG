@@ -8,16 +8,19 @@ namespace WallpaperField.ViewModels;
 public sealed class WallpaperCardViewModel : ObservableObject
 {
     private readonly Action? _unpackSelectionChanged;
+    private readonly Func<bool>? _canChangeUnpackSelection;
     private bool _hasOpenIssues;
     private bool _isSelectedForUnpack;
 
     public WallpaperCardViewModel(
         WallpaperRecord record,
-        Action? unpackSelectionChanged = null)
+        Action? unpackSelectionChanged = null,
+        Func<bool>? canChangeUnpackSelection = null)
     {
         ArgumentNullException.ThrowIfNull(record);
         Record = record;
         _unpackSelectionChanged = unpackSelectionChanged;
+        _canChangeUnpackSelection = canChangeUnpackSelection;
         ShowsUnpackSelection = unpackSelectionChanged is not null;
     }
 
@@ -45,32 +48,57 @@ public sealed class WallpaperCardViewModel : ObservableObject
 
     public bool HasUnpackableContent => Record.HasUnpackableContent;
 
-    public bool CanSelectForUnpack => HasUnpackableContent;
+    public WallpaperProjectKind ProjectKind => Record.ProjectKind;
+
+    public string ProjectKey => Record.ProjectKey;
+
+    public bool IsProcessable => Record.IsProcessable;
+
+    public bool CanSelectForUnpack => IsProcessable;
 
     public bool IsSelectedForUnpack
     {
         get => _isSelectedForUnpack;
-        set
+        set => SetUnpackSelection(value, bypassOwnerGate: false);
+    }
+
+    internal void ClearUnpackSelectionAfterCommit()
+        => SetUnpackSelection(selected: false, bypassOwnerGate: true);
+
+    private void SetUnpackSelection(bool selected, bool bypassOwnerGate)
+    {
+        var normalizedValue = selected && CanSelectForUnpack;
+        if (_isSelectedForUnpack == normalizedValue
+            || !bypassOwnerGate
+            && _canChangeUnpackSelection?.Invoke() == false)
         {
-            var normalizedValue = value && CanSelectForUnpack;
-            if (SetProperty(ref _isSelectedForUnpack, normalizedValue))
-            {
-                _unpackSelectionChanged?.Invoke();
-            }
+            return;
+        }
+
+        if (SetProperty(
+                ref _isSelectedForUnpack,
+                normalizedValue,
+                nameof(IsSelectedForUnpack)))
+        {
+            _unpackSelectionChanged?.Invoke();
         }
     }
 
-    public string PackageStatus => HasVideoFile
-        ? "VIDEO READY"
-        : HasScenePackage
-            ? "PKG READY"
-            : "NO CONTENT";
+    public string PackageStatus => ProjectKind switch
+    {
+        WallpaperProjectKind.Video => "VIDEO READY",
+        WallpaperProjectKind.Package => "PKG READY",
+        WallpaperProjectKind.Website => "WEB ONLY",
+        _ => "NO CONTENT"
+    };
 
-    public string PackageStatusDetail => HasVideoFile
-        ? $"已发现视频壁纸\n{Record.VideoFilePath}"
-        : HasScenePackage
-            ? $"已发现 scene.pkg\n{Record.ScenePackagePath}"
-            : "扫描时未发现 scene.pkg 或有效视频文件，无法处理此项目。";
+    public string PackageStatusDetail => ProjectKind switch
+    {
+        WallpaperProjectKind.Video => $"已发现视频壁纸\n{Record.VideoFilePath}",
+        WallpaperProjectKind.Package => $"已发现 scene.pkg\n{Record.ScenePackagePath}",
+        WallpaperProjectKind.Website => "网站项目仅供浏览，当前版本不处理其输出。",
+        _ => "扫描时未发现可处理的 scene.pkg 或有效视频文件。"
+    };
 
     public int WarningCount => Record.Warnings.Count;
 

@@ -1,11 +1,20 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Security.Cryptography;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Text;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Controls;
 using System.Windows.Threading;
+using Microsoft.Win32.SafeHandles;
+using WallpaperField.Application;
+using WallpaperField.Contracts;
 using WallpaperField.Models;
+using WallpaperField.Services;
 using WallpaperField.ViewModels;
 using WallpaperField.ViewModels.Sessions;
 
@@ -93,6 +102,142 @@ internal static class PerformanceRegressionTests
         assert(copySamples.Max() <= ProblemWorstBudgetMilliseconds,
             $"Copying 1,000 problems exceeded the {ProblemWorstBudgetMilliseconds:F0} ms worst-run budget: "
             + $"{copySamples.Max():F3} ms.");
+
+        RunProjectBrowserBenchmarks(assert);
+    }
+
+    internal static void RunProjectBrowserBenchmarks(Action<bool, string> assert)
+    {
+        ArgumentNullException.ThrowIfNull(assert);
+        ProjectBrowserProjectionRegressionTests.VerifyBrowseUiHasNoFileSystemCalls(assert);
+        using var fixture = new ProjectBrowserPerformanceFixture();
+        fixture.Verify(assert);
+
+        var coordinator = new TaskLifecycleCoordinator();
+        var problems = new ProblemCenterSession();
+        var scan = new ScanSession(
+            fixture,
+            new PathInputValidator(),
+            coordinator,
+            problems)
+        {
+            SourcePath = fixture.SourceRoot,
+            OutputPath = fixture.OutputRoot
+        };
+        scan.ScanAsync().GetAwaiter().GetResult();
+        using var browse = new BrowsePageViewModel(
+            scan,
+            problems,
+            null,
+            fixture);
+
+        assert(browse.TotalProjectCount == FixtureCount
+               && browse.VisibleProjects.Count == FixtureCount,
+            "The Task 7 projection benchmark did not consume the exact 1,000-project snapshot.");
+        Console.WriteLine(string.Create(
+            CultureInfo.InvariantCulture,
+            $"PERF_FIXTURE name=project_browser count={fixture.Records.Count} "
+            + $"manifest_sha256={fixture.ManifestHash} commit={ResolveGitCommit()} "
+            + $"os=\"{Environment.OSVersion}\" framework=\"{Environment.Version}\" "
+            + $"arch={RuntimeInformation.ProcessArchitecture} cpu=\"{Environment.GetEnvironmentVariable("PROCESSOR_IDENTIFIER") ?? "unknown"}\" "
+            + $"gc_server={System.Runtime.GCSettings.IsServerGC} "
+            + $"gc_latency={System.Runtime.GCSettings.LatencyMode}"));
+
+        WarmProjectBrowserProjection(browse);
+
+        var nameTargets = new[] { 17, 211, 409, 673, 887 };
+        browse.SearchText = string.Empty;
+        var nameSamples = nameTargets.Select(index => Measure(() =>
+        {
+            browse.SearchText = $"TASK7-NAME-{index:D4}";
+            if (browse.VisibleProjects.Count != 1
+                || browse.VisibleProjects[0].Record != fixture.Records[index])
+            {
+                throw new InvalidOperationException(
+                    $"Name-search fixture target {index:D4} was not unique.");
+            }
+        })).ToArray();
+        VerifyInteractionSamples("browse.projection.name_search", nameSamples, assert);
+
+        browse.SearchText = string.Empty;
+        var idTargets = new[] { 31, 229, 487, 701, 941 };
+        var idSamples = idTargets.Select(index => Measure(() =>
+        {
+            browse.SearchText = $"task7-{index:D4}";
+            if (browse.VisibleProjects.Count != 1
+                || browse.VisibleProjects[0].Record != fixture.Records[index])
+            {
+                throw new InvalidOperationException(
+                    $"Workshop-ID fixture target {index:D4} was not unique.");
+            }
+        })).ToArray();
+        VerifyInteractionSamples("browse.projection.id_search", idSamples, assert);
+
+        var combinedKinds = new[]
+        {
+            ProjectBrowserKindFilter.Package,
+            ProjectBrowserKindFilter.Video,
+            ProjectBrowserKindFilter.Package,
+            ProjectBrowserKindFilter.Video,
+            ProjectBrowserKindFilter.Package
+        };
+        var combinedSamples = combinedKinds.Select(kind =>
+        {
+            ResetProjection(browse);
+            return Measure(() =>
+            {
+                browse.KindFilter = kind;
+                browse.ShowOnlyProcessable = true;
+                browse.ShowOnlyProblems = true;
+                if (browse.VisibleProjects.Count <= 0
+                    || browse.VisibleProjects.Any(project =>
+                        project.ProjectKind != (kind == ProjectBrowserKindFilter.Package
+                            ? WallpaperProjectKind.Package
+                            : WallpaperProjectKind.Video)
+                        || !project.IsProcessable
+                        || !project.HasProblems))
+                {
+                    throw new InvalidOperationException(
+                        "The combined kind/processable/problem fixture did not remain selective.");
+                }
+            });
+        }).ToArray();
+        VerifyInteractionSamples("browse.projection.combined_filter", combinedSamples, assert);
+
+        foreach (var targetSort in Enum.GetValues<ProjectBrowserSort>())
+        {
+            var sortSamples = Enumerable.Range(0, RepetitionCount).Select(sample =>
+            {
+                ResetProjection(browse);
+                browse.Sort = targetSort == ProjectBrowserSort.Name
+                    ? ProjectBrowserSort.WorkshopId
+                    : ProjectBrowserSort.Name;
+                return Measure(() =>
+                {
+                    browse.Sort = targetSort;
+                    GC.KeepAlive(browse.VisibleProjects[^1]);
+                });
+            }).ToArray();
+            VerifyInteractionSamples(
+                $"browse.projection.sort_{targetSort.ToString().ToLowerInvariant()}",
+                sortSamples,
+                assert);
+        }
+
+        ResetProjection(browse);
+        browse.SetColumnCount(6);
+        var reflowTargets = new[] { 3, 4, 5, 6, 3 };
+        var reflowSamples = reflowTargets.Select(columns => Measure(() =>
+        {
+            browse.SetColumnCount(columns);
+            var expectedRows = (FixtureCount + columns - 1) / columns;
+            if (browse.Rows.Count != expectedRows || browse.ColumnCount != columns)
+            {
+                throw new InvalidOperationException(
+                    $"The {columns}-column reflow produced {browse.Rows.Count} rows instead of {expectedRows}.");
+            }
+        })).ToArray();
+        VerifyInteractionSamples("browse.projection.reflow_3_4_5_6", reflowSamples, assert);
     }
 
     internal static void VerifyWindow(
@@ -356,6 +501,28 @@ internal static class PerformanceRegressionTests
         }
     }
 
+    internal static void ReportThumbnailMetrics(
+        string phase,
+        PreviewThumbnailMetrics metrics,
+        Action<bool, string> assert)
+    {
+        Console.WriteLine(string.Create(
+            CultureInfo.InvariantCulture,
+            $"PERF_METRIC name=project_browser.thumbnail_{phase} "
+            + $"active={metrics.ActiveDecodes} peak_active={metrics.PeakActiveDecodes} "
+            + $"pending={metrics.PendingDecodes} observers={metrics.ObserverCount} "
+            + $"cache_entries={metrics.CacheEntryCount} "
+            + $"cache_bytes={metrics.CacheDecodedBytes} evictions={metrics.EvictionCount} "
+            + $"active_budget={PreviewThumbnailLimits.MaximumConcurrentDecodes} "
+            + $"entry_budget={PreviewThumbnailLimits.MaximumEntries} "
+            + $"byte_budget={PreviewThumbnailLimits.MaximumDecodedCacheBytes}"));
+        assert(metrics.ActiveDecodes <= PreviewThumbnailLimits.MaximumConcurrentDecodes
+               && metrics.PeakActiveDecodes <= PreviewThumbnailLimits.MaximumConcurrentDecodes
+               && metrics.CacheEntryCount <= PreviewThumbnailLimits.MaximumEntries
+               && metrics.CacheDecodedBytes <= PreviewThumbnailLimits.MaximumDecodedCacheBytes,
+            "Thumbnail metrics exceeded a concurrency, entry-count, or decoded-byte budget.");
+    }
+
     private static WallpaperCardViewModel[] CreateCards(bool showsUnpackSelection)
         => Enumerable.Range(0, FixtureCount)
             .Select(index => new WallpaperCardViewModel(
@@ -390,6 +557,466 @@ internal static class PerformanceRegressionTests
                 $"performance:{index:D4}",
                 timestampUtc: DateTimeOffset.UnixEpoch.AddSeconds(index)))
             .ToArray();
+    }
+
+    private static void WarmProjectBrowserProjection(BrowsePageViewModel browse)
+    {
+        ResetProjection(browse);
+        browse.SearchText = "TASK7-NAME-0001";
+        browse.SearchText = "task7-0002";
+        browse.SearchText = string.Empty;
+        browse.KindFilter = ProjectBrowserKindFilter.Package;
+        browse.ShowOnlyProcessable = true;
+        browse.ShowOnlyProblems = true;
+        browse.Sort = ProjectBrowserSort.WorkshopId;
+        browse.Sort = ProjectBrowserSort.KindThenName;
+        browse.SetColumnCount(3);
+        browse.SetColumnCount(4);
+        browse.SetColumnCount(5);
+        browse.SetColumnCount(6);
+        ResetProjection(browse);
+    }
+
+    private static void ResetProjection(BrowsePageViewModel browse)
+    {
+        browse.SearchText = string.Empty;
+        browse.KindFilter = ProjectBrowserKindFilter.All;
+        browse.ShowOnlyProcessable = false;
+        browse.ShowOnlyProblems = false;
+    }
+
+    private static void VerifyInteractionSamples(
+        string name,
+        IReadOnlyCollection<double> samples,
+        Action<bool, string> assert)
+    {
+        ReportSamples(name, samples, "p95", InteractionP95BudgetMilliseconds);
+        var p95 = Percentile95(samples);
+        assert(samples.Count == RepetitionCount && p95 <= InteractionP95BudgetMilliseconds,
+            $"{name} nearest-rank p95 was {p95:F3} ms across {samples.Count} samples, "
+            + $"exceeding the {InteractionP95BudgetMilliseconds:F0} ms budget.");
+    }
+
+    private static string ResolveGitCommit()
+    {
+        try
+        {
+            var repositoryRoot = Path.GetDirectoryName(FindRepositoryFile("WallpaperField.slnx"))!;
+            using var process = Process.Start(new ProcessStartInfo
+            {
+                FileName = "git",
+                WorkingDirectory = repositoryRoot,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                ArgumentList = { "rev-parse", "HEAD" }
+            });
+            if (process is not null
+                && process.WaitForExit(5_000)
+                && process.ExitCode == 0)
+            {
+                return process.StandardOutput.ReadToEnd().Trim();
+            }
+        }
+        catch (Exception exception) when (exception is
+               InvalidOperationException or Win32Exception or IOException)
+        {
+        }
+
+        return "unknown";
+    }
+
+    internal sealed class ProjectBrowserPerformanceFixture :
+        IWallpaperScanService,
+        IProjectFolderTargetResolver,
+        IDisposable
+    {
+        private const uint FsctlSetSparse = 0x000900C4;
+        private const string ExpectedManifestHash =
+            "73A3727D4381E1D07FC7CF25C2BC07CAB7946941253526E1398A64F1149C90BD";
+        private static readonly DateTimeOffset FixedTimestamp =
+            new(2026, 8, 29, 12, 0, 0, TimeSpan.Zero);
+        private static readonly string StableIdentityRoot =
+            Path.Combine(Path.GetPathRoot(Environment.SystemDirectory)!, "WallpaperField-Task7-Fixture");
+
+        private readonly string _root;
+        private readonly PreviewFact[] _previewFacts;
+        private bool _disposed;
+
+        internal ProjectBrowserPerformanceFixture()
+        {
+            _root = Path.Combine(
+                Path.GetTempPath(),
+                $"WallpaperField-Task7-1000-{Guid.NewGuid():N}");
+            SourceRoot = Path.Combine(_root, "source");
+            OutputRoot = Path.Combine(_root, "output");
+            var previewRoot = Path.Combine(_root, "previews");
+            Directory.CreateDirectory(SourceRoot);
+            Directory.CreateDirectory(OutputRoot);
+            Directory.CreateDirectory(previewRoot);
+
+            var pngBytes = EncodeBitmap(
+                new PngBitmapEncoder(),
+                CreateFrame(0x00, 0xD7, 0xFF));
+            var jpegBytes = EncodeBitmap(
+                new JpegBitmapEncoder { QualityLevel = 90 },
+                CreateFrame(0x22, 0x22, 0x22));
+            var gifBytes = EncodeBitmap(
+                new GifBitmapEncoder(),
+                CreateFrame(0x00, 0xD7, 0xFF),
+                CreateFrame(0x10, 0x10, 0x10));
+
+            var facts = new List<PreviewFact>(FixtureCount);
+            for (var index = 0; index < FixtureCount; index++)
+            {
+                var category = GetPreviewCategory(index);
+                var extension = category switch
+                {
+                    PreviewCategory.ValidJpeg or PreviewCategory.MissingJpeg
+                        or PreviewCategory.CorruptJpeg => "jpg",
+                    PreviewCategory.ValidGif or PreviewCategory.OverBudget => "gif",
+                    _ => "png"
+                };
+                var relativePath = Path.Combine("previews", $"preview-{index:D4}.{extension}");
+                var path = Path.Combine(_root, relativePath);
+                switch (category)
+                {
+                    case PreviewCategory.ValidPng:
+                    case PreviewCategory.MissingPng:
+                        File.WriteAllBytes(path, pngBytes);
+                        break;
+                    case PreviewCategory.ValidJpeg:
+                    case PreviewCategory.MissingJpeg:
+                        File.WriteAllBytes(path, jpegBytes);
+                        break;
+                    case PreviewCategory.ValidGif:
+                        File.WriteAllBytes(path, gifBytes);
+                        break;
+                    case PreviewCategory.CorruptPng:
+                    case PreviewCategory.CorruptJpeg:
+                        File.WriteAllBytes(path, Encoding.ASCII.GetBytes($"CORRUPT-{index:D4}"));
+                        break;
+                    case PreviewCategory.OverBudget:
+                        CreateSparseOverBudgetFile(path);
+                        break;
+                    default:
+                        throw new InvalidOperationException($"Unsupported preview category {category}.");
+                }
+
+                var timestamp = FixedTimestamp.AddSeconds(index);
+                File.SetLastWriteTimeUtc(path, timestamp.UtcDateTime);
+                var fileInfo = new FileInfo(path);
+                facts.Add(new PreviewFact(
+                    index,
+                    category,
+                    relativePath.Replace(Path.DirectorySeparatorChar, '/'),
+                    Path.GetFullPath(path),
+                    fileInfo.Length,
+                    new DateTimeOffset(fileInfo.LastWriteTimeUtc),
+                    extension));
+            }
+
+            _previewFacts = facts.ToArray();
+            Records = Array.AsReadOnly(_previewFacts.Select(CreateRecord).ToArray());
+
+            foreach (var missing in _previewFacts.Where(fact => fact.Category is
+                         PreviewCategory.MissingPng or PreviewCategory.MissingJpeg))
+            {
+                File.Delete(missing.CanonicalPath);
+            }
+
+            ManifestText = string.Join('\n', _previewFacts.Select((fact, index) =>
+            {
+                var record = Records[index];
+                return string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"{index:D4}|{record.WorkshopId}|{record.ProjectKey}|{record.ProjectKind}|"
+                    + $"{fact.Category}|{fact.RelativePath}|{fact.Length}|"
+                    + $"{fact.LastWriteTimeUtc.UtcTicks}|{record.PreviewFormat}|"
+                    + $"{record.Title}|{string.Join('~', record.Warnings)}");
+            }));
+            ManifestHash = Convert.ToHexString(
+                SHA256.HashData(Encoding.UTF8.GetBytes(ManifestText)));
+        }
+
+        internal string SourceRoot { get; }
+
+        internal string OutputRoot { get; }
+
+        internal IReadOnlyList<WallpaperRecord> Records { get; }
+
+        internal string ManifestText { get; }
+
+        internal string ManifestHash { get; }
+
+        internal IReadOnlyList<string> MissingProjectKeys
+            => [Records[995].ProjectKey, Records[996].ProjectKey];
+
+        internal IReadOnlyList<string> CorruptProjectKeys
+            => [Records[997].ProjectKey, Records[998].ProjectKey];
+
+        internal string OverBudgetProjectKey => Records[999].ProjectKey;
+
+        internal void Verify(Action<bool, string> assert)
+        {
+            assert(ManifestHash == ExpectedManifestHash,
+                $"Task 7 fixture manifest changed: actual={ManifestHash}; expected={ExpectedManifestHash}.");
+            assert(Records.Count == FixtureCount
+                   && Records.GroupBy(record => record.ProjectKind)
+                       .All(group => group.Count() == 250)
+                   && Enum.GetValues<WallpaperProjectKind>().All(kind =>
+                       Records.Count(record => record.ProjectKind == kind) == 250),
+                "Task 7 fixture did not contain exactly 250 Package/Video/Website/Other projects.");
+            assert(_previewFacts.Count(fact => fact.Category == PreviewCategory.ValidPng) == 333
+                   && _previewFacts.Count(fact => fact.Category == PreviewCategory.ValidJpeg) == 333
+                   && _previewFacts.Count(fact => fact.Category == PreviewCategory.ValidGif) == 329
+                   && _previewFacts.Count(fact => fact.Category is
+                       PreviewCategory.MissingPng or PreviewCategory.MissingJpeg) == 2
+                   && _previewFacts.Count(fact => fact.Category is
+                       PreviewCategory.CorruptPng or PreviewCategory.CorruptJpeg) == 2
+                   && _previewFacts.Count(fact => fact.Category == PreviewCategory.OverBudget) == 1,
+                "Task 7 preview distribution is not 333 PNG / 333 JPEG / 329 GIF / 2 missing / 2 corrupt / 1 over-budget.");
+            assert(_previewFacts.Select(fact => fact.CanonicalPath)
+                       .Distinct(StringComparer.OrdinalIgnoreCase).Count() == FixtureCount
+                   && _previewFacts.All(fact =>
+                       string.Equals(fact.CanonicalPath, Path.GetFullPath(fact.CanonicalPath),
+                           StringComparison.OrdinalIgnoreCase)),
+                "Task 7 previews do not have 1,000 unique canonical paths.");
+            assert(Records.Count(record => record.Warnings.Count > 0) == 77
+                   && Records.Count(record => record.Title.Contains("超长标题", StringComparison.Ordinal)) == 11,
+                "Task 7 fixed warning/long-title distribution drifted.");
+            assert(Records[^2].WorkshopId == Records[^1].WorkshopId
+                   && Records[^2].SourceDirectory != Records[^1].SourceDirectory
+                   && Records[^2].ProjectKey != Records[^1].ProjectKey,
+                "The final same-ID fixture pair did not retain distinct source paths and ProjectKeys.");
+            assert(_previewFacts.Where(fact => fact.Category is
+                           PreviewCategory.MissingPng or PreviewCategory.MissingJpeg)
+                       .All(fact => fact.Length > 0 && !File.Exists(fact.CanonicalPath)),
+                "Missing previews were not removed only after immutable length/mtime facts were captured.");
+            var sparse = _previewFacts.Single(fact => fact.Category == PreviewCategory.OverBudget);
+            assert(sparse.Length > PreviewThumbnailLimits.MaximumInputBytes
+                   && File.GetAttributes(sparse.CanonicalPath).HasFlag(FileAttributes.SparseFile),
+                "The over-budget fixture is not a real sparse file above 64 MiB.");
+
+            foreach (var fact in _previewFacts.Where(fact => fact.Category is
+                         PreviewCategory.ValidPng or PreviewCategory.ValidJpeg or PreviewCategory.ValidGif))
+            {
+                using var stream = new FileStream(
+                    fact.CanonicalPath,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.Read | FileShare.Delete);
+                var decoder = BitmapDecoder.Create(
+                    stream,
+                    BitmapCreateOptions.PreservePixelFormat,
+                    BitmapCacheOption.OnLoad);
+                var expectedFrames = fact.Category == PreviewCategory.ValidGif ? 2 : 1;
+                if (decoder.Frames.Count != expectedFrames)
+                {
+                    assert(false,
+                        $"Preview {fact.RelativePath} decoded {decoder.Frames.Count} frames instead of {expectedFrames}.");
+                    break;
+                }
+            }
+        }
+
+        public Task<ScanResult> ScanAsync(
+            WallpaperScanRequest request,
+            IProgress<ScanProgress>? progress = null,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(new ScanResult
+            {
+                Items = Records,
+                StartedAtUtc = FixedTimestamp,
+                CompletedAtUtc = FixedTimestamp.AddMinutes(1)
+            });
+        }
+
+        public Task<ProjectFolderTarget> ResolveAsync(
+            WallpaperRecord record,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(new ProjectFolderTarget(
+                record.ProjectKey,
+                record.SourceDirectory,
+                ProjectFolderTargetKind.Source));
+        }
+
+        public Task<ProjectFolderOpenResult> OpenAsync(
+            ProjectFolderTarget target,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(ProjectFolderOpenResult.Success(target));
+        }
+
+        public void Dispose()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            try
+            {
+                if (Directory.Exists(_root))
+                {
+                    Directory.Delete(_root, recursive: true);
+                }
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                Console.WriteLine(
+                    $"PERF_FIXTURE_CLEANUP path={_root} error={exception.GetType().Name}");
+            }
+        }
+
+        private static WallpaperRecord CreateRecord(PreviewFact fact)
+        {
+            var source = Path.Combine(StableIdentityRoot, "source", fact.Index.ToString("D4", CultureInfo.InvariantCulture));
+            var output = Path.Combine(StableIdentityRoot, "output", fact.Index.ToString("D4", CultureInfo.InvariantCulture));
+            var title = fact.Index % 97 == 0
+                ? $"TASK7-NAME-{fact.Index:D4} · 超长标题 · Wallpaper Field 项目浏览性能与无障碍固定夹具"
+                : $"TASK7-NAME-{fact.Index:D4} · Project Browser Fixture";
+            var workshopId = fact.Index >= FixtureCount - 2
+                ? "task7-shared-id"
+                : $"task7-{fact.Index:D4}";
+            var kind = fact.Index % 4;
+            return new WallpaperRecord
+            {
+                WorkshopId = workshopId,
+                Title = title,
+                SourceDirectory = source,
+                OutputDirectory = output,
+                WallpaperType = kind switch
+                {
+                    1 => "video",
+                    2 => "website",
+                    _ => "scene"
+                },
+                HasScenePackage = kind == 0,
+                ScenePackagePath = kind == 0 ? Path.Combine(source, "scene.pkg") : null,
+                HasVideoFile = kind == 1,
+                VideoFilePath = kind == 1 ? Path.Combine(source, "movie.mp4") : null,
+                VideoRelativePath = kind == 1 ? "movie.mp4" : null,
+                HasPreview = true,
+                PreviewPath = fact.CanonicalPath,
+                PreviewFileName = Path.GetFileName(fact.CanonicalPath),
+                PreviewFileLength = fact.Length,
+                PreviewLastWriteTimeUtc = fact.LastWriteTimeUtc,
+                PreviewFormat = fact.Extension,
+                Warnings = fact.Index % 13 == 0
+                    ? [$"TASK7_FIXED_WARNING_{fact.Index % 5}"]
+                    : [],
+                ScannedAtUtc = FixedTimestamp
+            };
+        }
+
+        private static PreviewCategory GetPreviewCategory(int index)
+            => index switch
+            {
+                <= 332 => PreviewCategory.ValidPng,
+                <= 665 => PreviewCategory.ValidJpeg,
+                <= 994 => PreviewCategory.ValidGif,
+                995 => PreviewCategory.MissingPng,
+                996 => PreviewCategory.MissingJpeg,
+                997 => PreviewCategory.CorruptPng,
+                998 => PreviewCategory.CorruptJpeg,
+                _ => PreviewCategory.OverBudget
+            };
+
+        private static BitmapFrame CreateFrame(byte blue, byte green, byte red)
+        {
+            var pixels = Enumerable.Range(0, 4)
+                .SelectMany(_ => new[] { blue, green, red, (byte)0xFF })
+                .ToArray();
+            var bitmap = BitmapSource.Create(
+                2,
+                2,
+                96,
+                96,
+                PixelFormats.Bgra32,
+                null,
+                pixels,
+                8);
+            bitmap.Freeze();
+            return BitmapFrame.Create(bitmap);
+        }
+
+        private static byte[] EncodeBitmap(BitmapEncoder encoder, params BitmapFrame[] frames)
+        {
+            foreach (var frame in frames)
+            {
+                encoder.Frames.Add(frame);
+            }
+
+            using var stream = new MemoryStream();
+            encoder.Save(stream);
+            return stream.ToArray();
+        }
+
+        private static void CreateSparseOverBudgetFile(string path)
+        {
+            using var stream = new FileStream(
+                path,
+                FileMode.CreateNew,
+                FileAccess.ReadWrite,
+                FileShare.Read);
+            if (!DeviceIoControl(
+                    stream.SafeFileHandle,
+                    FsctlSetSparse,
+                    nint.Zero,
+                    0,
+                    nint.Zero,
+                    0,
+                    out _,
+                    nint.Zero))
+            {
+                throw new Win32Exception(
+                    Marshal.GetLastWin32Error(),
+                    "Could not mark the Task 7 over-budget fixture as sparse.");
+            }
+
+            stream.SetLength(PreviewThumbnailLimits.MaximumInputBytes + 1);
+        }
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool DeviceIoControl(
+            SafeFileHandle device,
+            uint controlCode,
+            nint inputBuffer,
+            int inputBufferSize,
+            nint outputBuffer,
+            int outputBufferSize,
+            out int bytesReturned,
+            nint overlapped);
+
+        private sealed record PreviewFact(
+            int Index,
+            PreviewCategory Category,
+            string RelativePath,
+            string CanonicalPath,
+            long Length,
+            DateTimeOffset LastWriteTimeUtc,
+            string Extension);
+
+        private enum PreviewCategory
+        {
+            ValidPng,
+            ValidJpeg,
+            ValidGif,
+            MissingPng,
+            MissingJpeg,
+            CorruptPng,
+            CorruptJpeg,
+            OverBudget
+        }
     }
 
     private static double[] MeasureRepeated(Action action)

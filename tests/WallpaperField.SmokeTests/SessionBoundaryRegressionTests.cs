@@ -342,12 +342,17 @@ internal static class SessionBoundaryRegressionTests
     {
         var unpackMethod = unpackSessionType.GetMethod(
             "UnpackAsync",
+            [typeof(FrozenWallpaperProcessRequest)]);
+        var insecureOverload = unpackSessionType.GetMethod(
+            "UnpackAsync",
             [typeof(IReadOnlyList<WallpaperRecord>), typeof(string)]);
         var shellSessionProperty = typeof(ShellViewModel).GetProperty("UnpackSession");
         assert(unpackSessionType.IsPublic && unpackSessionType.IsSealed,
             "UnpackSession is not a sealed public module.");
         assert(unpackMethod?.ReturnType == typeof(Task),
             "UnpackSession does not expose the approved use-case interface.");
+        assert(insecureOverload is null,
+            "UnpackSession retains the insecure item/output overload.");
         assert(shellSessionProperty?.PropertyType == unpackSessionType,
             "Shell does not expose its concrete UnpackSession instance.");
         if (unpackMethod is null || shellSessionProperty is null)
@@ -362,8 +367,11 @@ internal static class SessionBoundaryRegressionTests
         try
         {
             var unpackService = new SessionUnpackService();
+            var sourceRoot = Path.Combine(testRoot, "source");
+            var outputRoot = Path.Combine(testRoot, "output");
+            Directory.CreateDirectory(sourceRoot);
             var shell = new ShellViewModel(
-                new EmptyScanService(),
+                new SessionScanService(sourceRoot, outputRoot),
                 new EmptyLibraryService(),
                 new NullFolderPickerService(),
                 new NullSystemFolderService(),
@@ -371,15 +379,18 @@ internal static class SessionBoundaryRegressionTests
                 new PathInputValidator(),
                 new TaskLifecycleCoordinator());
             var session = shellSessionProperty.GetValue(shell);
-            var sourceItems = new List<WallpaperRecord>
-            {
-                new()
-                {
-                    WorkshopId = "session-unpack",
-                    OutputDirectory = Path.Combine(testRoot, "session-unpack")
-                }
-            };
-            var execution = unpackMethod.Invoke(session, [sourceItems, testRoot]) as Task;
+            shell.SourcePath = sourceRoot;
+            shell.OutputPath = outputRoot;
+            await shell.ScanSession.ScanAsync();
+            var record = shell.ScannedWallpapers.Single().Record;
+            var sourceItems = new List<WallpaperRecord> { record };
+            var snapshot = shell.ScanSession.ProjectSnapshot!;
+            var request = new FrozenWallpaperProcessRequest(
+                snapshot.Identity,
+                snapshot.Revision,
+                outputRoot,
+                sourceItems);
+            var execution = unpackMethod.Invoke(session, [request]) as Task;
             assert(execution is not null,
                 "UnpackSession.UnpackAsync did not return an execution task.");
             if (execution is null)
@@ -395,8 +406,8 @@ internal static class SessionBoundaryRegressionTests
                        OutputDirectory: var outputDirectory,
                        Items.Count: 1
                    }
-                   && outputDirectory == testRoot
-                   && unpackService.Request.Items[0].WorkshopId == "session-unpack",
+                   && outputDirectory == outputRoot
+                   && unpackService.Request.Items[0].WorkshopId == "session-scan",
                 "UnpackSession did not own a stable request snapshot and output target.");
         }
         finally
@@ -627,8 +638,9 @@ internal static class SessionBoundaryRegressionTests
                         WorkshopId = "session-scan",
                         Title = "Session Scan",
                         SourceDirectory = sourceRoot,
-                        OutputDirectory = outputRoot,
+                        OutputDirectory = Path.Combine(outputRoot, "session-scan"),
                         HasScenePackage = true,
+                        ScenePackagePath = Path.Combine(sourceRoot, "scene.pkg"),
                         ScannedAtUtc = now
                     }
                 ]

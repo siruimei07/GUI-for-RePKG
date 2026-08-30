@@ -7,8 +7,8 @@ using WallpaperField;
 
 internal static class ReleaseContractTests
 {
-    private const string ProductVersion = "1.2.2";
-    private const string FileVersion = "1.2.2.0";
+    private const string ProductVersion = "1.3.0";
+    private const string FileVersion = "1.3.0.0";
 
     internal static void Run(Action<bool, string> assert)
     {
@@ -50,7 +50,31 @@ internal static class ReleaseContractTests
                 + $"InformationalVersion '{informationalVersion}'");
         }
 
-        var manifestPath = Path.Combine(FindRepositoryRoot(), "app.manifest");
+        var repositoryRoot = FindRepositoryRoot();
+        var projectPath = Path.Combine(repositoryRoot, "WallpaperField.csproj");
+        var project = XDocument.Load(projectPath, LoadOptions.PreserveWhitespace);
+        var defaultItemExcludes = project
+            .Descendants("DefaultItemExcludes")
+            .SelectMany(element => element.Value.Split(
+                ';',
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var requiredExclude in new[]
+                 {
+                     @"temp\**",
+                     @"**\artifacts\**",
+                     @"**\bin\**",
+                     @"**\obj\**",
+                 })
+        {
+            if (!defaultItemExcludes.Contains(requiredExclude))
+            {
+                failures.Add(
+                    $"DefaultItemExcludes did not contain exact pattern '{requiredExclude}'");
+            }
+        }
+
+        var manifestPath = Path.Combine(repositoryRoot, "app.manifest");
         var manifest = XDocument.Load(manifestPath, LoadOptions.PreserveWhitespace);
         XNamespace assemblyNamespace = "urn:schemas-microsoft-com:asm.v1";
         var identity = manifest.Root?.Element(assemblyNamespace + "assemblyIdentity");

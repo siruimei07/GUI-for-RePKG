@@ -153,8 +153,7 @@ internal static class RoadmapBehaviorRegressionTests
 
             try
             {
-                application = new WallpaperField.App();
-                application.InitializeComponent();
+                application = IsolatedWpfApplication.Create();
                 window = new WallpaperField.MainWindow
                 {
                     Left = -10_000,

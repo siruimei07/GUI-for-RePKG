@@ -10,8 +10,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$ProductVersion = '1.2.2'
-$FileVersion = '1.2.2.0'
+$ProductVersion = '1.3.0'
+$FileVersion = '1.3.0.0'
 $AssemblyVersion = '1.0.0.0'
 $RuntimeIdentifier = 'win-x64'
 $Configuration = 'Release'
@@ -172,6 +172,61 @@ function Get-ZipEntrySha256
     }
 }
 
+function Expand-ReleaseSourceZip
+{
+    param(
+        [Parameter(Mandatory = $true)][string]$ArchivePath,
+        [Parameter(Mandatory = $true)][string]$DestinationRoot
+    )
+
+    $normalizedRoot = Get-NormalizedPath $DestinationRoot
+    $archive = [System.IO.Compression.ZipFile]::OpenRead($ArchivePath)
+    try
+    {
+        foreach ($entry in $archive.Entries)
+        {
+            $relativePath = $entry.FullName.Replace('\', '/').TrimEnd('/')
+            if ([string]::IsNullOrWhiteSpace($relativePath))
+            {
+                continue
+            }
+            $segments = @($relativePath.Split([char]47))
+            if ([System.IO.Path]::IsPathRooted($relativePath) -or
+                @($segments | Where-Object {
+                    [string]::IsNullOrWhiteSpace($_) -or $_ -eq '.' -or $_ -eq '..'
+                }).Count -ne 0)
+            {
+                throw "Committed release ZIP contains an unsafe entry path: $($entry.FullName)"
+            }
+
+            $destinationPath = Get-NormalizedPath (Join-Path $normalizedRoot $relativePath.Replace('/', '\'))
+            if (-not (Test-SameOrChildPath -Child $destinationPath -Parent $normalizedRoot) -or
+                [string]::Equals($destinationPath, $normalizedRoot, [StringComparison]::OrdinalIgnoreCase))
+            {
+                throw "Committed release ZIP escapes its destination: $($entry.FullName)"
+            }
+            if ([string]::IsNullOrEmpty($entry.Name))
+            {
+                continue
+            }
+            if (Test-Path -LiteralPath $destinationPath)
+            {
+                throw "Committed release ZIP contains a duplicate entry path: $($entry.FullName)"
+            }
+
+            [System.IO.Directory]::CreateDirectory((Split-Path -Parent $destinationPath)) | Out-Null
+            [System.IO.Compression.ZipFileExtensions]::ExtractToFile(
+                $entry,
+                $destinationPath,
+                $false)
+        }
+    }
+    finally
+    {
+        $archive.Dispose()
+    }
+}
+
 function Remove-VerifiedWorkspace
 {
     param(
@@ -243,11 +298,8 @@ function Update-TrackedExecutableAtomically
 }
 
 $projectRoot = Get-NormalizedPath $PSScriptRoot
-$projectPath = Join-Path $projectRoot 'WallpaperField.csproj'
-$solutionPath = Join-Path $projectRoot 'WallpaperField.slnx'
-$nugetConfigPath = Join-Path $projectRoot 'NuGet.Config'
+$gitCommand = @(Get-Command git -CommandType Application -ErrorAction Stop)[0].Source
 $rootExecutable = Join-Path $projectRoot 'GUI_for_RePKG.exe'
-$releaseNotesPath = Join-Path $projectRoot 'docs\releases\v1.2.2.md'
 $unresolvedOutputPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputDirectory)
 $outputPath = Get-NormalizedPath $unresolvedOutputPath
 $outputParent = Get-NormalizedPath (Split-Path -Parent $outputPath)
@@ -281,12 +333,332 @@ if (Test-Path -LiteralPath $outputParent -PathType Leaf)
     throw "OutputDirectory parent is a file: $outputParent"
 }
 
+function Get-CommitBlobEntries
+{
+    param(
+        [Parameter(Mandatory = $true)][string]$GitCommand,
+        [Parameter(Mandatory = $true)][string]$RepositoryPath,
+        [Parameter(Mandatory = $true)][string]$Commit
+    )
+
+    $treeOutput = @(& $GitCommand '--no-replace-objects' -C $RepositoryPath `
+        ls-tree -r -z --full-tree $Commit 2>&1)
+    if ($LASTEXITCODE -ne 0)
+    {
+        throw "Could not enumerate the committed Git tree (exit $LASTEXITCODE): $($treeOutput -join [Environment]::NewLine)"
+    }
+    if ($treeOutput.Count -ne 1)
+    {
+        throw 'Committed Git tree enumeration did not return one NUL-delimited stream.'
+    }
+
+    $rawTree = [string]$treeOutput[0]
+    $records = @($rawTree.Split([char[]]@([char]0), [StringSplitOptions]::RemoveEmptyEntries))
+    if ($records.Count -eq 0)
+    {
+        throw 'Committed Git tree did not contain any files.'
+    }
+
+    $entries = [System.Collections.Generic.List[object]]::new()
+    $caseInsensitivePaths = @{}
+    $invalidFileNameCharacters = [System.IO.Path]::GetInvalidFileNameChars()
+    foreach ($record in $records)
+    {
+        $tabIndex = $record.IndexOf([char]9)
+        if ($tabIndex -le 0)
+        {
+            throw 'Committed Git tree returned a malformed entry.'
+        }
+        $header = $record.Substring(0, $tabIndex)
+        $path = $record.Substring($tabIndex + 1)
+        $headerMatch = [regex]::Match(
+            $header,
+            '^(?<mode>[0-7]{6}) (?<type>[a-z]+) (?<object>[0-9a-fA-F]{40})$')
+        if (-not $headerMatch.Success)
+        {
+            throw "Committed Git tree returned a malformed entry header: $header"
+        }
+
+        $mode = $headerMatch.Groups['mode'].Value
+        $type = $headerMatch.Groups['type'].Value
+        if ($type -ne 'blob' -or ($mode -ne '100644' -and $mode -ne '100755'))
+        {
+            throw "Committed source contains an unsupported Git tree entry: mode=$mode type=$type path=$path"
+        }
+        if ([string]::IsNullOrWhiteSpace($path) -or
+            [System.IO.Path]::IsPathRooted($path) -or
+            $path.IndexOf([char]92) -ge 0)
+        {
+            throw "Committed Git tree contains an unsafe Windows path: $path"
+        }
+
+        $segments = @($path.Split([char]47))
+        foreach ($segment in $segments)
+        {
+            if ([string]::IsNullOrWhiteSpace($segment) -or
+                $segment -eq '.' -or
+                $segment -eq '..' -or
+                $segment.IndexOfAny($invalidFileNameCharacters) -ge 0 -or
+                $segment.EndsWith('.', [StringComparison]::Ordinal) -or
+                $segment.EndsWith(' ', [StringComparison]::Ordinal) -or
+                $segment -match '^(?i:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$')
+            {
+                throw "Committed Git tree contains an unsafe Windows path segment: $path"
+            }
+        }
+        if ($caseInsensitivePaths.ContainsKey($path))
+        {
+            throw "Committed Git tree contains case-insensitive duplicate paths: $path"
+        }
+        $caseInsensitivePaths[$path] = $true
+
+        $entries.Add([pscustomobject]@{
+            Path = $path
+            ObjectId = $headerMatch.Groups['object'].Value.ToLowerInvariant()
+        })
+    }
+
+    return $entries.ToArray()
+}
+
+function Assert-CommitSourceExact
+{
+    param(
+        [Parameter(Mandatory = $true)][object[]]$Entries,
+        [Parameter(Mandatory = $true)][string]$SourceRoot,
+        [Parameter(Mandatory = $true)][string]$GitCommand,
+        [Parameter(Mandatory = $true)][string]$RepositoryPath
+    )
+
+    $sourcePrefix = (Get-NormalizedPath $SourceRoot) + [System.IO.Path]::DirectorySeparatorChar
+    $actualFiles = @(Get-ChildItem -LiteralPath $SourceRoot -File -Force -Recurse | ForEach-Object {
+        $_.FullName.Substring($sourcePrefix.Length).Replace('\', '/')
+    })
+    $expectedFiles = @($Entries | ForEach-Object { [string]$_.Path })
+    try
+    {
+        Assert-ExactSet $actualFiles $expectedFiles 'Committed release source exact committed blob contract'
+    }
+    catch
+    {
+        throw "Committed release source violates the exact committed blob contract: $($_.Exception.Message)"
+    }
+
+    foreach ($entry in $Entries)
+    {
+        $sourcePath = Join-Path $SourceRoot ([string]$entry.Path).Replace('/', '\')
+        $hashOutput = @(& $GitCommand '--no-replace-objects' -C $RepositoryPath `
+            hash-object --no-filters -- $sourcePath 2>&1)
+        $hashExitCode = $LASTEXITCODE
+        $actualObjectId = ($hashOutput -join '').Trim().ToLowerInvariant()
+        if ($hashExitCode -ne 0 -or $actualObjectId -notmatch '^[0-9a-f]{40}$')
+        {
+            throw "Could not hash an extracted committed blob without filters: $($entry.Path)"
+        }
+        if ($actualObjectId -ne [string]$entry.ObjectId)
+        {
+            throw "Committed release source violates the exact committed blob contract: $($entry.Path)"
+        }
+    }
+}
+
+function Get-ControlledSdkSelection
+{
+    param(
+        [Parameter(Mandatory = $true)][string]$DotnetCommand
+    )
+
+    $sdkOutput = @(& $DotnetCommand --list-sdks 2>&1)
+    if ($LASTEXITCODE -ne 0)
+    {
+        throw 'Could not enumerate installed .NET SDKs.'
+    }
+
+    $hostSdkRoot = Get-NormalizedPath (Join-Path (Split-Path -Parent $DotnetCommand) 'sdk')
+    $candidates = [System.Collections.Generic.List[object]]::new()
+    foreach ($lineValue in $sdkOutput)
+    {
+        $line = [string]$lineValue
+        $match = [regex]::Match(
+            $line,
+            '^\s*(?<version>10\.\d+\.\d+)\s+\[(?<path>.+)\]\s*$')
+        if (-not $match.Success)
+        {
+            continue
+        }
+
+        $sdkRoot = Get-NormalizedPath $match.Groups['path'].Value
+        if (-not [string]::Equals(
+                $sdkRoot,
+                $hostSdkRoot,
+                [StringComparison]::OrdinalIgnoreCase))
+        {
+            continue
+        }
+
+        $version = $null
+        if (-not [Version]::TryParse($match.Groups['version'].Value, [ref]$version) -or
+            $version.Major -ne 10)
+        {
+            continue
+        }
+        $candidates.Add([pscustomobject]@{
+            Text = $match.Groups['version'].Value
+            Version = $version
+        })
+    }
+    if ($candidates.Count -eq 0)
+    {
+        throw "No stable .NET 10 SDK is installed beside the resolved dotnet host: $hostSdkRoot"
+    }
+
+    return @($candidates | Sort-Object -Property Version -Descending | Select-Object -First 1)[0]
+}
+
+$sourceCommitOutput = @(& $gitCommand '--no-replace-objects' -C $projectRoot rev-parse HEAD 2>&1)
+$sourceCommitExitCode = $LASTEXITCODE
+$sourceCommit = ($sourceCommitOutput -join '').Trim()
+if ($sourceCommitExitCode -ne 0 -or $sourceCommit -notmatch '^[0-9a-fA-F]{40}$')
+{
+    throw 'Could not resolve a full 40-character source commit.'
+}
+
+# Respect the checkout's EOL normalization; overriding it can make a fresh
+# Windows checkout appear tracked-dirty before Git refreshes its index.
+$null = @(& $gitCommand '--no-replace-objects' -C $projectRoot diff --quiet HEAD -- 2>&1)
+$trackedDiffExitCode = $LASTEXITCODE
+if ($trackedDiffExitCode -ne 0 -and $trackedDiffExitCode -ne 1)
+{
+    throw 'Could not inspect tracked source changes.'
+}
+
+$trackedDiffPaths = @(& $gitCommand '--no-replace-objects' -C $projectRoot diff --name-only HEAD -- 2>&1)
+if ($LASTEXITCODE -ne 0)
+{
+    throw 'Could not enumerate tracked source changes.'
+}
+$trackedDiffPaths = @($trackedDiffPaths | ForEach-Object { [string] $_ } | Where-Object {
+    -not [string]::IsNullOrWhiteSpace($_)
+})
+
+$worktreeStatusEntries = @(& $gitCommand '--no-replace-objects' -C $projectRoot status --porcelain=v1 --untracked-files=all 2>&1)
+if ($LASTEXITCODE -ne 0)
+{
+    throw 'Could not inspect the source worktree state.'
+}
+$worktreeStatusEntries = @($worktreeStatusEntries | ForEach-Object { [string] $_ } | Where-Object {
+    -not [string]::IsNullOrWhiteSpace($_)
+})
+
+# MSBuild imports project user files even when Git intentionally hides them
+# from porcelain status. A release must contain only commit-addressed inputs.
+$ignoredUserPaths = @(& $gitCommand '--no-replace-objects' -C $projectRoot ls-files --others --ignored --exclude-standard -- `
+    '*.user' 2>&1)
+if ($LASTEXITCODE -ne 0)
+{
+    throw 'Could not inspect ignored MSBuild user files.'
+}
+$ignoredUserPaths = @($ignoredUserPaths | ForEach-Object { [string] $_ } | Where-Object {
+    -not [string]::IsNullOrWhiteSpace($_)
+} | Sort-Object -Unique)
+if ($ignoredUserPaths.Count -gt 0)
+{
+    $displayLimit = 20
+    $displayPaths = @($ignoredUserPaths | Select-Object -First $displayLimit)
+    $remainingCount = $ignoredUserPaths.Count - $displayPaths.Count
+    $remainingSuffix = if ($remainingCount -gt 0) { " (+$remainingCount more)" } else { '' }
+    throw "Release builds reject ignored MSBuild user files. Ignored paths: $($displayPaths -join ', ')$remainingSuffix"
+}
+
+if ($trackedDiffExitCode -eq 1 -or $worktreeStatusEntries.Count -gt 0)
+{
+    $dirtyPathEvidence = @(@(
+        $trackedDiffPaths
+        $worktreeStatusEntries | ForEach-Object {
+            if ($_.Length -gt 3) { $_.Substring(3) } else { $_ }
+        }
+    ) | Sort-Object -Unique)
+    if ($dirtyPathEvidence.Count -eq 0)
+    {
+        $dirtyPathEvidence = @('<unknown tracked change>')
+    }
+    $displayLimit = 20
+    $displayPaths = @($dirtyPathEvidence | Select-Object -First $displayLimit)
+    $remainingCount = $dirtyPathEvidence.Count - $displayPaths.Count
+    $remainingSuffix = if ($remainingCount -gt 0) { " (+$remainingCount more)" } else { '' }
+    throw "Release builds require a clean source worktree. Dirty paths: $($displayPaths -join ', ')$remainingSuffix"
+}
+
+$infoAttributesOutput = @(& $gitCommand '--no-replace-objects' -C $projectRoot `
+    rev-parse --git-path info/attributes 2>&1)
+if ($LASTEXITCODE -ne 0 -or $infoAttributesOutput.Count -ne 1)
+{
+    throw 'Could not resolve repository-local Git attributes.'
+}
+$infoAttributesPath = [string]$infoAttributesOutput[0]
+if (-not [System.IO.Path]::IsPathRooted($infoAttributesPath))
+{
+    $infoAttributesPath = Join-Path $projectRoot $infoAttributesPath
+}
+if (Test-Path -LiteralPath (Get-NormalizedPath $infoAttributesPath))
+{
+    throw 'Release builds reject repository-local Git attributes because they can alter archive bytes.'
+}
+
+if (Test-Path -LiteralPath 'Env:GIT_REPLACE_REF_BASE')
+{
+    $replaceRefBase = [string](Get-Item -LiteralPath 'Env:GIT_REPLACE_REF_BASE').Value
+    if (-not [string]::IsNullOrWhiteSpace($replaceRefBase))
+    {
+        throw 'Release builds reject custom Git replace refs.'
+    }
+}
+$replaceRefs = @(& $gitCommand '--no-replace-objects' -C $projectRoot `
+    for-each-ref 'refs/replace/' 2>&1)
+if ($LASTEXITCODE -ne 0)
+{
+    throw 'Could not inspect Git replace refs.'
+}
+$replaceRefs = @($replaceRefs | ForEach-Object { [string]$_ } | Where-Object {
+    -not [string]::IsNullOrWhiteSpace($_)
+})
+if ($replaceRefs.Count -ne 0)
+{
+    throw 'Release builds reject Git replace refs.'
+}
+
+$commitBlobEntries = @(Get-CommitBlobEntries `
+    -GitCommand $gitCommand `
+    -RepositoryPath $projectRoot `
+    -Commit $sourceCommit)
+$reservedReleaseControlPaths = @('global.json', 'Directory.Build.rsp')
+foreach ($reservedPath in $reservedReleaseControlPaths)
+{
+    if (@($commitBlobEntries | Where-Object {
+            [string]::Equals([string]$_.Path, $reservedPath, [StringComparison]::OrdinalIgnoreCase)
+        }).Count -ne 0)
+    {
+        throw "Committed source uses a release-reserved control path: $reservedPath"
+    }
+}
+
+$dirtyTracked = $false
+$dirtyWorktree = $false
+$dirtyTrackedPaths = @()
+$statusEntries = @()
+
 Assert-NoReparseInExistingPath $projectRoot 'Repository path'
 Assert-NoReparseInExistingPath $outputParent 'Release output parent'
 
 [System.IO.Directory]::CreateDirectory($outputParent) | Out-Null
 $workspacePrefix = ".$outputLeaf.build-"
 $workspace = Join-Path $outputParent ($workspacePrefix + [Guid]::NewGuid().ToString('N'))
+$sourceArchive = Join-Path $workspace 'source.zip'
+$releaseSourceRoot = Join-Path $workspace 'source'
+$projectPath = Join-Path $releaseSourceRoot 'WallpaperField.csproj'
+$solutionPath = Join-Path $releaseSourceRoot 'WallpaperField.slnx'
+$nugetConfigPath = Join-Path $releaseSourceRoot 'NuGet.Config'
+$releaseNotesPath = Join-Path $releaseSourceRoot 'docs\releases\v1.3.0.md'
 $publishDirectory = Join-Path $workspace 'publish'
 $candidateDirectory = Join-Path $workspace 'candidate'
 $packageDirectory = Join-Path $workspace 'package'
@@ -305,43 +677,112 @@ else
 
 [System.IO.Directory]::CreateDirectory($workspace) | Out-Null
 Assert-NoReparseInExistingPath $workspace 'Release build workspace'
+$hadImportDirectoryBuildProps = Test-Path -LiteralPath 'Env:ImportDirectoryBuildProps'
+$previousImportDirectoryBuildProps = $env:ImportDirectoryBuildProps
+$hadImportDirectoryBuildTargets = Test-Path -LiteralPath 'Env:ImportDirectoryBuildTargets'
+$previousImportDirectoryBuildTargets = $env:ImportDirectoryBuildTargets
+$hadImportDirectoryPackagesProps = Test-Path -LiteralPath 'Env:ImportDirectoryPackagesProps'
+$previousImportDirectoryPackagesProps = $env:ImportDirectoryPackagesProps
+$releaseSourceLocationPushed = $false
+$buildImportEnvironmentSet = $false
 try
 {
-    $sourceCommit = (& git -C $projectRoot rev-parse HEAD).Trim()
-    if ($LASTEXITCODE -ne 0 -or $sourceCommit -notmatch '^[0-9a-fA-F]{40}$')
-    {
-        throw 'Could not resolve a full 40-character source commit.'
-    }
-
-    # Respect the checkout's EOL normalization; overriding it can make a fresh
-    # Windows checkout appear tracked-dirty before Git refreshes its index.
-    & git -C $projectRoot diff --quiet HEAD --
-    $dirtyTracked = $LASTEXITCODE -ne 0
-    $dirtyTrackedPaths = @(& git -C $projectRoot diff --name-only HEAD --)
+    $archiveOutput = @(& $gitCommand '--no-replace-objects' `
+        -c core.autocrlf=false `
+        -c core.eol=lf `
+        -c core.safecrlf=false `
+        -c core.attributesFile=NUL `
+        -C $projectRoot archive `
+        '--format=zip' `
+        "--output=$sourceArchive" `
+        $sourceCommit 2>&1)
     if ($LASTEXITCODE -ne 0)
     {
-        throw 'Could not enumerate tracked source changes.'
+        throw "Could not materialize the committed release source (exit $LASTEXITCODE): $($archiveOutput -join [Environment]::NewLine)"
     }
-    $statusEntries = @(& git -C $projectRoot status --porcelain=v1 --untracked-files=all)
-    if ($LASTEXITCODE -ne 0)
+    if (-not (Test-Path -LiteralPath $sourceArchive -PathType Leaf))
     {
-        throw 'Could not inspect the source worktree state.'
+        throw 'Git archive did not create the committed release source archive.'
     }
-    $dirtyWorktree = $statusEntries.Count -gt 0
 
-    $sdkVersion = (& dotnet --version).Trim()
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($sdkVersion))
+    [System.IO.Directory]::CreateDirectory($releaseSourceRoot) | Out-Null
+    Add-Type -AssemblyName System.IO.Compression
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    Expand-ReleaseSourceZip -ArchivePath $sourceArchive -DestinationRoot $releaseSourceRoot
+    Remove-Item -LiteralPath $sourceArchive -Force
+    Assert-NoReparseInExistingPath $releaseSourceRoot 'Committed release source'
+    $sourceReparseEntries = @(Get-ChildItem -LiteralPath $releaseSourceRoot -Force -Recurse | Where-Object {
+        ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0
+    })
+    if ($sourceReparseEntries.Count -ne 0)
     {
-        throw 'Could not determine the .NET SDK version.'
+        throw 'Committed release source contains a reparse point.'
+    }
+    Assert-CommitSourceExact `
+        -Entries $commitBlobEntries `
+        -SourceRoot $releaseSourceRoot `
+        -GitCommand $gitCommand `
+        -RepositoryPath $projectRoot
+
+    $requiredSourceFiles = @(
+        $projectPath,
+        $solutionPath,
+        $nugetConfigPath,
+        $releaseNotesPath,
+        (Join-Path $releaseSourceRoot 'LICENSE'),
+        (Join-Path $releaseSourceRoot 'THIRD-PARTY-NOTICES.md'),
+        (Join-Path $releaseSourceRoot 'ThirdParty\RePKG\LICENSE.txt'),
+        (Join-Path $releaseSourceRoot 'ThirdParty\RePKG\THIRD-PARTY-NOTICES.txt'),
+        (Join-Path $releaseSourceRoot 'ThirdParty\RePKG\UPSTREAM-PATCHES.md')
+    )
+    foreach ($requiredSourceFile in $requiredSourceFiles)
+    {
+        if (-not (Test-Path -LiteralPath $requiredSourceFile -PathType Leaf))
+        {
+            throw "Committed release source is missing a required file: $requiredSourceFile"
+        }
+    }
+
+    $env:ImportDirectoryBuildProps = 'false'
+    $env:ImportDirectoryBuildTargets = 'false'
+    $env:ImportDirectoryPackagesProps = 'false'
+    $buildImportEnvironmentSet = $true
+    $dotnetCommand = @(Get-Command dotnet -CommandType Application -ErrorAction Stop)[0].Source
+    $sdkSelection = Get-ControlledSdkSelection -DotnetCommand $dotnetCommand
+    $sdkVersion = [string]$sdkSelection.Text
+    $controlledGlobalJson = [ordered]@{
+        sdk = [ordered]@{
+            version = $sdkVersion
+            rollForward = 'disable'
+            allowPrerelease = $false
+            paths = @('$host$')
+        }
+    } | ConvertTo-Json -Depth 4
+    Write-Utf8File (Join-Path $releaseSourceRoot 'global.json') ($controlledGlobalJson + [Environment]::NewLine)
+    Write-Utf8File (Join-Path $releaseSourceRoot 'Directory.Build.rsp') ''
+
+    Push-Location -LiteralPath $releaseSourceRoot
+    $releaseSourceLocationPushed = $true
+
+    $sdkVersionOutput = @(& $dotnetCommand --version 2>&1)
+    $sdkVersionExitCode = $LASTEXITCODE
+    $resolvedSdkVersion = ($sdkVersionOutput -join '').Trim()
+    if ($sdkVersionExitCode -ne 0 -or $resolvedSdkVersion -ne $sdkVersion)
+    {
+        throw "Private release source resolved SDK '$resolvedSdkVersion', expected '$sdkVersion'."
     }
 
     $restoreArguments = @(
         'restore',
         $projectPath,
+        '-noAutoResponse',
         '--runtime', $RuntimeIdentifier,
-        '--configfile', $nugetConfigPath
+        '--configfile', $nugetConfigPath,
+        '-p:ImportDirectoryBuildProps=false',
+        '-p:ImportDirectoryBuildTargets=false',
+        '-p:ImportDirectoryPackagesProps=false'
     )
-    & dotnet @restoreArguments
+    & $dotnetCommand @restoreArguments
     if ($LASTEXITCODE -ne 0)
     {
         throw "Release restore failed with exit code $LASTEXITCODE."
@@ -355,6 +796,10 @@ try
         '--self-contained', 'true',
         '--output', $publishDirectory,
         '--no-restore',
+        '-noAutoResponse',
+        '-p:ImportDirectoryBuildProps=false',
+        '-p:ImportDirectoryBuildTargets=false',
+        '-p:ImportDirectoryPackagesProps=false',
         "-p:InformationalVersion=$ProductVersion+$sourceCommit",
         '-p:IncludeSourceRevisionInInformationalVersion=false',
         '-p:PublishSingleFile=true',
@@ -364,7 +809,7 @@ try
         '-p:DebugType=None',
         '-p:DebugSymbols=false'
     )
-    & dotnet @publishArguments
+    & $dotnetCommand @publishArguments
     if ($LASTEXITCODE -ne 0)
     {
         throw "Release publish failed with exit code $LASTEXITCODE."
@@ -408,14 +853,14 @@ try
     [System.IO.Directory]::CreateDirectory((Join-Path $qaDirectory 'source\9001')) | Out-Null
     [System.IO.Directory]::CreateDirectory((Join-Path $qaDirectory 'output')) | Out-Null
     $qaProjectJson = @{
-        title = 'v1.2.2 release candidate QA'
+        title = 'v1.3.0 release candidate QA'
         workshopid = '9001'
         type = 'scene'
         file = 'scene.json'
     } | ConvertTo-Json
     Write-Utf8File (Join-Path $qaDirectory 'source\9001\project.json') $qaProjectJson
     $snapshotPath = Join-Path $qaDirectory 'candidate-launch.png'
-    $launchArgumentLine = '--source "{0}" --output "{1}" --scan --snapshot "{2}" --width 920 --height 680 --reduced-motion' -f (Join-Path $qaDirectory 'source'), (Join-Path $qaDirectory 'output'), $snapshotPath
+    $launchArgumentLine = '--source "{0}" --output "{1}" --scan --page browse --snapshot "{2}" --width 920 --height 680 --reduced-motion' -f (Join-Path $qaDirectory 'source'), (Join-Path $qaDirectory 'output'), $snapshotPath
     $candidateProcess = Start-Process -FilePath $publishedExecutable -ArgumentList $launchArgumentLine -WindowStyle Hidden -PassThru
     if (-not $candidateProcess.WaitForExit(30000))
     {
@@ -434,12 +879,13 @@ try
 
     $dependencyArguments = @(
         'list',
-        $solutionPath,
+        $projectPath,
         'package',
         '--include-transitive',
-        '--format', 'json'
+        '--format', 'json',
+        '--no-restore'
     )
-    $dependencyOutput = @(& dotnet @dependencyArguments)
+    $dependencyOutput = @(& $dotnetCommand @dependencyArguments)
     if ($LASTEXITCODE -ne 0)
     {
         throw "Dependency enumeration failed with exit code $LASTEXITCODE."
@@ -457,7 +903,7 @@ try
     foreach ($dependencyProject in @($dependencyModel.projects))
     {
         $absoluteProjectPath = Get-NormalizedPath ([string]$dependencyProject.path)
-        $projectPrefix = $projectRoot + [System.IO.Path]::DirectorySeparatorChar
+        $projectPrefix = $releaseSourceRoot + [System.IO.Path]::DirectorySeparatorChar
         if (-not $absoluteProjectPath.StartsWith(
                 $projectPrefix,
                 [StringComparison]::OrdinalIgnoreCase))
@@ -492,12 +938,12 @@ try
     $dependencyHash = Get-Sha256 (Join-Path $candidateDirectory 'dependencies.json')
 
     Copy-VerifiedFile $publishedExecutable (Join-Path $packageDirectory 'WallpaperField.exe')
-    Copy-VerifiedFile (Join-Path $projectRoot 'LICENSE') (Join-Path $packageDirectory 'LICENSE')
-    Copy-VerifiedFile (Join-Path $projectRoot 'THIRD-PARTY-NOTICES.md') (Join-Path $packageDirectory 'THIRD-PARTY-NOTICES.md')
+    Copy-VerifiedFile (Join-Path $releaseSourceRoot 'LICENSE') (Join-Path $packageDirectory 'LICENSE')
+    Copy-VerifiedFile (Join-Path $releaseSourceRoot 'THIRD-PARTY-NOTICES.md') (Join-Path $packageDirectory 'THIRD-PARTY-NOTICES.md')
     Copy-VerifiedFile $releaseNotesPath (Join-Path $packageDirectory 'RELEASE-NOTES.md')
-    Copy-VerifiedFile (Join-Path $projectRoot 'ThirdParty\RePKG\LICENSE.txt') (Join-Path $packageDirectory 'ThirdParty\RePKG\LICENSE.txt')
-    Copy-VerifiedFile (Join-Path $projectRoot 'ThirdParty\RePKG\THIRD-PARTY-NOTICES.txt') (Join-Path $packageDirectory 'ThirdParty\RePKG\THIRD-PARTY-NOTICES.txt')
-    Copy-VerifiedFile (Join-Path $projectRoot 'ThirdParty\RePKG\UPSTREAM-PATCHES.md') (Join-Path $packageDirectory 'ThirdParty\RePKG\UPSTREAM-PATCHES.md')
+    Copy-VerifiedFile (Join-Path $releaseSourceRoot 'ThirdParty\RePKG\LICENSE.txt') (Join-Path $packageDirectory 'ThirdParty\RePKG\LICENSE.txt')
+    Copy-VerifiedFile (Join-Path $releaseSourceRoot 'ThirdParty\RePKG\THIRD-PARTY-NOTICES.txt') (Join-Path $packageDirectory 'ThirdParty\RePKG\THIRD-PARTY-NOTICES.txt')
+    Copy-VerifiedFile (Join-Path $releaseSourceRoot 'ThirdParty\RePKG\UPSTREAM-PATCHES.md') (Join-Path $packageDirectory 'ThirdParty\RePKG\UPSTREAM-PATCHES.md')
     Copy-VerifiedFile (Join-Path $candidateDirectory 'dependencies.json') (Join-Path $packageDirectory 'dependencies.json')
 
     $manifest = [ordered]@{
@@ -516,6 +962,13 @@ try
         }
         builtAtUtc = [DateTime]::UtcNow.ToString('o')
         sdkVersion = $sdkVersion
+        sdkPolicy = [ordered]@{
+            rollForward = 'disable'
+            allowPrerelease = $false
+            searchPaths = @('$host$')
+            privateGlobalJson = $true
+            privateEmptyDirectoryBuildRsp = $true
+        }
         rid = $RuntimeIdentifier
         configuration = $Configuration
         publishProperties = [ordered]@{
@@ -605,14 +1058,14 @@ try
 
         $zipSourcePairs = @{
             'WallpaperField.exe' = $publishedExecutable
-            'LICENSE' = (Join-Path $projectRoot 'LICENSE')
-            'THIRD-PARTY-NOTICES.md' = (Join-Path $projectRoot 'THIRD-PARTY-NOTICES.md')
+            'LICENSE' = (Join-Path $releaseSourceRoot 'LICENSE')
+            'THIRD-PARTY-NOTICES.md' = (Join-Path $releaseSourceRoot 'THIRD-PARTY-NOTICES.md')
             'RELEASE-NOTES.md' = $releaseNotesPath
             'release-manifest.json' = (Join-Path $candidateDirectory 'release-manifest.json')
             'dependencies.json' = (Join-Path $candidateDirectory 'dependencies.json')
-            'ThirdParty/RePKG/LICENSE.txt' = (Join-Path $projectRoot 'ThirdParty\RePKG\LICENSE.txt')
-            'ThirdParty/RePKG/THIRD-PARTY-NOTICES.txt' = (Join-Path $projectRoot 'ThirdParty\RePKG\THIRD-PARTY-NOTICES.txt')
-            'ThirdParty/RePKG/UPSTREAM-PATCHES.md' = (Join-Path $projectRoot 'ThirdParty\RePKG\UPSTREAM-PATCHES.md')
+            'ThirdParty/RePKG/LICENSE.txt' = (Join-Path $releaseSourceRoot 'ThirdParty\RePKG\LICENSE.txt')
+            'ThirdParty/RePKG/THIRD-PARTY-NOTICES.txt' = (Join-Path $releaseSourceRoot 'ThirdParty\RePKG\THIRD-PARTY-NOTICES.txt')
+            'ThirdParty/RePKG/UPSTREAM-PATCHES.md' = (Join-Path $releaseSourceRoot 'ThirdParty\RePKG\UPSTREAM-PATCHES.md')
         }
         foreach ($zipEntryName in $zipSourcePairs.Keys)
         {
@@ -684,8 +1137,46 @@ try
 }
 finally
 {
-    if (Test-Path -LiteralPath $workspace)
+    try
     {
-        Remove-VerifiedWorkspace $workspace $outputParent $workspacePrefix
+        if ($releaseSourceLocationPushed)
+        {
+            Pop-Location
+            $releaseSourceLocationPushed = $false
+        }
+        if ($buildImportEnvironmentSet)
+        {
+            if ($hadImportDirectoryBuildProps)
+            {
+                Set-Item -LiteralPath 'Env:ImportDirectoryBuildProps' -Value $previousImportDirectoryBuildProps
+            }
+            else
+            {
+                Remove-Item -LiteralPath 'Env:ImportDirectoryBuildProps' -ErrorAction SilentlyContinue
+            }
+            if ($hadImportDirectoryBuildTargets)
+            {
+                Set-Item -LiteralPath 'Env:ImportDirectoryBuildTargets' -Value $previousImportDirectoryBuildTargets
+            }
+            else
+            {
+                Remove-Item -LiteralPath 'Env:ImportDirectoryBuildTargets' -ErrorAction SilentlyContinue
+            }
+            if ($hadImportDirectoryPackagesProps)
+            {
+                Set-Item -LiteralPath 'Env:ImportDirectoryPackagesProps' -Value $previousImportDirectoryPackagesProps
+            }
+            else
+            {
+                Remove-Item -LiteralPath 'Env:ImportDirectoryPackagesProps' -ErrorAction SilentlyContinue
+            }
+        }
+    }
+    finally
+    {
+        if (Test-Path -LiteralPath $workspace)
+        {
+            Remove-VerifiedWorkspace $workspace $outputParent $workspacePrefix
+        }
     }
 }

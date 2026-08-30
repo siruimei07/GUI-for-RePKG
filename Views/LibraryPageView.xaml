@@ -35,7 +35,7 @@
                        Style="{StaticResource TechnicalLabel}"
                        Text="OUTPUT ROOT · METADATA · PREVIEW · FOLDER ACCESS" />
         </Canvas>
-        <!-- Page 02: output library -->
+        <!-- Page 03: output library -->
         <Grid x:Name="LibraryView" RenderTransformOrigin="0.5,0.5">
             <Grid.Style>
                 <Style TargetType="Grid">
@@ -73,7 +73,7 @@
                         <StackPanel>
                             <TextBlock Style="{StaticResource TechnicalLabel}"
                                        Foreground="{DynamicResource TextMutedBrush}"
-                                       Text="LOCAL ARCHIVE / 02 · OUTPUT CATALOG" />
+                                       Text="LOCAL ARCHIVE / 03 · OUTPUT CATALOG" />
                             <TextBlock x:Name="LibraryPageTitle"
                                        Margin="0,8,0,0"
                                        Style="{StaticResource SectionTitle}"

@@ -315,6 +315,7 @@ internal static class UnpackLifecycleRegressionTests
             WorkshopId = workshopId,
             SourceDirectory = sourceDirectory,
             OutputDirectory = outputDirectory,
+            WallpaperType = "video",
             HasVideoFile = true,
             VideoFilePath = videoPath,
             VideoRelativePath = Path.GetFileName(videoPath)
@@ -750,8 +751,10 @@ internal static class UnpackLifecycleRegressionTests
 
             var execution = shell.UnpackCommand.ExecuteAsync();
             await unpackService.Started.WaitAsync(TimeSpan.FromSeconds(2));
-            shell.ScannedWallpapers.Single(card => card.WorkshopId == "late-selection")
-                .IsSelectedForUnpack = true;
+            var lateSelection = shell.ScannedWallpapers.Single(card =>
+                card.WorkshopId == "late-selection");
+            lateSelection.IsSelectedForUnpack = true;
+            var lateSelectionRejected = !lateSelection.IsSelectedForUnpack;
             unpackService.Complete();
             await execution.WaitAsync(TimeSpan.FromSeconds(2));
 
@@ -763,8 +766,9 @@ internal static class UnpackLifecycleRegressionTests
                        .SequenceEqual(ids.Take(5)) == true,
                 "Selections made after unpack started leaked into the frozen request.");
             assert(!selectedIds.Contains("committed")
-                   && selectedIds.SetEquals(ids.Skip(1)),
-                "Selection was not cleared exclusively for the committed successful item.");
+                   && selectedIds.SetEquals(ids.Skip(1).Take(4))
+                   && lateSelectionRejected,
+                "Selection did not remain owner-gated while clearing only the committed successful item.");
             assert(shell.UnpackWorkText.Contains("5 / 5 ITEMS", StringComparison.Ordinal),
                 "Completed unpack work still appeared indeterminate instead of using item totals.");
         }
@@ -809,6 +813,7 @@ internal static class UnpackLifecycleRegressionTests
                             WorkshopId = "duplicate",
                             SourceDirectory = firstSource,
                             OutputDirectory = sharedOutput,
+                            WallpaperType = "video",
                             HasVideoFile = true,
                             VideoFilePath = firstVideo,
                             VideoRelativePath = "first.mp4"
@@ -818,6 +823,7 @@ internal static class UnpackLifecycleRegressionTests
                             WorkshopId = "DUPLICATE",
                             SourceDirectory = secondSource,
                             OutputDirectory = sharedOutput,
+                            WallpaperType = "video",
                             HasVideoFile = true,
                             VideoFilePath = secondVideo,
                             VideoRelativePath = "second.mp4"
@@ -868,6 +874,7 @@ internal static class UnpackLifecycleRegressionTests
                 WorkshopId = "video",
                 SourceDirectory = videoSource,
                 OutputDirectory = Path.Combine(outputRoot, "video"),
+                WallpaperType = "video",
                 HasVideoFile = true,
                 VideoFilePath = videoPath,
                 VideoRelativePath = "clip.mp4"
@@ -877,6 +884,7 @@ internal static class UnpackLifecycleRegressionTests
                 WorkshopId = "failed",
                 SourceDirectory = Path.Combine(sourceRoot, "missing"),
                 OutputDirectory = Path.Combine(outputRoot, "failed"),
+                WallpaperType = "video",
                 HasVideoFile = true,
                 VideoFilePath = Path.Combine(sourceRoot, "missing", "missing.mp4"),
                 VideoRelativePath = "missing.mp4"

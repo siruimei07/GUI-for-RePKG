@@ -1,9 +1,12 @@
+using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using Microsoft.Win32;
 using WallpaperField.Composition;
 using WallpaperField.Infrastructure;
@@ -16,6 +19,10 @@ public sealed partial class ProblemCenterView : UserControl
 {
     private readonly HashSet<Guid> _expandedIssueIds = [];
     private bool _restoringExpansion;
+    private bool _isApplyingIssueFocus;
+    private long _issueFocusRequestVersion;
+    private Guid? _pendingIssueFocusId;
+    private ShellViewModel? _subscribedShell;
 
     public ProblemCenterView()
     {
@@ -24,14 +31,213 @@ public sealed partial class ProblemCenterView : UserControl
 
     private ShellViewModel? ViewModel => DataContext as ShellViewModel;
 
-    internal Task<bool> PositionSnapshotAsync(
+    private void ProblemCenterView_DataContextChanged(
+        object sender,
+        DependencyPropertyChangedEventArgs e)
+    {
+        AttachShell(e.NewValue as ShellViewModel);
+        CancelPendingIssueFocus();
+    }
+
+    private void ProblemCenterView_Loaded(object sender, RoutedEventArgs e)
+        => AttachShell(DataContext as ShellViewModel);
+
+    private void ProblemCenterView_Unloaded(object sender, RoutedEventArgs e)
+    {
+        AttachShell(null);
+        CancelPendingIssueFocus();
+    }
+
+    private void AttachShell(ShellViewModel? shell)
+    {
+        if (ReferenceEquals(_subscribedShell, shell))
+        {
+            return;
+        }
+
+        if (_subscribedShell is not null)
+        {
+            _subscribedShell.ProblemIssueFocusRequested -=
+                OnProblemIssueFocusRequested;
+        }
+
+        _subscribedShell = shell;
+        if (_subscribedShell is not null)
+        {
+            _subscribedShell.ProblemIssueFocusRequested +=
+                OnProblemIssueFocusRequested;
+        }
+    }
+
+    private void OnProblemIssueFocusRequested(
+        object? sender,
+        ProblemIssueFocusRequestedEventArgs e)
+    {
+        if (sender is not ShellViewModel shell
+            || !ReferenceEquals(shell, _subscribedShell))
+        {
+            return;
+        }
+
+        var requestVersion = Interlocked.Increment(ref _issueFocusRequestVersion);
+        _pendingIssueFocusId = e.IssueId;
+        _ = Dispatcher.BeginInvoke(
+            () => TryFocusIssue(shell, e.IssueId, requestVersion, 0),
+            DispatcherPriority.ContextIdle);
+    }
+
+    private void TryFocusIssue(
+        ShellViewModel shell,
+        Guid issueId,
+        long requestVersion,
+        int attempt)
+    {
+        if (!OwnsIssueFocusRequest(shell, issueId, requestVersion))
+        {
+            return;
+        }
+
+        var issue = shell.ProblemCenterSession.FilteredIssues.FirstOrDefault(
+            candidate => candidate.Id == issueId);
+        if (issue is null)
+        {
+            CompleteIssueFocusRequest(issueId, requestVersion);
+            return;
+        }
+
+        if (shell.ProblemCenterSession.SelectedIssue?.Id != issueId)
+        {
+            CancelPendingIssueFocus();
+            return;
+        }
+
+        _isApplyingIssueFocus = true;
+        try
+        {
+            shell.ProblemCenterSession.SelectedIssue = issue;
+            ProblemResultsList.ScrollIntoView(issue);
+            ProblemResultsList.UpdateLayout();
+            if (!OwnsIssueFocusRequest(shell, issueId, requestVersion)
+                || shell.ProblemCenterSession.SelectedIssue?.Id != issueId)
+            {
+                return;
+            }
+
+            if (ProblemResultsList.ItemContainerGenerator.ContainerFromItem(issue)
+                is ListBoxItem { IsLoaded: true } container)
+            {
+                var scope = FocusManager.GetFocusScope(container);
+                FocusManager.SetFocusedElement(scope, container);
+                container.Focus();
+                CompleteIssueFocusRequest(issueId, requestVersion);
+                return;
+            }
+        }
+        finally
+        {
+            _isApplyingIssueFocus = false;
+        }
+
+        if (attempt >= 7)
+        {
+            CompleteIssueFocusRequest(issueId, requestVersion);
+            return;
+        }
+
+        _ = Dispatcher.BeginInvoke(
+            () => TryFocusIssue(
+                shell,
+                issueId,
+                requestVersion,
+                attempt + 1),
+            DispatcherPriority.Loaded);
+    }
+
+    private void ProblemCenterView_PreviewGotKeyboardFocus(
+        object sender,
+        KeyboardFocusChangedEventArgs e)
+    {
+        if (_isApplyingIssueFocus || _pendingIssueFocusId is not { } pendingIssueId)
+        {
+            return;
+        }
+
+        var focusedRow = ItemsControl.ContainerFromElement(
+            ProblemResultsList,
+            e.NewFocus as DependencyObject) as ListBoxItem;
+        if (focusedRow?.DataContext is not AppIssue focusedIssue
+            || focusedIssue.Id != pendingIssueId)
+        {
+            CancelPendingIssueFocus();
+        }
+    }
+
+    private void ProblemResultsList_SelectionChanged(
+        object sender,
+        SelectionChangedEventArgs e)
+    {
+        if (_isApplyingIssueFocus || _pendingIssueFocusId is not { } pendingIssueId)
+        {
+            return;
+        }
+
+        if (ProblemResultsList.SelectedItem is not AppIssue selectedIssue
+            || selectedIssue.Id != pendingIssueId)
+        {
+            CancelPendingIssueFocus();
+        }
+    }
+
+    private bool OwnsIssueFocusRequest(
+        ShellViewModel shell,
+        Guid issueId,
+        long requestVersion)
+        => requestVersion == Volatile.Read(ref _issueFocusRequestVersion)
+           && _pendingIssueFocusId == issueId
+           && ReferenceEquals(DataContext, shell)
+           && shell.IsProblemsPage
+           && ProblemsView.IsVisible;
+
+    private void CompleteIssueFocusRequest(Guid issueId, long requestVersion)
+    {
+        if (requestVersion == Volatile.Read(ref _issueFocusRequestVersion)
+            && _pendingIssueFocusId == issueId)
+        {
+            _pendingIssueFocusId = null;
+        }
+    }
+
+    private void CancelPendingIssueFocus()
+    {
+        _pendingIssueFocusId = null;
+        Interlocked.Increment(ref _issueFocusRequestVersion);
+    }
+
+    internal Task<SnapshotPositionResult> PositionSnapshotAsync(
         int requestedIndex,
-        Func<bool> isBusy)
-        => SnapshotListPositioner.PositionAsync(
+        Func<bool> isBusy,
+        CancellationToken cancellationToken = default)
+        => SnapshotListPositioner.PositionLegacyAsync(
             ProblemResultsList,
             requestedIndex,
             isBusy,
-            verifyPreview: false);
+            verifyPreview: false,
+            cancellationToken);
+
+    internal Task<SnapshotPositionResult> PositionSnapshotAsync(
+        int requestedIndex,
+        Func<bool> isBusy,
+        Stopwatch deadlineClock,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+        => SnapshotListPositioner.PositionLegacyAsync(
+            ProblemResultsList,
+            requestedIndex,
+            isBusy,
+            verifyPreview: false,
+            deadlineClock,
+            timeout,
+            cancellationToken);
 
     private void CopySelectedIssue_Click(object sender, RoutedEventArgs e)
     {

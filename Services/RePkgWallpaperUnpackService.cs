@@ -241,18 +241,22 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
                         value.CanCancel);
                 });
 
-                var itemResult = item.HasVideoFile
-                    ? await CopyVideoItemAsync(
+                var itemResult = item.ProjectKind switch
+                {
+                    WallpaperProjectKind.Video => await CopyVideoItemAsync(
                         item,
                         outputRoot,
                         entryProgress,
-                        cancellationToken).ConfigureAwait(false)
-                    : await ExtractItemAsync(
+                        cancellationToken).ConfigureAwait(false),
+                    WallpaperProjectKind.Package => await ExtractItemAsync(
                         item,
                         outputRoot,
                         entryProgress,
                         textureBudget,
-                        cancellationToken).ConfigureAwait(false);
+                        cancellationToken).ConfigureAwait(false),
+                    _ => throw new InvalidOperationException(
+                        "不可处理的项目不应进入解包 dispatch。")
+                };
 
                 extractedEntryCount += itemResult.EntryCount;
                 convertedTextureCount += itemResult.ConvertedTextureCount;

@@ -168,8 +168,8 @@ internal static class UiStructureRegressionTests
             "An invalid problem source filter did not fail soft to ALL while retaining text search.");
 
         shell.NavigateProblemsCommand.Execute(null);
-        assert(shell.IsProblemsPage && shell.PageCode == "03",
-            "The persistent problem navigation command did not select page 03.");
+        assert(shell.IsProblemsPage && shell.PageCode == "04",
+            "The persistent problem navigation command did not select page 04.");
 
         shell.SelectedIssue = libraryIssue;
         shell.ResolveIssues(
@@ -199,11 +199,7 @@ internal static class UiStructureRegressionTests
             try
             {
                 using var bindingErrors = new WpfBindingErrorCollector();
-                application = new WallpaperField.App
-                {
-                    ShutdownMode = ShutdownMode.OnExplicitShutdown
-                };
-                application.InitializeComponent();
+                application = IsolatedWpfApplication.Create();
                 var shell = CreateShell();
                 window = new WallpaperField.MainWindow
                 {
@@ -233,8 +229,11 @@ internal static class UiStructureRegressionTests
                 AccessibilityRegressionTests.VerifyWindow(window, assert);
                 SelectionEfficiencyRegressionTests.VerifyWindowDensity(window, shell, assert);
                 VerifyLayoutMode(window, "Compact", assert);
+                ProjectBrowserUiRegressionTests.VerifyWindow(window, shell, assert);
                 VerifyAlwaysAvailableActions(window, shell, assert);
                 VerifyPage(window, shell, "SCAN", "ScanView", "ScanResultsList", assert);
+                VerifyBrowsePage(window, shell, assert);
+                VerifyBrowseSnapshotSourceRetention(window, shell, assert);
                 VerifyPage(window, shell, "LIBRARY", "LibraryView", "LibraryResultsList", assert);
                 VerifyPage(window, shell, "PROBLEMS", "ProblemsView", "ProblemResultsList", assert);
                 VerifyProblemExpansionFollowsIssueIdentity(window, shell, assert);
@@ -280,12 +279,374 @@ internal static class UiStructureRegressionTests
 
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
-        assert(thread.Join(TimeSpan.FromSeconds(10)),
+        assert(thread.Join(TimeSpan.FromSeconds(60)),
             "The WPF UI structure host did not finish in time.");
         if (failure is not null)
         {
             throw new InvalidOperationException(
                 "The WPF UI structure host failed.",
+                failure);
+        }
+    }
+
+    internal static void VerifyTask7WpfWindow(Action<bool, string> assert)
+    {
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            var previousContext = SynchronizationContext.Current;
+            SynchronizationContext.SetSynchronizationContext(
+                new DispatcherSynchronizationContext(Dispatcher.CurrentDispatcher));
+            WallpaperField.App? application = null;
+            WallpaperField.MainWindow? window = null;
+            ShellViewModel? shell = null;
+            try
+            {
+                using var bindingErrors = new WpfBindingErrorCollector();
+                application = IsolatedWpfApplication.Create();
+                assert(application.ShutdownMode == ShutdownMode.OnExplicitShutdown,
+                    "The isolated Task 7 WPF host did not retain explicit shutdown after loading real App resources.");
+                shell = CreateShell();
+                window = new WallpaperField.MainWindow
+                {
+                    DataContext = shell,
+                    Width = 1600,
+                    Height = 1000,
+                    Left = -10_000,
+                    Top = -10_000,
+                    ShowInTaskbar = false,
+                    ShowActivated = false
+                };
+                window.SetReducedMotion(true);
+                window.Show();
+                window.UpdateLayout();
+                window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+                var isolatedWindows = application.Windows.Cast<Window>()
+                    .OfType<WallpaperField.MainWindow>()
+                    .ToArray();
+                assert(isolatedWindows.Length == 1
+                       && ReferenceEquals(isolatedWindows[0], window)
+                       && ReferenceEquals(application.MainWindow, window),
+                    "The isolated Task 7 WPF host launched or adopted an unexpected MainWindow.");
+                ProjectBrowserUiRegressionTests.VerifyTask7Window(window, shell, assert);
+                assert(!bindingErrors.HasErrors,
+                    $"The isolated Task 7 WPF host emitted binding errors: {bindingErrors.Summary}");
+            }
+            catch (Exception exception)
+            {
+                failure = exception;
+            }
+            finally
+            {
+                window?.Close();
+                shell?.Dispose();
+                application?.Shutdown();
+                SynchronizationContext.SetSynchronizationContext(previousContext);
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "WallpaperField.Task7WpfSmoke"
+        };
+
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        assert(thread.Join(TimeSpan.FromSeconds(360)),
+            "The isolated Task 7 WPF host did not finish in time.");
+        if (failure is not null)
+        {
+            throw new InvalidOperationException(
+                "The isolated Task 7 WPF host failed.",
+                failure);
+        }
+    }
+
+    internal static void VerifyTask7IsolatedApplicationHost(Action<bool, string> assert)
+    {
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            WallpaperField.App? application = null;
+            try
+            {
+                application = IsolatedWpfApplication.Create();
+                assert(application.ShutdownMode == ShutdownMode.OnExplicitShutdown,
+                    "The isolated Task 7 WPF host did not retain explicit shutdown after loading real App resources.");
+            }
+            catch (Exception exception)
+            {
+                failure = exception;
+            }
+            finally
+            {
+                application?.Shutdown();
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "WallpaperField.Task7IsolatedApplicationSmoke"
+        };
+
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        assert(thread.Join(TimeSpan.FromSeconds(15)),
+            "The isolated Task 7 application host did not finish in time.");
+        if (failure is not null)
+        {
+            throw new InvalidOperationException(
+                "The isolated Task 7 application host failed.",
+                failure);
+        }
+    }
+
+    internal static void VerifyTask7IsolatedApplicationFailureCleanup(
+        Action<bool, string> assert)
+    {
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                var expectedFailure = new InvalidOperationException(
+                    "Task 7 controlled isolated-application initialization failure.");
+                Exception? observedFailure = null;
+                WallpaperField.App? failedApplication = null;
+                var startupRaised = false;
+                try
+                {
+                    _ = IsolatedWpfApplication.Create(candidate =>
+                    {
+                        failedApplication = candidate;
+                        candidate.InitializeComponent();
+                        candidate.Startup += (_, _) => startupRaised = true;
+                        throw expectedFailure;
+                    });
+                }
+                catch (Exception exception)
+                {
+                    observedFailure = exception;
+                }
+
+                assert(ReferenceEquals(observedFailure, expectedFailure),
+                    "The isolated application initializer did not preserve its original exception.");
+                assert(Application.Current is null,
+                    "A failed isolated application initialization retained Application.Current.");
+                assert(!startupRaised,
+                    "A failed isolated application initialization raised Startup before cleanup.");
+                assert(failedApplication is not null
+                       && failedApplication.Dispatcher.HasShutdownStarted
+                       && failedApplication.Dispatcher.HasShutdownFinished
+                       && failedApplication.Windows.Count == 0,
+                    "A failed isolated application initialization did not finish Dispatcher/window cleanup.");
+            }
+            catch (Exception exception)
+            {
+                failure = exception;
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "WallpaperField.Task7IsolatedApplicationFailureSmoke"
+        };
+
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        assert(thread.Join(TimeSpan.FromSeconds(15)),
+            "The isolated Task 7 application failure host did not finish in time.");
+        if (failure is not null)
+        {
+            throw new InvalidOperationException(
+                "The isolated Task 7 application failure host failed.",
+                failure);
+        }
+    }
+
+    internal static void VerifyTask7VisualWpfWindow(Action<bool, string> assert)
+    {
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            var previousContext = SynchronizationContext.Current;
+            SynchronizationContext.SetSynchronizationContext(
+                new DispatcherSynchronizationContext(Dispatcher.CurrentDispatcher));
+            WallpaperField.App? application = null;
+            WallpaperField.MainWindow? window = null;
+            try
+            {
+                using var bindingErrors = new WpfBindingErrorCollector();
+                application = IsolatedWpfApplication.Create();
+                window = new WallpaperField.MainWindow
+                {
+                    Width = 1600,
+                    Height = 1000,
+                    Left = -10_000,
+                    Top = -10_000,
+                    ShowInTaskbar = false,
+                    ShowActivated = false
+                };
+                window.SetReducedMotion(true);
+                application.MainWindow = window;
+                ProjectBrowserUiRegressionTests.VerifyTask7VisualCaptureWindow(
+                    window,
+                    assert);
+                assert(!bindingErrors.HasErrors,
+                    $"The Task 7 visual capture host emitted binding errors: {bindingErrors.Summary}");
+            }
+            catch (Exception exception)
+            {
+                failure = exception;
+            }
+            finally
+            {
+                window?.Close();
+                application?.Shutdown();
+                SynchronizationContext.SetSynchronizationContext(previousContext);
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "WallpaperField.Task7VisualCaptureSmoke"
+        };
+
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        assert(thread.Join(TimeSpan.FromSeconds(90)),
+            "The isolated Task 7 visual capture host did not finish in time.");
+        if (failure is not null)
+        {
+            throw new InvalidOperationException(
+                "The isolated Task 7 visual capture host failed.",
+                failure);
+        }
+    }
+
+    internal static void VerifyTask7ReadinessWpfWindow(Action<bool, string> assert)
+    {
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            var previousContext = SynchronizationContext.Current;
+            SynchronizationContext.SetSynchronizationContext(
+                new DispatcherSynchronizationContext(Dispatcher.CurrentDispatcher));
+            WallpaperField.App? application = null;
+            WallpaperField.MainWindow? window = null;
+            ShellViewModel? shell = null;
+            try
+            {
+                using var bindingErrors = new WpfBindingErrorCollector();
+                application = IsolatedWpfApplication.Create();
+                shell = CreateShell();
+                window = new WallpaperField.MainWindow
+                {
+                    DataContext = shell,
+                    Width = 1600,
+                    Height = 1000,
+                    Left = -10_000,
+                    Top = -10_000,
+                    ShowInTaskbar = false,
+                    ShowActivated = false
+                };
+                window.SetReducedMotion(true);
+                window.Show();
+                window.UpdateLayout();
+                window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+                ProjectBrowserUiRegressionTests.VerifyTask7ReadinessWindow(
+                    window,
+                    shell,
+                    assert);
+                assert(!bindingErrors.HasErrors,
+                    $"The isolated Task 7 readiness host emitted binding errors: {bindingErrors.Summary}");
+            }
+            catch (Exception exception)
+            {
+                failure = exception;
+            }
+            finally
+            {
+                window?.Close();
+                shell?.Dispose();
+                application?.Shutdown();
+                SynchronizationContext.SetSynchronizationContext(previousContext);
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "WallpaperField.Task7ReadinessSmoke"
+        };
+
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        assert(thread.Join(TimeSpan.FromSeconds(90)),
+            "The isolated Task 7 readiness host did not finish in time.");
+        if (failure is not null)
+        {
+            throw new InvalidOperationException(
+                "The isolated Task 7 readiness host failed.",
+                failure);
+        }
+    }
+
+    internal static void VerifyTask7SnapshotCaptureWpfWindow(Action<bool, string> assert)
+    {
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            var previousContext = SynchronizationContext.Current;
+            SynchronizationContext.SetSynchronizationContext(
+                new DispatcherSynchronizationContext(Dispatcher.CurrentDispatcher));
+            WallpaperField.App? application = null;
+            WallpaperField.MainWindow? hostWindow = null;
+            ShellViewModel? hostShell = null;
+            try
+            {
+                using var bindingErrors = new WpfBindingErrorCollector();
+                application = IsolatedWpfApplication.Create();
+                hostShell = CreateShell();
+                hostWindow = new WallpaperField.MainWindow
+                {
+                    DataContext = hostShell,
+                    Width = 920,
+                    Height = 680,
+                    Left = -10_000,
+                    Top = -10_000,
+                    ShowInTaskbar = false,
+                    ShowActivated = false
+                };
+                hostWindow.SetReducedMotion(true);
+                hostWindow.Show();
+                hostWindow.UpdateLayout();
+                hostWindow.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+                ProjectBrowserUiRegressionTests.VerifyTask7SnapshotCaptureWindow(
+                    hostWindow,
+                    assert);
+                assert(!bindingErrors.HasErrors,
+                    $"The isolated Task 7 snapshot capture host emitted binding errors: {bindingErrors.Summary}");
+            }
+            catch (Exception exception)
+            {
+                failure = exception;
+            }
+            finally
+            {
+                hostWindow?.Close();
+                hostShell?.Dispose();
+                application?.Shutdown();
+                SynchronizationContext.SetSynchronizationContext(previousContext);
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "WallpaperField.Task7SnapshotCaptureSmoke"
+        };
+
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        assert(thread.Join(TimeSpan.FromSeconds(90)),
+            "The isolated Task 7 snapshot capture host did not finish in time.");
+        if (failure is not null)
+        {
+            throw new InvalidOperationException(
+                "The isolated Task 7 snapshot capture host failed.",
                 failure);
         }
     }
@@ -556,7 +917,33 @@ internal static class UiStructureRegressionTests
             "Programmatic list positioning still calls ancestor BringIntoView.");
         assert(!windowCode.Contains("ResultsList", StringComparison.Ordinal)
                && !windowCode.Contains("ProblemDetails_", StringComparison.Ordinal)
-               && pageCode.Split("PositionSnapshotAsync", StringSplitOptions.None).Length - 1 == 3
+               && new[]
+               {
+                   "WallpaperField.Views.ScanPageView",
+                   "WallpaperField.Views.LibraryPageView",
+                   "WallpaperField.Views.ProblemCenterView"
+               }.All(typeName =>
+               {
+                   var method = typeof(WallpaperField.MainWindow).Assembly
+                       .GetType(typeName, throwOnError: true)!
+                       .GetMethod(
+                           "PositionSnapshotAsync",
+                           BindingFlags.Instance | BindingFlags.NonPublic,
+                           binder: null,
+                           types:
+                           [
+                               typeof(int),
+                               typeof(Func<bool>),
+                               typeof(CancellationToken)
+                           ],
+                           modifiers: null);
+                   return method?.ReturnType.IsGenericType == true
+                          && method.ReturnType.GetGenericTypeDefinition() == typeof(Task<>)
+                          && string.Equals(
+                              method.ReturnType.GetGenericArguments()[0].FullName,
+                              "WallpaperField.Views.SnapshotPositionResult",
+                              StringComparison.Ordinal);
+               })
                && positionerCode.Contains("list.ScrollIntoView", StringComparison.Ordinal),
             "MainWindow still owns page list/detail state or a page lost internal list positioning.");
         foreach (var mutation in new[]
@@ -589,6 +976,7 @@ internal static class UiStructureRegressionTests
         var list = WpfElementFinder.FindByName<ListBox>(window, listName);
         assert(view?.Visibility == Visibility.Visible,
             $"Route {route} did not reveal {viewName}.");
+        VerifyOnlyCurrentPageVisible(window, viewName, assert);
         assert(list is not null
                && list.ActualWidth > 0
                && list.ActualHeight >= 48,
@@ -599,6 +987,242 @@ internal static class UiStructureRegressionTests
                && ScrollViewer.GetCanContentScroll(list),
             $"{listName} lost WPF recycling virtualization or logical scrolling.");
     }
+
+    private static void VerifyBrowsePage(
+        WallpaperField.MainWindow window,
+        ShellViewModel shell,
+        Action<bool, string> assert)
+    {
+        shell.NavigateTo("BROWSE");
+        window.UpdateLayout();
+        var browseView = WpfElementFinder.FindByName<FrameworkElement>(window, "BrowseView");
+        var scanEntry = WpfElementFinder.FindByName<Button>(window, "BrowseScannedProjectsButton");
+        assert(browseView is { Visibility: Visibility.Visible, IsVisible: true }
+               && browseView.ActualWidth > 0
+               && browseView.ActualHeight > 0,
+            "Route BROWSE did not reveal its empty-state page at 920x680.");
+        assert(scanEntry is not null
+               && ReferenceEquals(scanEntry.Command, shell.NavigateBrowseCommand),
+            "The Scan success surface is not wired to Browse navigation.");
+        VerifyOnlyCurrentPageVisible(window, "BrowseView", assert);
+
+        var browse = shell.BrowsePageViewModel;
+        var currentBeforePositioning = browse.CurrentProject;
+        var focusedKeyBeforePositioning = browse.FocusedProjectKey;
+        var visibleCountBeforePositioning = browse.VisibleProjects.Count;
+        window.ConfigureSnapshot(Path.Combine(Path.GetTempPath(), "browse-positioning.png"), scrollIndex: 0);
+        var positionMethod = typeof(WallpaperField.MainWindow).GetMethod(
+            "PositionSnapshotListAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic,
+            binder: null,
+            types: [typeof(CancellationToken)],
+            modifiers: null);
+        var positionTask = positionMethod?.Invoke(
+            window,
+            [CancellationToken.None]) as Task<bool>;
+        assert(positionTask is not null
+               && !positionTask.GetAwaiter().GetResult()
+               && !browse.HasSnapshot
+               && ReferenceEquals(browse.CurrentProject, currentBeforePositioning)
+               && string.Equals(
+                   browse.FocusedProjectKey,
+                   focusedKeyBeforePositioning,
+                   StringComparison.Ordinal)
+               && browse.VisibleProjects.Count == visibleCountBeforePositioning,
+            "Never-scanned Browse snapshot positioning did not fail closed without "
+            + "pretending to be ReadyEmpty or changing project focus.");
+    }
+
+    private static void VerifyOnlyCurrentPageVisible(
+        WallpaperField.MainWindow window,
+        string expectedView,
+        Action<bool, string> assert)
+    {
+        foreach (var name in new[] { "ScanView", "BrowseView", "LibraryView", "ProblemsView" })
+        {
+            var page = WpfElementFinder.FindByName<FrameworkElement>(window, name);
+            assert(page is not null
+                   && (page.Visibility == Visibility.Visible) == (name == expectedView),
+                $"Four-page visibility route expected only {expectedView}, but {name} was {page?.Visibility}.");
+        }
+    }
+
+    private static void VerifyBrowseSnapshotSourceRetention(
+        WallpaperField.MainWindow window,
+        ShellViewModel originalShell,
+        Action<bool, string> assert)
+    {
+        var testRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"WallpaperField-BrowseSource-{Guid.NewGuid():N}");
+        var sourceA = Path.Combine(testRoot, "source-a");
+        var sourceB = Path.Combine(testRoot, "source-b");
+        var output = Path.Combine(testRoot, "output");
+        var scanService = new SourceRetentionScanService();
+        var previousContext = SynchronizationContext.Current;
+        var shell = new ShellViewModel(
+            scanService,
+            new EmptyLibraryService(),
+            new NullFolderPickerService(),
+            new NullSystemFolderService(),
+            new EmptyUnpackService());
+
+        try
+        {
+            SynchronizationContext.SetSynchronizationContext(
+                new DispatcherSynchronizationContext(window.Dispatcher));
+            Directory.CreateDirectory(sourceA);
+            Directory.CreateDirectory(sourceB);
+            shell.SourcePath = sourceA;
+            shell.OutputPath = output;
+            WaitForDispatcherTask(window, shell.ScanCommand.ExecuteAsync());
+            shell.NavigateTo("BROWSE");
+            window.DataContext = shell;
+            RefreshBindings(window);
+
+            var currentSource = WpfElementFinder.FindByName<TextBlock>(
+                window,
+                "BrowseCurrentSourcePathText");
+            var snapshotSource = WpfElementFinder.FindByName<TextBlock>(
+                window,
+                "BrowseSnapshotSourcePathText");
+            var snapshotStatus = WpfElementFinder.FindByName<TextBlock>(
+                window,
+                "BrowseSnapshotSourceStatusText");
+            var emptyTitle = WpfElementFinder.FindByName<TextBlock>(
+                window,
+                "BrowseEmptyTitle");
+
+            assert(currentSource is not null
+                   && snapshotSource is not null
+                   && snapshotStatus is not null
+                   && emptyTitle is not null,
+                "Browse source identity text surfaces are missing from the live WPF page.");
+            if (currentSource is null
+                || snapshotSource is null
+                || snapshotStatus is null
+                || emptyTitle is null)
+            {
+                return;
+            }
+
+            assert(PathsEqual(snapshotSource.Text, sourceA)
+                   && PathsEqual(currentSource.Text, sourceA)
+                   && !snapshotStatus.Text.Contains("上一次成功扫描", StringComparison.Ordinal),
+                "Browse did not label the initial successful snapshot with source A.");
+
+            shell.SourcePath = sourceB;
+            RefreshBindings(window);
+            AssertPreviousSnapshotSource(
+                shell,
+                currentSource,
+                snapshotSource,
+                snapshotStatus,
+                sourceA,
+                sourceB,
+                "input drift",
+                assert);
+
+            WaitForDispatcherTask(window, shell.ScanCommand.ExecuteAsync());
+            RefreshBindings(window);
+            AssertPreviousSnapshotSource(
+                shell,
+                currentSource,
+                snapshotSource,
+                snapshotStatus,
+                sourceA,
+                sourceB,
+                "failed replacement scan",
+                assert);
+
+            var canceledScan = shell.ScanCommand.ExecuteAsync();
+            WaitForDispatcherTask(window, scanService.CancelScanStarted);
+            shell.CancelScanCommand.Execute(null);
+            WaitForDispatcherTask(window, canceledScan);
+            RefreshBindings(window);
+            AssertPreviousSnapshotSource(
+                shell,
+                currentSource,
+                snapshotSource,
+                snapshotStatus,
+                sourceA,
+                sourceB,
+                "canceled replacement scan",
+                assert);
+
+            WaitForDispatcherTask(window, shell.ScanCommand.ExecuteAsync());
+            RefreshBindings(window);
+            assert(shell.BrowsePageViewModel.HasSnapshot
+                   && shell.BrowsePageViewModel.TotalProjectCount == 0
+                   && PathsEqual(snapshotSource.Text, sourceB)
+                   && PathsEqual(currentSource.Text, sourceB)
+                   && emptyTitle.Text == "扫描结果为空"
+                   && !snapshotStatus.Text.Contains("上一次成功扫描", StringComparison.Ordinal),
+                "An empty successful snapshot did not replace source A with source B truthfully.");
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(previousContext);
+            window.DataContext = originalShell;
+            RefreshBindings(window);
+            shell.Dispose();
+            if (Directory.Exists(testRoot))
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+        }
+    }
+
+    private static void AssertPreviousSnapshotSource(
+        ShellViewModel shell,
+        TextBlock currentSource,
+        TextBlock snapshotSource,
+        TextBlock snapshotStatus,
+        string sourceA,
+        string sourceB,
+        string scenario,
+        Action<bool, string> assert)
+        => assert(shell.BrowsePageViewModel.HasSnapshot
+                  && shell.BrowsePageViewModel.TotalProjectCount == 1
+                  && PathsEqual(snapshotSource.Text, sourceA)
+                  && PathsEqual(currentSource.Text, sourceB)
+                  && snapshotStatus.Text.Contains("上一次成功扫描", StringComparison.Ordinal),
+            $"Browse mislabeled source A after {scenario} while current input was source B.");
+
+    private static void WaitForDispatcherTask(
+        Window window,
+        Task task)
+    {
+        if (!task.IsCompleted)
+        {
+            var frame = new DispatcherFrame();
+            _ = task.ContinueWith(
+                _ => window.Dispatcher.BeginInvoke(
+                    DispatcherPriority.Send,
+                    new Action(() => frame.Continue = false)),
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            Dispatcher.PushFrame(frame);
+        }
+
+        task.GetAwaiter().GetResult();
+    }
+
+    private static void RefreshBindings(Window window)
+    {
+        window.UpdateLayout();
+        window.Dispatcher.Invoke(() => { }, DispatcherPriority.DataBind);
+        window.UpdateLayout();
+    }
+
+    private static bool PathsEqual(string? left, string? right)
+        => !string.IsNullOrWhiteSpace(left)
+           && !string.IsNullOrWhiteSpace(right)
+           && string.Equals(
+               Path.GetFullPath(left),
+               Path.GetFullPath(right),
+               StringComparison.OrdinalIgnoreCase);
 
     private static void VerifyAlwaysAvailableActions(
         WallpaperField.MainWindow window,
@@ -866,6 +1490,64 @@ internal static class UiStructureRegressionTests
             IProgress<ScanProgress>? progress = null,
             CancellationToken cancellationToken = default)
             => Task.FromResult(new ScanResult());
+    }
+
+    private sealed class SourceRetentionScanService : IWallpaperScanService
+    {
+        private readonly TaskCompletionSource _cancelScanStarted = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _callCount;
+
+        internal Task CancelScanStarted => _cancelScanStarted.Task;
+
+        public async Task<ScanResult> ScanAsync(
+            WallpaperScanRequest request,
+            IProgress<ScanProgress>? progress = null,
+            CancellationToken cancellationToken = default)
+        {
+            var call = Interlocked.Increment(ref _callCount);
+            var now = DateTimeOffset.UtcNow;
+            if (call == 1)
+            {
+                return new ScanResult
+                {
+                    Items =
+                    [
+                        new WallpaperRecord
+                        {
+                            WorkshopId = "source-a-item",
+                            Title = "Source A item",
+                            SourceDirectory = Path.Combine(
+                                request.SourceDirectory,
+                                "source-a-item"),
+                            OutputDirectory = Path.Combine(
+                                request.OutputDirectory,
+                                "source-a-item"),
+                            ScannedAtUtc = now
+                        }
+                    ],
+                    StartedAtUtc = now,
+                    CompletedAtUtc = now
+                };
+            }
+
+            if (call == 2)
+            {
+                throw new IOException("Replacement scan failed for the retention fixture.");
+            }
+
+            if (call == 3)
+            {
+                _cancelScanStarted.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            }
+
+            return new ScanResult
+            {
+                StartedAtUtc = now,
+                CompletedAtUtc = now
+            };
+        }
     }
 
     private sealed class EmptyLibraryService : IWallpaperLibraryService

@@ -36,7 +36,8 @@ public sealed record DiagnosticIssueRecord(
     string ContextFingerprint,
     AppIssueResolutionState ResolutionState,
     DateTimeOffset? ResolvedAtUtc,
-    int OccurrenceCount);
+    int OccurrenceCount,
+    string? ProjectKey = null);
 
 public sealed record DiagnosticIssueCounts(
     int Visible,

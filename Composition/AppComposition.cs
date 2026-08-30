@@ -20,6 +20,11 @@ public static class AppComposition
         var unpackService = new RePkgWallpaperUnpackService();
         var pathInputValidator = new PathInputValidator();
         var problemCenterSession = new ProblemCenterSession();
+        var systemFolderService = new SystemFolderService();
+        var previewThumbnailService = new PreviewThumbnailService(
+            new WpfPreviewThumbnailDecoder());
+        var projectFolderTargetResolver = new ProjectFolderTargetResolver(
+            systemFolderService);
         var scanSession = new ScanSession(
             scanService,
             pathInputValidator,
@@ -27,24 +32,31 @@ public static class AppComposition
             problemCenterSession);
         var unpackSession = new UnpackSession(
             unpackService,
+            scanSession,
             taskLifecycleCoordinator,
             problemCenterSession);
         var librarySession = new LibrarySession(
             libraryService,
             taskLifecycleCoordinator,
             problemCenterSession);
+        var browsePageViewModel = new BrowsePageViewModel(
+            scanSession,
+            problemCenterSession,
+            previewThumbnailService,
+            projectFolderTargetResolver);
         var shell = new ShellViewModel(
             scanService,
             libraryService,
             new FolderPickerService(),
-            new SystemFolderService(),
+            systemFolderService,
             unpackService,
             pathInputValidator,
             taskLifecycleCoordinator,
             problemCenterSession,
             scanSession,
             unpackSession,
-            librarySession);
+            librarySession,
+            browsePageViewModel);
         AppLog.SetIssueSink(
             issue => problemCenterSession.Publish([issue]),
             (source, code, contextKey) =>
@@ -71,6 +83,13 @@ public static class AppComposition
                     code,
                     contextKey,
                     DateTimeOffset.UtcNow));
+    }
+
+    public static BrowsePageViewModel CreateBrowsePageViewModel(
+        ShellViewModel shell)
+    {
+        ArgumentNullException.ThrowIfNull(shell);
+        return shell.BrowsePageViewModel;
     }
 
     public static DiagnosticExportService CreateDiagnosticExportService(

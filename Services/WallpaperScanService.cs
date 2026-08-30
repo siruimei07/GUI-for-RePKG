@@ -7,6 +7,19 @@ namespace WallpaperField.Services;
 
 public sealed class WallpaperScanService : IWallpaperScanService
 {
+    private readonly Action<string> _validateProjectPath;
+
+    public WallpaperScanService()
+        : this(ValidateProjectPath)
+    {
+    }
+
+    internal WallpaperScanService(Action<string> validateProjectPath)
+    {
+        _validateProjectPath = validateProjectPath
+            ?? throw new ArgumentNullException(nameof(validateProjectPath));
+    }
+
     public async Task<ScanResult> ScanAsync(
         WallpaperScanRequest request,
         IProgress<ScanProgress>? progress = null,
@@ -62,9 +75,7 @@ public sealed class WallpaperScanService : IWallpaperScanService
 
             try
             {
-                OutputPathPolicy.RejectReparsePointsInExistingPath(
-                    sourceFolder,
-                    "壁纸项目目录");
+                _validateProjectPath(sourceFolder);
                 progress?.Report(CreateProgress(
                     index,
                     sourceFolders.Length,
@@ -92,12 +103,14 @@ public sealed class WallpaperScanService : IWallpaperScanService
             {
                 throw;
             }
-            catch (Exception exception)
+            catch (Exception exception) when (!IsFatalScanException(exception))
             {
+                const string failureMessage =
+                    "项目扫描失败；请检查项目文件格式、访问权限与路径安全性。";
                 errors.Add(new ScanError
                 {
                     FolderPath = sourceFolder,
-                    Message = exception.Message,
+                    Message = failureMessage,
                     ExceptionType = exception.GetType().Name
                 });
 
@@ -107,7 +120,7 @@ public sealed class WallpaperScanService : IWallpaperScanService
                     sourceFolder,
                     currentTitle,
                     ScanStage.Failed,
-                    $"跳过：{exception.Message}"));
+                    $"跳过：{failureMessage}"));
             }
 
             progress?.Report(CreateProgress(
@@ -198,7 +211,7 @@ public sealed class WallpaperScanService : IWallpaperScanService
             {
                 throw;
             }
-            catch (Exception exception)
+            catch (Exception exception) when (!IsFatalScanException(exception))
             {
                 warnings.Add($"project.json 读取失败：{exception.Message}");
             }
@@ -224,10 +237,15 @@ public sealed class WallpaperScanService : IWallpaperScanService
             workshopId = safeWorkshopId;
         }
 
-        var previewPath = WallpaperStorage.FindPreview(sourceFolder);
-        if (previewPath is null)
+        var preview = CapturePreviewSnapshot(sourceFolder, warnings);
+        if (preview is null)
         {
-            warnings.Add("未找到 preview.png、preview.jpg、preview.jpeg 或 preview.gif。");
+            if (!warnings.Any(warning => warning.StartsWith(
+                    "预览文件不可用：",
+                    StringComparison.Ordinal)))
+            {
+                warnings.Add("未找到 preview.png、preview.jpg、preview.jpeg 或 preview.gif。");
+            }
         }
 
         var scenePackagePath = FindScenePackage(sourceFolder);
@@ -255,7 +273,10 @@ public sealed class WallpaperScanService : IWallpaperScanService
             workshopId!,
             title.Trim(),
             Path.GetFullPath(sourceFolder),
-            previewPath,
+            preview?.Path,
+            preview?.Length,
+            preview?.LastWriteTimeUtc,
+            preview?.Format,
             scenePackagePath,
             wallpaperType,
             videoFilePath,
@@ -285,6 +306,9 @@ public sealed class WallpaperScanService : IWallpaperScanService
             PreviewFileName = candidate.PreviewSourcePath is null
                 ? null
                 : Path.GetFileName(candidate.PreviewSourcePath),
+            PreviewFileLength = candidate.PreviewFileLength,
+            PreviewLastWriteTimeUtc = candidate.PreviewLastWriteTimeUtc,
+            PreviewFormat = candidate.PreviewFormat,
             HasPreview = candidate.PreviewSourcePath is not null,
             HasScenePackage = candidate.ScenePackagePath is not null,
             ScenePackagePath = candidate.ScenePackagePath is null
@@ -344,12 +368,81 @@ public sealed class WallpaperScanService : IWallpaperScanService
             var relativePath = Path.GetRelativePath(normalizedSource, fullPath);
             return (fullPath, relativePath);
         }
-        catch (Exception exception) when (exception is not OperationCanceledException)
+        catch (Exception exception) when (exception is not OperationCanceledException
+                                          && !IsFatalScanException(exception))
         {
             warnings.Add($"视频文件路径无效：{exception.Message}");
             return (null, null);
         }
     }
+
+    private static PreviewSnapshot? CapturePreviewSnapshot(
+        string sourceFolder,
+        ICollection<string> warnings)
+    {
+        try
+        {
+            var previewPath = WallpaperStorage.FindPreview(sourceFolder);
+            if (previewPath is null)
+            {
+                return null;
+            }
+
+            return CapturePreviewFileFacts(previewPath, warnings);
+        }
+        catch (Exception exception) when (exception is
+               IOException or UnauthorizedAccessException or ArgumentException
+               or NotSupportedException or System.Security.SecurityException)
+        {
+            warnings.Add("预览文件不可用：路径包含重解析点，或无法读取安全扫描事实。");
+            return null;
+        }
+    }
+
+    private static PreviewSnapshot? CapturePreviewFileFacts(
+        string previewPath,
+        ICollection<string> warnings)
+    {
+        try
+        {
+            OutputPathPolicy.RejectReparsePointsInExistingPath(
+                previewPath,
+                "预览文件");
+            var fullPath = Path.GetFullPath(previewPath);
+            var fileInfo = new FileInfo(fullPath);
+            fileInfo.Refresh();
+            if (!fileInfo.Exists)
+            {
+                throw new FileNotFoundException("预览文件已不存在。", fullPath);
+            }
+
+            return new PreviewSnapshot(
+                fullPath,
+                fileInfo.Length,
+                new DateTimeOffset(fileInfo.LastWriteTimeUtc),
+                Path.GetExtension(fullPath).ToLowerInvariant());
+        }
+        catch (Exception exception) when (exception is
+               IOException or UnauthorizedAccessException or ArgumentException
+               or NotSupportedException or System.Security.SecurityException)
+        {
+            warnings.Add("预览文件不可用：路径包含重解析点，或无法读取安全扫描事实。");
+            return null;
+        }
+    }
+
+    internal static bool IsFatalScanException(Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        return exception is OutOfMemoryException
+            or StackOverflowException
+            or AccessViolationException;
+    }
+
+    private static void ValidateProjectPath(string sourceFolder)
+        => OutputPathPolicy.RejectReparsePointsInExistingPath(
+            sourceFolder,
+            "壁纸项目目录");
 
     private static string? FindProjectFile(string directory)
     {
@@ -437,10 +530,19 @@ public sealed class WallpaperScanService : IWallpaperScanService
         string Title,
         string SourceDirectory,
         string? PreviewSourcePath,
+        long? PreviewFileLength,
+        DateTimeOffset? PreviewLastWriteTimeUtc,
+        string? PreviewFormat,
         string? ScenePackagePath,
         string? WallpaperType,
         string? VideoFilePath,
         string? VideoRelativePath,
         bool UsedFolderNameAsWorkshopId,
         IReadOnlyList<string> Warnings);
+
+    private sealed record PreviewSnapshot(
+        string Path,
+        long Length,
+        DateTimeOffset LastWriteTimeUtc,
+        string Format);
 }

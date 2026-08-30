@@ -122,7 +122,7 @@
                         <TextBlock x:Name="NavSectionLabel"
                                    Margin="12,0,0,10"
                                    Foreground="{DynamicResource TextOnDarkMutedBrush}"
-                                   Text="OPERATIONS / 03">
+                                   Text="OPERATIONS / 04">
                             <TextBlock.Style>
                                 <Style TargetType="TextBlock" BasedOn="{StaticResource TechnicalLabel}">
                                     <Style.Triggers>
@@ -184,7 +184,62 @@
                             </Grid>
                         </Button>
 
+                        <Button x:Name="BrowseNavButton"
+                                Margin="0,0,0,8"
+                                Command="{Binding NavigateBrowseCommand}"
+                                ToolTip="项目浏览"
+                                AutomationProperties.Name="项目浏览">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource NavButton}">
+                                    <Setter Property="Foreground" Value="{DynamicResource TextOnDarkMutedBrush}" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsBrowsePage}" Value="True">
+                                            <Setter Property="Background" Value="{DynamicResource SignalBrush}" />
+                                            <Setter Property="Foreground" Value="{DynamicResource SignalTextBrush}" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="36" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock VerticalAlignment="Center"
+                                           FontFamily="Segoe Fluent Icons"
+                                           FontSize="17"
+                                           Text="&#xE8B7;" />
+                                <StackPanel x:Name="BrowseNavCopy" Grid.Column="1" VerticalAlignment="Center">
+                                    <StackPanel.Style>
+                                        <Style TargetType="StackPanel">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding LayoutMode, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                                             Value="{x:Static local:ShellLayoutMode.Compact}">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </StackPanel.Style>
+                                    <TextBlock FontSize="14" FontWeight="SemiBold" Text="项目浏览" />
+                                    <TextBlock Margin="0,2,0,0" FontFamily="Consolas" FontSize="9" Text="PROJECT BROWSER" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="2" Margin="8,0,0,0" VerticalAlignment="Center">
+                                    <TextBlock HorizontalAlignment="Right"
+                                               FontFamily="Consolas"
+                                               FontSize="10"
+                                               Text="02" />
+                                    <TextBlock HorizontalAlignment="Right"
+                                               Margin="0,2,0,0"
+                                               FontFamily="Consolas"
+                                               FontSize="9"
+                                               Text="{Binding BrowsePageViewModel.TotalProjectCount, StringFormat={}{0} 项}" />
+                                </StackPanel>
+                            </Grid>
+                        </Button>
+
                         <Button x:Name="LibraryNavButton"
+                                Margin="0,0,0,8"
                                 Command="{Binding NavigateLibraryCommand}"
                                 ToolTip="输出壁纸库"
                                 AutomationProperties.Name="输出壁纸库">
@@ -228,12 +283,11 @@
                                            VerticalAlignment="Center"
                                            FontFamily="Consolas"
                                            FontSize="10"
-                                           Text="02" />
+                                           Text="03" />
                             </Grid>
                         </Button>
 
                         <Button x:Name="ProblemNavButton"
-                                Margin="0,8,0,0"
                                 Command="{Binding NavigateProblemsCommand}"
                                 ToolTip="问题中心"
                                 AutomationProperties.Name="问题中心">
@@ -277,7 +331,7 @@
                                            VerticalAlignment="Center"
                                            FontFamily="Consolas"
                                            FontSize="10"
-                                           Text="03" />
+                                           Text="04" />
                             </Grid>
                         </Button>
                     </StackPanel>
@@ -514,6 +568,7 @@
 
                     <views:ScanPageView x:Name="ScanPage" />
 
+                    <views:BrowsePageView x:Name="BrowsePage" />
 
                     <views:LibraryPageView x:Name="LibraryPage" />
 

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -9,38 +10,183 @@ namespace WallpaperField.Views;
 
 internal static class SnapshotListPositioner
 {
+    internal static Task<SnapshotPositionResult> PositionLegacyAsync(
+        ListBox list,
+        int requestedIndex,
+        Func<bool> isBusy,
+        bool verifyPreview,
+        CancellationToken cancellationToken)
+        => PositionLegacyAsync(
+            list,
+            requestedIndex,
+            isBusy,
+            verifyPreview,
+            Stopwatch.StartNew(),
+            TimeSpan.FromSeconds(12),
+            cancellationToken);
+
+    internal static Task<SnapshotPositionResult> PositionLegacyAsync(
+        ListBox list,
+        int requestedIndex,
+        Func<bool> isBusy,
+        bool verifyPreview,
+        Stopwatch deadlineClock,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+        => PositionCoreAsync(
+            list,
+            requestedIndex,
+            isBusy,
+            verifyPreview,
+            deadlineClock,
+            timeout,
+            cancellationToken,
+            SnapshotUnavailableTargetPolicy.ClampNonEmpty);
+
     internal static async Task<bool> PositionAsync(
         ListBox list,
         int requestedIndex,
         Func<bool> isBusy,
         bool verifyPreview)
     {
+        var result = await PositionLegacyAsync(
+            list,
+            requestedIndex,
+            isBusy,
+            verifyPreview,
+            CancellationToken.None);
+        AppLog.Write(result.Diagnostic);
+        return result.Succeeded;
+    }
+
+    internal static async Task<bool> PositionWithoutLoggingAsync(
+        ListBox list,
+        int requestedIndex,
+        Func<bool> isBusy,
+        bool verifyPreview)
+        => (await PositionCoreAsync(
+                list,
+                requestedIndex,
+                isBusy,
+                verifyPreview,
+                Stopwatch.StartNew(),
+                TimeSpan.FromSeconds(12),
+                CancellationToken.None,
+                SnapshotUnavailableTargetPolicy.Fail))
+            .Succeeded;
+
+    internal static async Task<bool> PositionWithoutLoggingAsync(
+        ListBox list,
+        int requestedIndex,
+        Func<bool> isBusy,
+        bool verifyPreview,
+        CancellationToken cancellationToken)
+        => (await PositionCoreAsync(
+                list,
+                requestedIndex,
+                isBusy,
+                verifyPreview,
+                Stopwatch.StartNew(),
+                TimeSpan.FromSeconds(12),
+                cancellationToken,
+                SnapshotUnavailableTargetPolicy.Fail))
+            .Succeeded;
+
+    internal static async Task<bool> PositionWithoutLoggingAsync(
+        ListBox list,
+        int requestedIndex,
+        Func<bool> isBusy,
+        bool verifyPreview,
+        Stopwatch deadlineClock,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+        => (await PositionCoreAsync(
+                list,
+                requestedIndex,
+                isBusy,
+                verifyPreview,
+                deadlineClock,
+                timeout,
+                cancellationToken,
+                SnapshotUnavailableTargetPolicy.Fail))
+            .Succeeded;
+
+    private static async Task<SnapshotPositionResult> PositionCoreAsync(
+        ListBox list,
+        int requestedIndex,
+        Func<bool> isBusy,
+        bool verifyPreview,
+        Stopwatch deadlineClock,
+        TimeSpan timeout,
+        CancellationToken cancellationToken,
+        SnapshotUnavailableTargetPolicy unavailableTargetPolicy)
+    {
         ArgumentNullException.ThrowIfNull(list);
         ArgumentNullException.ThrowIfNull(isBusy);
-        var deadline = DateTime.UtcNow.AddSeconds(12);
+        cancellationToken.ThrowIfCancellationRequested();
         while ((list.Items.Count <= requestedIndex || isBusy())
-               && DateTime.UtcNow < deadline)
+               && deadlineClock.Elapsed < timeout)
         {
-            await Task.Delay(100);
+            await DelayWithinDeadlineAsync(
+                deadlineClock,
+                timeout,
+                TimeSpan.FromMilliseconds(100),
+                cancellationToken);
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        if (unavailableTargetPolicy == SnapshotUnavailableTargetPolicy.Fail
+            && (deadlineClock.Elapsed >= timeout
+                || list.Items.Count <= requestedIndex
+                || isBusy()))
+        {
+            return new SnapshotPositionResult(
+                false,
+                null,
+                $"Snapshot scroll target did not become available before the deadline: "
+                + $"requested={requestedIndex}, count={list.Items.Count}, busy={isBusy()}.");
         }
 
         if (list.Items.Count == 0)
         {
-            AppLog.Write(
+            return new SnapshotPositionResult(
+                false,
+                null,
                 $"Snapshot scroll target unavailable: list is empty (requested {requestedIndex}).");
-            return false;
         }
 
         var index = Math.Clamp(requestedIndex, 0, list.Items.Count - 1);
         list.ScrollIntoView(list.Items[index]);
         list.UpdateLayout();
-        await list.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.Render);
+        if (unavailableTargetPolicy == SnapshotUnavailableTargetPolicy.Fail
+            && (deadlineClock.Elapsed >= timeout || isBusy()))
+        {
+            return new SnapshotPositionResult(
+                false,
+                index,
+                $"Snapshot scroll layout exceeded its deadline: index={index}.");
+        }
+
+        await list.Dispatcher.InvokeAsync(
+            static () => { },
+            DispatcherPriority.Render,
+            cancellationToken);
+        if (unavailableTargetPolicy == SnapshotUnavailableTargetPolicy.Fail
+            && (deadlineClock.Elapsed >= timeout || isBusy()))
+        {
+            return new SnapshotPositionResult(
+                false,
+                index,
+                $"Snapshot scroll render exceeded its deadline: index={index}.");
+        }
 
         if (list.ItemContainerGenerator.ContainerFromIndex(index)
             is not FrameworkElement container)
         {
-            AppLog.Write($"Snapshot scroll target was not realized: index={index}.");
-            return false;
+            return new SnapshotPositionResult(
+                false,
+                index,
+                $"Snapshot scroll target was not realized: index={index}.");
         }
 
         var previewVerified = true;
@@ -48,9 +194,12 @@ internal static class SnapshotListPositioner
             && list.Items[index] is WallpaperCardViewModel { HasPreview: true })
         {
             previewVerified = false;
-            var previewDeadline = DateTime.UtcNow.AddSeconds(6);
-            while (DateTime.UtcNow < previewDeadline)
+            var previewClock = Stopwatch.StartNew();
+            while (previewClock.Elapsed < TimeSpan.FromSeconds(6)
+                   && (unavailableTargetPolicy == SnapshotUnavailableTargetPolicy.ClampNonEmpty
+                       || deadlineClock.Elapsed < timeout))
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var previewImage = FindVisualDescendant<Image>(container);
                 if (previewImage?.Source is not null)
                 {
@@ -58,19 +207,54 @@ internal static class SnapshotListPositioner
                     break;
                 }
 
-                await Task.Delay(50);
-                await list.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.Render);
+                if (unavailableTargetPolicy == SnapshotUnavailableTargetPolicy.ClampNonEmpty)
+                {
+                    await Task.Delay(
+                        TimeSpan.FromMilliseconds(50),
+                        cancellationToken);
+                }
+                else
+                {
+                    await DelayWithinDeadlineAsync(
+                        deadlineClock,
+                        timeout,
+                        TimeSpan.FromMilliseconds(50),
+                        cancellationToken);
+                }
+
+                await list.Dispatcher.InvokeAsync(
+                    static () => { },
+                    DispatcherPriority.Render,
+                    cancellationToken);
             }
         }
 
         var validGeometry = container.Opacity > 0.99
                             && container.ActualWidth > 0
                             && container.ActualHeight > 0;
-        AppLog.Write(
+        return new SnapshotPositionResult(
+            validGeometry && previewVerified,
+            index,
             $"Snapshot scroll target realized: index={index}, opacity={container.Opacity:0.###}, "
             + $"size={container.ActualWidth:0.#}x{container.ActualHeight:0.#}, "
             + $"previewLoaded={previewVerified}.");
-        return validGeometry && previewVerified;
+    }
+
+    private static async Task DelayWithinDeadlineAsync(
+        Stopwatch deadlineClock,
+        TimeSpan timeout,
+        TimeSpan maximumDelay,
+        CancellationToken cancellationToken)
+    {
+        var remaining = timeout - deadlineClock.Elapsed;
+        if (remaining <= TimeSpan.Zero)
+        {
+            return;
+        }
+
+        await Task.Delay(
+            remaining < maximumDelay ? remaining : maximumDelay,
+            cancellationToken);
     }
 
     private static T? FindVisualDescendant<T>(DependencyObject parent)
@@ -92,4 +276,15 @@ internal static class SnapshotListPositioner
 
         return null;
     }
+
+    private enum SnapshotUnavailableTargetPolicy
+    {
+        Fail,
+        ClampNonEmpty
+    }
 }
+
+internal readonly record struct SnapshotPositionResult(
+    bool Succeeded,
+    int? PositionedIndex,
+    string Diagnostic);

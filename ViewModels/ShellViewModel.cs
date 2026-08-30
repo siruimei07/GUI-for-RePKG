@@ -13,9 +13,10 @@ namespace WallpaperField.ViewModels;
 /// <summary>
 /// Coordinates navigation and the application surfaces.
 /// </summary>
-public sealed class ShellViewModel : ObservableObject
+public sealed class ShellViewModel : ObservableObject, IDisposable
 {
     private const string ScanPage = "SCAN";
+    private const string BrowsePage = "BROWSE";
     private const string LibraryPage = "LIBRARY";
     private const string ProblemsPage = "PROBLEMS";
 
@@ -36,7 +37,10 @@ public sealed class ShellViewModel : ObservableObject
     private string _currentFolder = string.Empty;
     private string _currentTitle = string.Empty;
     private string _currentStage = "IDLE";
+    private string _projectNavigationStatusText = string.Empty;
+    private Guid? _projectNavigationStatusIssueId;
     private TaskLifecycleSnapshot _taskLifecycle;
+    private bool _disposed;
 
     public ShellViewModel(
         IWallpaperScanService scanService,
@@ -57,6 +61,7 @@ public sealed class ShellViewModel : ObservableObject
             null,
             null,
             null,
+            null,
             null)
     {
     }
@@ -73,6 +78,35 @@ public sealed class ShellViewModel : ObservableObject
         ScanSession? scanSession,
         UnpackSession? unpackSession,
         LibrarySession? librarySession)
+        : this(
+            scanService,
+            libraryService,
+            folderPickerService,
+            systemFolderService,
+            unpackService,
+            pathInputValidator,
+            taskLifecycleCoordinator,
+            problemCenterSession,
+            scanSession,
+            unpackSession,
+            librarySession,
+            null)
+    {
+    }
+
+    internal ShellViewModel(
+        IWallpaperScanService scanService,
+        IWallpaperLibraryService libraryService,
+        IFolderPickerService folderPickerService,
+        ISystemFolderService systemFolderService,
+        IWallpaperUnpackService unpackService,
+        PathInputValidator? pathInputValidator,
+        TaskLifecycleCoordinator? taskLifecycleCoordinator,
+        ProblemCenterSession? problemCenterSession,
+        ScanSession? scanSession,
+        UnpackSession? unpackSession,
+        LibrarySession? librarySession,
+        BrowsePageViewModel? browsePageViewModel)
     {
         ArgumentNullException.ThrowIfNull(scanService);
         ArgumentNullException.ThrowIfNull(libraryService);
@@ -91,12 +125,18 @@ public sealed class ShellViewModel : ObservableObject
             ProblemCenterSession);
         UnpackSession = unpackSession ?? new UnpackSession(
             unpackService,
+            ScanSession,
             _taskLifecycleCoordinator,
             ProblemCenterSession);
         LibrarySession = librarySession ?? new LibrarySession(
             libraryService,
             _taskLifecycleCoordinator,
             ProblemCenterSession);
+        BrowsePageViewModel = browsePageViewModel ?? new BrowsePageViewModel(
+            ScanSession,
+            ProblemCenterSession,
+            null,
+            new ProjectFolderTargetResolver(_systemFolderService));
         ScanSession.SetClosingPredicate(() => IsClosing);
         UnpackSession.SetClosingPredicate(() => IsClosing);
         LibrarySession.SetClosingPredicate(() => IsClosing);
@@ -107,8 +147,10 @@ public sealed class ShellViewModel : ObservableObject
         LibrarySession.PropertyChanged += OnLibrarySessionPropertyChanged;
         ProblemCenterSession.PropertyChanged += OnProblemCenterPropertyChanged;
         ProblemCenterSession.Changed += OnProblemCenterChanged;
+        BrowsePageViewModel.PropertyChanged += OnBrowsePagePropertyChanged;
 
         NavigateScanCommand = new RelayCommand(() => NavigateTo(ScanPage));
+        NavigateBrowseCommand = new RelayCommand(() => NavigateTo(BrowsePage));
         NavigateLibraryCommand = new RelayCommand(() => NavigateTo(LibraryPage));
         NavigateProblemsCommand = new RelayCommand(() => NavigateTo(ProblemsPage));
         NavigateCommand = new RelayCommand(parameter => NavigateTo(parameter?.ToString()));
@@ -118,6 +160,12 @@ public sealed class ShellViewModel : ObservableObject
         ScanCommand = ScanSession.ScanCommand;
         CancelScanCommand = ScanSession.CancelScanCommand;
         UnpackCommand = new AsyncRelayCommand(UnpackSelectedAsync, CanStartUnpack);
+        ProcessCurrentBrowseProjectCommand = new AsyncRelayCommand(
+            ProcessCurrentBrowseProjectAsync,
+            CanProcessCurrentBrowseProject);
+        ProcessBrowseSelectionCommand = new AsyncRelayCommand(
+            ProcessBrowseSelectionAsync,
+            CanProcessBrowseSelection);
         CancelUnpackCommand = UnpackSession.CancelUnpackCommand;
         RefreshLibraryCommand = new AsyncRelayCommand(
             LibrarySession.RefreshAsync,
@@ -130,6 +178,12 @@ public sealed class ShellViewModel : ObservableObject
         ClearResolvedIssuesCommand = ProblemCenterSession.ClearResolvedCommand;
         SelectCurrentMatchesCommand = ScanSession.SelectCurrentMatchesCommand;
         ClearUnpackSelectionCommand = ScanSession.ClearUnpackSelectionCommand;
+        ShowBrowseProjectProblemsCommand = new RelayCommand(
+            ShowBrowseProjectProblems,
+            CanShowBrowseProjectProblems);
+        RevealProblemProjectCommand = new RelayCommand(
+            RevealProblemProject,
+            CanRevealProblemProject);
         _taskLifecycleCoordinator.Changed += OnTaskLifecycleChanged;
         TaskLifecycle = _taskLifecycleCoordinator.Current;
     }
@@ -141,6 +195,14 @@ public sealed class ShellViewModel : ObservableObject
     public LibrarySession LibrarySession { get; }
 
     public ProblemCenterSession ProblemCenterSession { get; }
+
+    public BrowsePageViewModel BrowsePageViewModel { get; }
+
+    public event EventHandler<BrowseProjectFocusRequestedEventArgs>?
+        BrowseProjectFocusRequested;
+
+    public event EventHandler<ProblemIssueFocusRequestedEventArgs>?
+        ProblemIssueFocusRequested;
 
     public RangeObservableCollection<WallpaperCardViewModel> ScannedWallpapers
         => ScanSession.ScannedWallpapers;
@@ -158,6 +220,8 @@ public sealed class ShellViewModel : ObservableObject
 
     public RelayCommand NavigateScanCommand { get; }
 
+    public RelayCommand NavigateBrowseCommand { get; }
+
     public RelayCommand NavigateLibraryCommand { get; }
 
     public RelayCommand NavigateProblemsCommand { get; }
@@ -173,6 +237,10 @@ public sealed class ShellViewModel : ObservableObject
     public RelayCommand CancelScanCommand { get; }
 
     public AsyncRelayCommand UnpackCommand { get; }
+
+    public AsyncRelayCommand ProcessCurrentBrowseProjectCommand { get; }
+
+    public AsyncRelayCommand ProcessBrowseSelectionCommand { get; }
 
     public RelayCommand CancelUnpackCommand { get; }
 
@@ -193,6 +261,16 @@ public sealed class ShellViewModel : ObservableObject
     public RelayCommand SelectCurrentMatchesCommand { get; }
 
     public RelayCommand ClearUnpackSelectionCommand { get; }
+
+    public RelayCommand ShowBrowseProjectProblemsCommand { get; }
+
+    public RelayCommand RevealProblemProjectCommand { get; }
+
+    public string ProjectNavigationStatusText
+    {
+        get => _projectNavigationStatusText;
+        private set => SetProperty(ref _projectNavigationStatusText, value);
+    }
 
     public string SourcePath
     {
@@ -343,21 +421,27 @@ public sealed class ShellViewModel : ObservableObject
 
     public string LibraryEmptyDescription => LibrarySession.EmptyDescription;
 
-    public string PageCode => IsScanPage ? "01" : IsLibraryPage ? "02" : "03";
+    public string PageCode => IsScanPage ? "01" : IsBrowsePage ? "02" : IsLibraryPage ? "03" : "04";
 
     public string CurrentPageTitle => IsScanPage
         ? "扫描中心"
+        : IsBrowsePage
+            ? "项目浏览"
         : IsLibraryPage
             ? "输出壁纸库"
             : "问题中心";
 
     public string CurrentPageSubtitle => IsScanPage
         ? "读取 Workshop 项目元数据，并在内存中选择待处理内容"
+        : IsBrowsePage
+            ? "浏览当前成功扫描的项目快照"
         : IsLibraryPage
             ? "浏览已写入输出目录的壁纸记录"
             : "查看启动、扫描、解包、图库与诊断问题";
 
     public bool IsScanPage => string.Equals(_currentPage, ScanPage, StringComparison.Ordinal);
+
+    public bool IsBrowsePage => string.Equals(_currentPage, BrowsePage, StringComparison.Ordinal);
 
     public bool IsLibraryPage => string.Equals(_currentPage, LibraryPage, StringComparison.Ordinal);
 
@@ -378,7 +462,11 @@ public sealed class ShellViewModel : ObservableObject
                     nameof(UnpackWorkText),
                     nameof(CanScan),
                     nameof(CanRefreshOutput),
-                    nameof(IsUnpackAvailable));
+                    nameof(IsUnpackAvailable),
+                    nameof(CurrentBrowseProjectActionAvailabilityText),
+                    nameof(BrowseSelectionActionAvailabilityText),
+                    nameof(BrowseSelectionTrayStatusText),
+                    nameof(BrowseProjectActionStatusText));
             }
         }
     }
@@ -406,7 +494,11 @@ public sealed class ShellViewModel : ObservableObject
                     nameof(UnpackButtonText),
                     nameof(CanScan),
                     nameof(CanRefreshOutput),
-                    nameof(IsUnpackAvailable));
+                    nameof(IsUnpackAvailable),
+                    nameof(CurrentBrowseProjectActionAvailabilityText),
+                    nameof(BrowseSelectionActionAvailabilityText),
+                    nameof(BrowseSelectionTrayStatusText),
+                    nameof(BrowseProjectActionStatusText));
                 UpdateCommandStates();
             }
         }
@@ -437,6 +529,35 @@ public sealed class ShellViewModel : ObservableObject
         : $"解包选中项 · {SelectedUnpackCount:00}";
 
     public string UnpackToolTip => ScanSession.UnpackToolTip;
+
+    public string CurrentBrowseProjectActionAvailabilityText
+        => GetCurrentBrowseProjectAvailability().Message;
+
+    public string BrowseSelectionActionAvailabilityText
+        => GetBrowseSelectionAvailability().Message;
+
+    public string BrowseSelectionTrayStatusText
+    {
+        get
+        {
+            var availability = GetBrowseSelectionAvailability();
+            return availability.IsAvailable
+                ? BrowsePageViewModel.SelectionTraySummaryText
+                : $"{BrowsePageViewModel.SelectionTraySummaryText} · {availability.Message}";
+        }
+    }
+
+    public string BrowseProjectActionStatusText
+    {
+        get
+        {
+            var availability = GetCurrentBrowseProjectAvailability();
+            return !availability.IsAvailable
+                || string.IsNullOrWhiteSpace(BrowsePageViewModel.FolderActionStatusText)
+                    ? availability.Message
+                    : BrowsePageViewModel.FolderActionStatusText;
+        }
+    }
 
     public string StateLabel => IsClosing
         ? "CLOSING"
@@ -594,7 +715,11 @@ public sealed class ShellViewModel : ObservableObject
     public void NavigateTo(string? pageCode)
     {
         var target = pageCode?.Trim().ToUpperInvariant();
-        if (target is "02" or "OUTPUT" or "OUTPUT LIBRARY")
+        if (target is "02")
+        {
+            target = BrowsePage;
+        }
+        else if (target is "03" or "OUTPUT" or "OUTPUT LIBRARY")
         {
             target = LibraryPage;
         }
@@ -602,16 +727,17 @@ public sealed class ShellViewModel : ObservableObject
         {
             target = ScanPage;
         }
-        else if (target is "03" or "PROBLEM" or "PROBLEM CENTER")
+        else if (target is "04" or "PROBLEM" or "PROBLEM CENTER")
         {
             target = ProblemsPage;
         }
 
-        if (target is not (ScanPage or LibraryPage or ProblemsPage))
+        if (target is not (ScanPage or BrowsePage or LibraryPage or ProblemsPage))
         {
             return;
         }
 
+        ClearProjectNavigationStatus();
         if (!SetProperty(ref _currentPage, target, nameof(PageCode)))
         {
             return;
@@ -619,6 +745,7 @@ public sealed class ShellViewModel : ObservableObject
 
         OnPropertiesChanged(
             nameof(IsScanPage),
+            nameof(IsBrowsePage),
             nameof(IsLibraryPage),
             nameof(IsProblemsPage),
             nameof(CurrentPageTitle),
@@ -641,6 +768,26 @@ public sealed class ShellViewModel : ObservableObject
     {
         ScanSession.CancelPathValidation();
         _taskLifecycleCoordinator.RequestCancellation();
+    }
+
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        CancelPendingWork();
+        _taskLifecycleCoordinator.Changed -= OnTaskLifecycleChanged;
+        ScanSession.PropertyChanged -= OnScanSessionPropertyChanged;
+        UnpackSession.PropertyChanged -= OnUnpackSessionPropertyChanged;
+        UnpackSession.ItemResultsAvailable -= ScanSession.ApplyItemResults;
+        LibrarySession.PropertyChanged -= OnLibrarySessionPropertyChanged;
+        ProblemCenterSession.PropertyChanged -= OnProblemCenterPropertyChanged;
+        ProblemCenterSession.Changed -= OnProblemCenterChanged;
+        BrowsePageViewModel.PropertyChanged -= OnBrowsePagePropertyChanged;
+        BrowsePageViewModel.Dispose();
     }
 
     internal void BeginClosePreparation()
@@ -686,7 +833,11 @@ public sealed class ShellViewModel : ObservableObject
                     nameof(StateLabel),
                     nameof(CanScan),
                     nameof(CanRefreshOutput),
-                    nameof(IsUnpackAvailable));
+                    nameof(IsUnpackAvailable),
+                    nameof(CurrentBrowseProjectActionAvailabilityText),
+                    nameof(BrowseSelectionActionAvailabilityText),
+                    nameof(BrowseSelectionTrayStatusText),
+                    nameof(BrowseProjectActionStatusText));
                 UpdateCommandStates();
             }
         }
@@ -833,6 +984,17 @@ public sealed class ShellViewModel : ObservableObject
                 IsBusy = ScanSession.IsScanning;
                 OnPropertiesChanged(nameof(StateLabel), nameof(IsUnpackAvailable));
                 break;
+        }
+
+        if (args.PropertyName is nameof(ScanSession.SourcePath)
+            or nameof(ScanSession.OutputPath)
+            or nameof(ScanSession.ScanIdentity)
+            or nameof(ScanSession.IsCurrentIdentity)
+            or nameof(ScanSession.IsScanning)
+            or nameof(ScanSession.SelectedUnpackCount)
+            or nameof(ScanSession.ProjectSnapshot))
+        {
+            NotifyBrowseProcessingAvailabilityChanged();
         }
 
         UpdateCommandStates();
@@ -999,6 +1161,30 @@ public sealed class ShellViewModel : ObservableObject
             nameof(ScanIssueSummary),
             nameof(LibraryIssueSummary));
         ClearResolvedIssuesCommand.NotifyCanExecuteChanged();
+        ShowBrowseProjectProblemsCommand.NotifyCanExecuteChanged();
+        RevealProblemProjectCommand.NotifyCanExecuteChanged();
+    }
+
+    private void OnBrowsePagePropertyChanged(
+        object? sender,
+        PropertyChangedEventArgs args)
+    {
+        if (args.PropertyName == nameof(BrowsePageViewModel.CurrentProject))
+        {
+            ProcessCurrentBrowseProjectCommand.NotifyCanExecuteChanged();
+            ShowBrowseProjectProblemsCommand.NotifyCanExecuteChanged();
+            NotifyBrowseProcessingAvailabilityChanged();
+        }
+        else if (args.PropertyName is nameof(BrowsePageViewModel.SelectedCount)
+                 or nameof(BrowsePageViewModel.SelectionTraySummaryText))
+        {
+            ProcessBrowseSelectionCommand.NotifyCanExecuteChanged();
+            NotifyBrowseProcessingAvailabilityChanged();
+        }
+        else if (args.PropertyName == nameof(BrowsePageViewModel.FolderActionStatusText))
+        {
+            OnPropertyChanged(nameof(BrowseProjectActionStatusText));
+        }
     }
 
     private void OnProblemCenterPropertyChanged(
@@ -1026,7 +1212,14 @@ public sealed class ShellViewModel : ObservableObject
                 OnPropertyChanged(nameof(FilteredIssueCount));
                 break;
             case nameof(ProblemCenterSession.SelectedIssue):
+                if (_projectNavigationStatusIssueId is null
+                    || ProblemCenterSession.SelectedIssue?.Id != _projectNavigationStatusIssueId.Value)
+                {
+                    ClearProjectNavigationStatus();
+                }
+
                 OnPropertiesChanged(nameof(SelectedIssue), nameof(HasSelectedIssue));
+                RevealProblemProjectCommand.NotifyCanExecuteChanged();
                 break;
             case nameof(ProblemCenterSession.OpenIssueCount):
                 OnPropertyChanged(nameof(OpenIssueCount));
@@ -1108,9 +1301,182 @@ public sealed class ShellViewModel : ObservableObject
            && ScanSession.IsCurrentScanIdentity();
 
     private Task UnpackSelectedAsync()
-        => UnpackSession.UnpackAsync(
-            ScanSession.FreezeSelectedItems(),
-            OutputPath);
+        => ScanSession.TryFreezeSelectedRequest(out var request)
+           && request is not null
+            ? UnpackSession.UnpackAsync(request)
+            : Task.CompletedTask;
+
+    private bool CanProcessCurrentBrowseProject()
+        => GetCurrentBrowseProjectAvailability().IsAvailable;
+
+    private Task ProcessCurrentBrowseProjectAsync()
+        => BrowsePageViewModel.CurrentProject is { } project
+           && ScanSession.TryFreezeItemRequest(project.Card, out var request)
+           && request is not null
+            ? UnpackSession.UnpackAsync(request)
+            : Task.CompletedTask;
+
+    private bool CanProcessBrowseSelection()
+        => GetBrowseSelectionAvailability().IsAvailable;
+
+    private Task ProcessBrowseSelectionAsync()
+        => ScanSession.TryFreezeSelectedRequest(out var request)
+           && request is not null
+            ? UnpackSession.UnpackAsync(request)
+            : Task.CompletedTask;
+
+    private BrowseProcessingAvailability GetCurrentBrowseProjectAvailability()
+    {
+        if (GetCommonBrowseProcessingBlock() is { } blocked)
+        {
+            return blocked;
+        }
+
+        var project = BrowsePageViewModel.CurrentProject;
+        if (project is null)
+        {
+            return new BrowseProcessingAvailability(false, "尚未选择当前项目。");
+        }
+
+        return new BrowseProcessingAvailability(
+            project.IsProcessable,
+            project.ProcessabilityText);
+    }
+
+    private BrowseProcessingAvailability GetBrowseSelectionAvailability()
+    {
+        if (GetCommonBrowseProcessingBlock() is { } blocked)
+        {
+            return blocked;
+        }
+
+        return ScanSession.SelectedUnpackCount > 0
+            ? new BrowseProcessingAvailability(
+                true,
+                $"已选 {ScanSession.SelectedUnpackCount:N0} 个可处理项目。")
+            : new BrowseProcessingAvailability(false, "请先选择至少一个可处理项目。");
+    }
+
+    private BrowseProcessingAvailability? GetCommonBrowseProcessingBlock()
+    {
+        if (IsClosing)
+        {
+            return new BrowseProcessingAvailability(
+                false,
+                "应用正在安全关闭，不能开始新的项目处理。");
+        }
+
+        if (HasActiveForegroundOperation)
+        {
+            if (ActiveOperationKind == ForegroundOperationKind.Scan)
+            {
+                return new BrowseProcessingAvailability(
+                    false,
+                    "扫描更新中，完成后可处理项目。");
+            }
+
+            return new BrowseProcessingAvailability(
+                false,
+                IsCancellationPending
+                    ? "正在安全停止前台任务，完成后可处理项目。"
+                    : "前台任务运行中，完成或取消后可处理项目。");
+        }
+
+        if (IsBusy)
+        {
+            return new BrowseProcessingAvailability(
+                false,
+                "前台任务运行中，完成后可处理项目。");
+        }
+
+        if (!BrowsePageViewModel.IsSnapshotSourceCurrent)
+        {
+            return new BrowseProcessingAvailability(
+                false,
+                ScanSession.ScanIdentity is null
+                    ? "请先完成一次成功扫描。"
+                    : "源目录或输出目录已在扫描后更改；请恢复扫描时的路径或重新扫描。");
+        }
+
+        return null;
+    }
+
+    private void NotifyBrowseProcessingAvailabilityChanged()
+        => OnPropertiesChanged(
+            nameof(CurrentBrowseProjectActionAvailabilityText),
+            nameof(BrowseSelectionActionAvailabilityText),
+            nameof(BrowseSelectionTrayStatusText),
+            nameof(BrowseProjectActionStatusText));
+
+    private bool CanShowBrowseProjectProblems(object? parameter)
+    {
+        var project = parameter as BrowseProjectViewModel
+                      ?? BrowsePageViewModel.CurrentProject;
+        return project is not null
+               && ProblemCenterSession.GetProjectIssues(project.ProjectKey).Count > 0;
+    }
+
+    private void ShowBrowseProjectProblems(object? parameter)
+    {
+        var project = parameter as BrowseProjectViewModel
+                      ?? BrowsePageViewModel.CurrentProject;
+        if (project is null)
+        {
+            return;
+        }
+
+        var issue = ProblemCenterSession.SelectPreferredProjectIssue(
+            project.ProjectKey,
+            clearBlockingFilters: true);
+        if (issue is null)
+        {
+            SetProjectNavigationStatus("当前项目暂无可定位的问题记录。");
+            return;
+        }
+
+        NavigateTo(ProblemsPage);
+        ProblemIssueFocusRequested?.Invoke(
+            this,
+            new ProblemIssueFocusRequestedEventArgs(issue.Id));
+    }
+
+    private bool CanRevealProblemProject(object? parameter)
+        => (parameter as AppIssue ?? SelectedIssue)?.ProjectKey is { Length: > 0 };
+
+    private void RevealProblemProject(object? parameter)
+    {
+        var issue = parameter as AppIssue ?? SelectedIssue;
+        if (string.IsNullOrWhiteSpace(issue?.ProjectKey))
+        {
+            return;
+        }
+
+        var revealed = BrowsePageViewModel.RevealProject(
+            issue.ProjectKey,
+            clearBlockingFilters: true);
+        if (!revealed)
+        {
+            NavigateTo(ProblemsPage);
+            SetProjectNavigationStatus(
+                "该问题对应的项目已不在当前扫描快照中；请重新扫描后再试。",
+                issue.Id);
+            return;
+        }
+
+        NavigateTo(BrowsePage);
+        BrowseProjectFocusRequested?.Invoke(
+            this,
+            new BrowseProjectFocusRequestedEventArgs(issue.ProjectKey));
+    }
+
+    private void ClearProjectNavigationStatus()
+        => SetProjectNavigationStatus(string.Empty);
+
+    private void SetProjectNavigationStatus(string statusText, Guid? issueId = null)
+    {
+        _projectNavigationStatusIssueId = issueId;
+        ProjectNavigationStatusText = statusText;
+    }
 
     private bool CanRefreshLibrary()
         => !IsClosing
@@ -1231,18 +1597,27 @@ public sealed class ShellViewModel : ObservableObject
     private void UpdateCommandStates()
     {
         NavigateScanCommand.NotifyCanExecuteChanged();
+        NavigateBrowseCommand.NotifyCanExecuteChanged();
         NavigateLibraryCommand.NotifyCanExecuteChanged();
         BrowseSourceCommand.NotifyCanExecuteChanged();
         BrowseOutputCommand.NotifyCanExecuteChanged();
         ScanCommand.NotifyCanExecuteChanged();
         CancelScanCommand.NotifyCanExecuteChanged();
         UnpackCommand.NotifyCanExecuteChanged();
+        ProcessCurrentBrowseProjectCommand.NotifyCanExecuteChanged();
+        ProcessBrowseSelectionCommand.NotifyCanExecuteChanged();
         CancelUnpackCommand.NotifyCanExecuteChanged();
         RefreshLibraryCommand.NotifyCanExecuteChanged();
         CancelLibraryRefreshCommand.NotifyCanExecuteChanged();
         OpenFolderCommand.NotifyCanExecuteChanged();
         SelectCurrentMatchesCommand.NotifyCanExecuteChanged();
         ClearUnpackSelectionCommand.NotifyCanExecuteChanged();
+        ShowBrowseProjectProblemsCommand.NotifyCanExecuteChanged();
+        RevealProblemProjectCommand.NotifyCanExecuteChanged();
     }
+
+    private readonly record struct BrowseProcessingAvailability(
+        bool IsAvailable,
+        string Message);
 
 }

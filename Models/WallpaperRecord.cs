@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json.Serialization;
 
 namespace WallpaperField.Models;
@@ -18,6 +20,12 @@ public sealed record WallpaperRecord
     public string? PreviewPath { get; init; }
 
     public string? PreviewFileName { get; init; }
+
+    public long? PreviewFileLength { get; init; }
+
+    public DateTimeOffset? PreviewLastWriteTimeUtc { get; init; }
+
+    public string? PreviewFormat { get; init; }
 
     /// <summary>
     /// True when a direct child named scene.pkg was present during the scan.
@@ -75,5 +83,67 @@ public sealed record WallpaperRecord
         && !string.IsNullOrWhiteSpace(VideoFilePath);
 
     [JsonIgnore]
-    public bool HasUnpackableContent => HasScenePackage || HasVideoFile;
+    public WallpaperProjectKind ProjectKind
+    {
+        get
+        {
+            var declaredType = WallpaperType?.Trim();
+            if (string.Equals(declaredType, "web", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(declaredType, "website", StringComparison.OrdinalIgnoreCase))
+            {
+                return WallpaperProjectKind.Website;
+            }
+
+            if (string.Equals(declaredType, "video", StringComparison.OrdinalIgnoreCase))
+            {
+                return IsVideoFileAvailable
+                    ? WallpaperProjectKind.Video
+                    : WallpaperProjectKind.Other;
+            }
+
+            return IsScenePackageAvailable
+                ? WallpaperProjectKind.Package
+                : WallpaperProjectKind.Other;
+        }
+    }
+
+    [JsonIgnore]
+    public string ProjectKey
+    {
+        get
+        {
+            var normalizedPath = NormalizeProjectKeyPath(SourceDirectory);
+            var fingerprint = Convert.ToHexString(
+                SHA256.HashData(Encoding.UTF8.GetBytes(normalizedPath)));
+            return $"{WorkshopId?.Trim() ?? string.Empty}:{fingerprint}";
+        }
+    }
+
+    [JsonIgnore]
+    public bool IsProcessable => ProjectKind is
+        WallpaperProjectKind.Package or WallpaperProjectKind.Video;
+
+    [JsonIgnore]
+    public bool HasUnpackableContent => IsProcessable;
+
+    private static string NormalizeProjectKeyPath(string? value)
+    {
+        var trimmed = value?.Trim() ?? string.Empty;
+        try
+        {
+            trimmed = Path.TrimEndingDirectorySeparator(Path.GetFullPath(trimmed));
+        }
+        catch (Exception exception) when (exception is
+               ArgumentException or NotSupportedException or IOException
+               or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            trimmed = trimmed.TrimEnd(
+                Path.DirectorySeparatorChar,
+                Path.AltDirectorySeparatorChar);
+        }
+
+        return trimmed
+            .Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar)
+            .ToUpperInvariant();
+    }
 }

@@ -12,6 +12,7 @@ using WallpaperField.Infrastructure;
 using WallpaperField.Models;
 using WallpaperField.Services;
 using WallpaperField.ViewModels;
+using WallpaperField.Views;
 
 namespace WallpaperField;
 
@@ -60,6 +61,7 @@ public partial class MainWindow : Window
         "SuccessInkBrush",
         "SuccessSoftBrush",
         "DisabledBrush",
+        "ModalBackdropBrush",
         "OverlayBrush",
         "ShadowBrush"
     ];
@@ -79,6 +81,15 @@ public partial class MainWindow : Window
     private string? _snapshotPath;
     private int _snapshotDelayMilliseconds = 1500;
     private int? _snapshotScrollIndex;
+    private bool _snapshotRequiresBrowseLease;
+    private ISnapshotPngWriter _snapshotPngWriter = new AtomicSnapshotPngWriter();
+    private ISnapshotDiagnosticWriter _snapshotDiagnosticWriter =
+        new AppLogSnapshotDiagnosticWriter();
+    private Action<int> _snapshotShutdown = static exitCode =>
+        System.Windows.Application.Current.Shutdown(exitCode);
+    private CancellationTokenSource? _snapshotCaptureCancellation;
+    private Task<bool>? _snapshotCaptureTask;
+    private bool _snapshotCaptureStarted;
     private readonly MotionPolicy _motionPolicy = new();
     private UserSettingsStore? _settingsStore;
     private bool _persistSettingsOnClose;
@@ -122,6 +133,31 @@ public partial class MainWindow : Window
         _snapshotScrollIndex = scrollIndex is >= 0 ? scrollIndex : null;
     }
 
+    internal void ConfigureSnapshotRuntimeForTests(
+        ISnapshotPngWriter writer,
+        Action<int> shutdown,
+        ISnapshotDiagnosticWriter? diagnosticWriter = null)
+    {
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(shutdown);
+        if (_snapshotCaptureStarted)
+        {
+            throw new InvalidOperationException(
+                "Snapshot capture has already started.");
+        }
+
+        _snapshotPngWriter = writer;
+        if (diagnosticWriter is not null)
+        {
+            _snapshotDiagnosticWriter = diagnosticWriter;
+        }
+
+        _snapshotShutdown = shutdown;
+    }
+
+    internal bool IsSnapshotCaptureInFlight
+        => _snapshotCaptureTask is not null;
+
     internal void ConfigureCloseWorkflow(
         UserSettingsStore settingsStore,
         bool persistSettings)
@@ -160,6 +196,7 @@ public partial class MainWindow : Window
     private void ApplyMotionPolicy()
     {
         MotionEnabled = _motionPolicy.MotionEnabled;
+        BrowsePage.RefreshMotionVisuals();
         StartAmbientMotion();
         AnimateCurrentPage();
     }
@@ -196,10 +233,20 @@ public partial class MainWindow : Window
         SystemParameters.StaticPropertyChanged -= SystemParameters_StaticPropertyChanged;
         _motionPolicy.PropertyChanged -= MotionPolicy_PropertyChanged;
         _motionPolicy.Dispose();
+        _snapshotCaptureCancellation?.Dispose();
+        _snapshotCaptureCancellation = null;
+        ViewModel?.Dispose();
     }
 
     private async void Window_Closing(object? sender, CancelEventArgs e)
     {
+        if (_snapshotCaptureTask is not null)
+        {
+            e.Cancel = true;
+            _snapshotCaptureCancellation?.Cancel();
+            return;
+        }
+
         if (_closePrepared)
         {
             return;
@@ -313,22 +360,20 @@ public partial class MainWindow : Window
         }
     }
 
-    private async void Window_Loaded(object sender, RoutedEventArgs e)
+    private void Window_Loaded(object sender, RoutedEventArgs e)
     {
         ApplyDwmWindowSettings();
         UpdateResponsiveLayout(ActualWidth);
         StartAmbientMotion();
         AnimateCurrentPage();
 
-        if (!string.IsNullOrWhiteSpace(_snapshotPath))
-        {
-            await CaptureSnapshotAndExitAsync(_snapshotPath, _snapshotDelayMilliseconds);
-        }
+        StartSnapshotCaptureIfConfigured();
     }
 
     private void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName is nameof(ShellViewModel.IsScanPage)
+            or nameof(ShellViewModel.IsBrowsePage)
             or nameof(ShellViewModel.IsLibraryPage)
             or nameof(ShellViewModel.IsProblemsPage)
             or nameof(ShellViewModel.PageCode))
@@ -427,8 +472,10 @@ public partial class MainWindow : Window
             ? ProblemCenterPage
             : ViewModel?.IsLibraryPage == true
                 ? LibraryPage
-                : ScanPage;
-        foreach (var view in new FrameworkElement[] { ScanPage, LibraryPage, ProblemCenterPage })
+                : ViewModel?.IsBrowsePage == true
+                    ? BrowsePage
+                    : ScanPage;
+        foreach (var view in new FrameworkElement[] { ScanPage, BrowsePage, LibraryPage, ProblemCenterPage })
         {
             view.ApplyAnimationClock(OpacityProperty, null);
             view.RenderTransform = Transform.Identity;
@@ -441,7 +488,9 @@ public partial class MainWindow : Window
             ? 58
             : ViewModel?.IsLibraryPage == true
                 ? 32
-                : 0;
+                : ViewModel?.IsBrowsePage == true
+                    ? 16
+                    : 0;
         SetBusyAnimation(ViewModel?.IsBusy == true);
     }
 
@@ -454,7 +503,11 @@ public partial class MainWindow : Window
     }
 
     private void UpdateResponsiveLayout(double width)
-        => LayoutMode = ResolveLayoutMode(width);
+    {
+        BrowsePage.CaptureResponsiveViewportAnchor();
+        LayoutMode = ResolveLayoutMode(width);
+        BrowsePage.ApplyLayoutMode(LayoutMode);
+    }
 
     internal static ShellLayoutMode ResolveLayoutMode(double width)
         => width < 1060
@@ -555,6 +608,7 @@ public partial class MainWindow : Window
             "SignalTextBrush",
             "SuccessInkBrush");
         resources["DisabledBrush"] = SystemColors.GrayTextBrush;
+        resources["ModalBackdropBrush"] = SystemColors.WindowTextBrush;
         resources["OverlayBrush"] = SystemColors.WindowTextBrush;
         resources["ShadowBrush"] = SystemColors.WindowTextBrush;
     }
@@ -588,16 +642,102 @@ public partial class MainWindow : Window
         }
     }
 
-    private async Task CaptureSnapshotAndExitAsync(string path, int delayMilliseconds)
+    private void StartSnapshotCaptureIfConfigured()
     {
-        await Task.Delay(delayMilliseconds);
-        if (!await PositionSnapshotListAsync())
+        if (_snapshotCaptureStarted || string.IsNullOrWhiteSpace(_snapshotPath))
         {
-            AppLog.Write("Snapshot validation failed; no image was written.");
-            System.Windows.Application.Current.Shutdown(-2);
             return;
         }
-        await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+
+        _snapshotCaptureStarted = true;
+        var cancellation = new CancellationTokenSource();
+        _snapshotCaptureCancellation = cancellation;
+        var captureTask = CaptureSnapshotCoreAsync(
+            _snapshotPath,
+            _snapshotDelayMilliseconds,
+            cancellation.Token);
+        _snapshotCaptureTask = captureTask;
+        _ = CompleteSnapshotCaptureAndExitAsync(captureTask, cancellation);
+    }
+
+    private async Task CompleteSnapshotCaptureAndExitAsync(
+        Task<bool> captureTask,
+        CancellationTokenSource cancellation)
+    {
+        var exitCode = -2;
+        try
+        {
+            exitCode = await captureTask.ConfigureAwait(true) ? 0 : -2;
+        }
+        catch
+        {
+            exitCode = -2;
+        }
+        finally
+        {
+            _closePrepared = true;
+            if (ReferenceEquals(_snapshotCaptureCancellation, cancellation))
+            {
+                _snapshotCaptureCancellation = null;
+            }
+
+            if (ReferenceEquals(_snapshotCaptureTask, captureTask))
+            {
+                _snapshotCaptureTask = null;
+            }
+
+            cancellation.Dispose();
+        }
+
+        _snapshotShutdown(exitCode);
+    }
+
+    internal async Task<bool> CaptureSnapshotCoreAsync(
+        string path,
+        int delayMilliseconds,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Delay(
+                TimeSpan.FromMilliseconds(Math.Max(0, delayMilliseconds)),
+                cancellationToken).ConfigureAwait(true);
+            if (!await PositionSnapshotListAsync(cancellationToken).ConfigureAwait(true))
+            {
+                return false;
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            var bitmap = RenderAndFreezeSnapshot();
+            if (bitmap is null)
+            {
+                return false;
+            }
+
+            await _snapshotPngWriter.WriteAsync(
+                bitmap,
+                path,
+                cancellationToken).ConfigureAwait(true);
+            return true;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return false;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private RenderTargetBitmap? RenderAndFreezeSnapshot()
+    {
+        Dispatcher.VerifyAccess();
+        if (_snapshotRequiresBrowseLease
+            && !BrowsePage.IsPreparedSnapshotCurrent())
+        {
+            return null;
+        }
 
         var dpi = VisualTreeHelper.GetDpi(this);
         var pixelWidth = Math.Max(1, (int)Math.Ceiling(ActualWidth * dpi.DpiScaleX));
@@ -609,47 +749,76 @@ public partial class MainWindow : Window
             96 * dpi.DpiScaleY,
             PixelFormats.Pbgra32);
         bitmap.Render(this);
-
-        var directory = Path.GetDirectoryName(path);
-        if (!string.IsNullOrWhiteSpace(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
-
-        var encoder = new PngBitmapEncoder();
-        encoder.Frames.Add(BitmapFrame.Create(bitmap));
-        await using (var stream = File.Create(path))
-        {
-            encoder.Save(stream);
-        }
-
-        System.Windows.Application.Current.Shutdown();
+        bitmap.Freeze();
+        return bitmap;
     }
 
-    private async Task<bool> PositionSnapshotListAsync()
+    private async Task<bool> PositionSnapshotListAsync(
+        CancellationToken cancellationToken)
     {
+        _snapshotRequiresBrowseLease = false;
+        if (ViewModel?.IsBrowsePage == true)
+        {
+            _snapshotRequiresBrowseLease = true;
+            return await BrowsePage.PrepareSnapshotAsync(
+                _snapshotScrollIndex ?? 0,
+                () => ViewModel?.IsBusy == true,
+                cancellationToken);
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
         if (_snapshotScrollIndex is not { } requestedIndex)
         {
             return true;
         }
 
+        SnapshotPositionResult result;
         if (ViewModel?.IsProblemsPage == true)
         {
-            return await ProblemCenterPage.PositionSnapshotAsync(
+            result = await ProblemCenterPage.PositionSnapshotAsync(
                 requestedIndex,
-                () => ViewModel?.IsBusy == true);
+                () => ViewModel?.IsBusy == true,
+                cancellationToken);
         }
-
-        if (ViewModel?.IsLibraryPage == true)
+        else if (ViewModel?.IsLibraryPage == true)
         {
-            return await LibraryPage.PositionSnapshotAsync(
+            result = await LibraryPage.PositionSnapshotAsync(
                 requestedIndex,
-                () => ViewModel?.IsBusy == true);
+                () => ViewModel?.IsBusy == true,
+                cancellationToken);
+        }
+        else
+        {
+            result = await ScanPage.PositionSnapshotAsync(
+                requestedIndex,
+                () => ViewModel?.IsBusy == true,
+                cancellationToken);
         }
 
-        return await ScanPage.PositionSnapshotAsync(
-            requestedIndex,
-            () => ViewModel?.IsBusy == true);
+        await WriteSnapshotDiagnosticBestEffortAsync(
+            result.Diagnostic,
+            cancellationToken);
+        return result.Succeeded;
+    }
+
+    private async Task WriteSnapshotDiagnosticBestEffortAsync(
+        string diagnostic,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _snapshotDiagnosticWriter.WriteAsync(
+                diagnostic,
+                cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            // Snapshot diagnostics are best-effort and cannot reverse positioning success.
+        }
     }
 
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
