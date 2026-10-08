@@ -1,3 +1,5 @@
+using System.Diagnostics.CodeAnalysis;
+
 namespace WallpaperField.Models;
 
 public enum WallpaperItemCommitState
@@ -206,6 +208,8 @@ public sealed record WallpaperUnpackResult
 
 public sealed class WallpaperUnpackCanceledException : OperationCanceledException
 {
+    [SuppressMessage("Design", "CA1068:CancellationToken parameters must come last",
+        Justification = "Preserve the existing public exception constructor signature for callers.")]
     public WallpaperUnpackCanceledException(
         WallpaperUnpackResult result,
         CancellationToken cancellationToken,

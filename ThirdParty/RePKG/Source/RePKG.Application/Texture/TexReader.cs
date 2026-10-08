@@ -120,6 +120,20 @@ namespace RePKG.Application.Texture
                         $"GIF frame crop is outside image {frame.ImageId}: "
                         + $"{x},{y},{cropWidth},{cropHeight}/{mipmap.Width}x{mipmap.Height}");
                 }
+
+                // The converter rotates opposite-signed extents by a quarter turn.
+                // Each independently encoded GIF frame must cover the canvas.
+                var quarterTurn = Math.Sign(width) != Math.Sign(height);
+                var outputWidth = quarterTurn ? cropHeight : cropWidth;
+                var outputHeight = quarterTurn ? cropWidth : cropHeight;
+                if (outputWidth != tex.FrameInfoContainer.GifWidth
+                    || outputHeight != tex.FrameInfoContainer.GifHeight)
+                {
+                    throw new UnsafeTexException(
+                        $"GIF frame dimensions do not match the canvas: "
+                        + $"{outputWidth}x{outputHeight}/"
+                        + $"{tex.FrameInfoContainer.GifWidth}x{tex.FrameInfoContainer.GifHeight}");
+                }
             }
         }
     }

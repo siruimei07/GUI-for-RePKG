@@ -12,6 +12,8 @@ using WallpaperField.ViewModels;
 
 internal static class ProblemDiagnosticsRegressionTests
 {
+    private static readonly JsonSerializerOptions DocumentJsonOptions = new(JsonSerializerDefaults.Web);
+
     internal static async Task RunAsync(Action<bool, string> assert)
     {
         VerifyContractSurface(assert);
@@ -1175,7 +1177,7 @@ internal static class ProblemDiagnosticsRegressionTests
     private static async Task<DiagnosticExportDocument> ReadDocumentAsync(string path)
         => JsonSerializer.Deserialize<DiagnosticExportDocument>(
                await File.ReadAllTextAsync(path, Encoding.UTF8),
-               new JsonSerializerOptions(JsonSerializerDefaults.Web))
+               DocumentJsonOptions)
            ?? throw new InvalidDataException("Diagnostic JSON deserialized to null.");
 
     private static AppIssue CreateIssue(

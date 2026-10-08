@@ -18,10 +18,11 @@ namespace WallpaperField.Views;
 public sealed partial class BrowsePageView : UserControl
 {
     private static readonly TimeSpan SnapshotPreparationTimeout = TimeSpan.FromSeconds(12);
-    private const double CardAspectRatioHeight = 10d / 16d;
+    private const double CardAspectRatioHeight = 1d;
+    private const double DetailPreviewAspectRatioHeight = 10d / 16d;
     private const double RegularDetailsWidth = 294;
-    private const double WideDetailsWidth = 328;
-    private const double DetailColumnGap = 16;
+    private const double WideDetailsWidth = 300;
+    private const double DetailColumnGap = 10;
     private const double WideSixColumnThreshold = 780;
     private const double MinimumCardCellWidth = 112;
     private const int MaxProcessingLiveRegionQueueDepth = 32;
@@ -1674,7 +1675,9 @@ public sealed partial class BrowsePageView : UserControl
 
         var projectKey = viewModel.FocusedProjectKey
                          ?? viewModel.CurrentProject?.ProjectKey
-                         ?? viewModel.VisibleProjects.FirstOrDefault()?.ProjectKey;
+                         ?? (viewModel.VisibleProjects.Count > 0
+                             ? viewModel.VisibleProjects[0]?.ProjectKey
+                             : null);
         if (projectKey is not null)
         {
             await FocusProjectAsync(projectKey).ConfigureAwait(true);
@@ -1872,7 +1875,7 @@ public sealed partial class BrowsePageView : UserControl
             && double.IsFinite(e.NewSize.Width)
             && e.NewSize.Width > 0)
         {
-            var expectedHeight = e.NewSize.Width * CardAspectRatioHeight;
+            var expectedHeight = e.NewSize.Width * DetailPreviewAspectRatioHeight;
             if (Math.Abs(border.Height - expectedHeight) > 0.25)
             {
                 border.Height = expectedHeight;

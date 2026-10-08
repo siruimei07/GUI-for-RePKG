@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Windows.Threading;
@@ -57,6 +58,11 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
     private readonly SynchronizationContext? _selectionOwnerContext;
     private readonly int _ownerThreadId;
     private readonly List<BrowseProjectViewModel> _allProjects = [];
+    private readonly Dictionary<WallpaperCardViewModel, BrowseProjectViewModel> _projectsByCard
+        = new(ReferenceEqualityComparer.Instance);
+    private BrowseProjectViewModel[]? _sortedProjects;
+    private ProjectBrowserSort _sortedProjectsSort;
+    private CultureInfo? _sortedProjectsCulture;
     private ScanProjectSnapshot? _snapshot;
     private BrowseProjectViewModel? _currentProject;
     private ProjectFolderTarget? _currentFolderTarget;
@@ -169,7 +175,8 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
         set
         {
             if (value is not null
-                && !_allProjects.Any(project => ReferenceEquals(project, value)))
+                && (!_projectsByCard.TryGetValue(value.Card, out var current)
+                    || !ReferenceEquals(current, value)))
             {
                 return;
             }
@@ -580,7 +587,8 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
     public bool TrySetSelection(BrowseProjectViewModel project, bool selected)
     {
         ArgumentNullException.ThrowIfNull(project);
-        return _allProjects.Any(candidate => ReferenceEquals(candidate, project))
+        return _projectsByCard.TryGetValue(project.Card, out var current)
+               && ReferenceEquals(current, project)
                && _scanSession.TrySetUnpackSelection(project.Card, selected);
     }
 
@@ -894,12 +902,15 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
         _thumbnailService.SetGeneration(snapshot?.Revision ?? 0);
         DetachCards();
         _allProjects.Clear();
+        _sortedProjects = null;
         if (snapshot is not null)
         {
             foreach (var card in snapshot.Projects)
             {
                 card.PropertyChanged += OnCardPropertyChanged;
-                _allProjects.Add(new BrowseProjectViewModel(this, card));
+                var project = new BrowseProjectViewModel(this, card);
+                _allProjects.Add(project);
+                _projectsByCard.TryAdd(card, project);
             }
         }
 
@@ -1028,8 +1039,11 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
     private static SynchronizationContext? CaptureOwnerContext()
         => SynchronizationContext.Current;
 
-    private static SynchronizationContext? CaptureDispatcherContext()
-        => Dispatcher.FromThread(Thread.CurrentThread) is { } dispatcher
+    private static DispatcherSynchronizationContext? CaptureDispatcherContext()
+        // Bitmap work can register an MTA dispatcher without a message pump.
+        // Explicit contexts are preserved by CaptureOwnerContext above.
+        => Thread.CurrentThread.GetApartmentState() == ApartmentState.STA
+            && Dispatcher.FromThread(Thread.CurrentThread) is { } dispatcher
             ? new DispatcherSynchronizationContext(dispatcher)
             : null;
 
@@ -1055,30 +1069,20 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
     {
         var currentKey = preferredCurrentKey ?? CurrentProject?.ProjectKey;
         var focusKey = preferredFocusKey ?? FocusedProjectKey;
-        var filtered = _allProjects.Where(MatchesFilters);
-        var sorted = Sort switch
+        var search = SearchText.Trim();
+        var filtered = GetSortedProjects()
+            .Where(project => MatchesFilters(project, search))
+            .ToArray();
+        if (!VisibleProjects.SequenceEqual(filtered))
         {
-            ProjectBrowserSort.WorkshopId => filtered
-                .OrderBy(project => project.WorkshopId, StringComparer.OrdinalIgnoreCase)
-                .ThenBy(project => project.ProjectKey, StringComparer.Ordinal),
-            ProjectBrowserSort.KindThenName => filtered
-                .OrderBy(project => KindRank(project.ProjectKind))
-                .ThenBy(project => project.Title, StringComparer.CurrentCultureIgnoreCase)
-                .ThenBy(project => project.WorkshopId, StringComparer.OrdinalIgnoreCase)
-                .ThenBy(project => project.ProjectKey, StringComparer.Ordinal),
-            _ => filtered
-                .OrderBy(project => project.Title, StringComparer.CurrentCultureIgnoreCase)
-                .ThenBy(project => project.WorkshopId, StringComparer.OrdinalIgnoreCase)
-                .ThenBy(project => project.ProjectKey, StringComparer.Ordinal)
-        };
-
-        VisibleProjects = Array.AsReadOnly(sorted.ToArray());
-        RebuildRows();
+            VisibleProjects = Array.AsReadOnly(filtered);
+            RebuildRows();
+        }
 
         CurrentProject = VisibleProjects.FirstOrDefault(project =>
                              currentKey is not null
                              && string.Equals(project.ProjectKey, currentKey, StringComparison.Ordinal))
-                          ?? VisibleProjects.FirstOrDefault();
+                          ?? (VisibleProjects.Count > 0 ? VisibleProjects[0] : null);
         if (CurrentProject is null)
         {
             CloseDetails();
@@ -1136,19 +1140,52 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
         }
     }
 
-    private bool MatchesFilters(BrowseProjectViewModel project)
-        => MatchesSearch(project)
+    private BrowseProjectViewModel[] GetSortedProjects()
+    {
+        var culture = CultureInfo.CurrentCulture;
+        if (_sortedProjects is not null
+            && _sortedProjectsSort == Sort
+            && Equals(_sortedProjectsCulture, culture))
+        {
+            return _sortedProjects;
+        }
+
+        var titleComparer = StringComparer.Create(culture, ignoreCase: true);
+        var sorted = Sort switch
+        {
+            ProjectBrowserSort.WorkshopId => _allProjects
+                .OrderBy(project => project.WorkshopId, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(project => project.ProjectKey, StringComparer.Ordinal),
+            ProjectBrowserSort.KindThenName => _allProjects
+                .OrderBy(project => KindRank(project.ProjectKind))
+                .ThenBy(project => project.Title, titleComparer)
+                .ThenBy(project => project.WorkshopId, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(project => project.ProjectKey, StringComparer.Ordinal),
+            _ => _allProjects
+                .OrderBy(project => project.Title, titleComparer)
+                .ThenBy(project => project.WorkshopId, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(project => project.ProjectKey, StringComparer.Ordinal)
+        };
+
+        _sortedProjects = sorted.ToArray();
+        _sortedProjectsSort = Sort;
+        _sortedProjectsCulture = culture;
+        return _sortedProjects;
+    }
+
+    private bool MatchesFilters(BrowseProjectViewModel project, string search)
+        => MatchesSearch(project, search)
                && MatchesKind(project.ProjectKind)
                && (!ShowOnlyProcessable || project.IsProcessable)
                && (!ShowOnlyProblems || project.HasProblems);
 
     private bool MatchesSearch(BrowseProjectViewModel project)
-    {
-        var search = SearchText.Trim();
-        return search.Length == 0
+        => MatchesSearch(project, SearchText.Trim());
+
+    private static bool MatchesSearch(BrowseProjectViewModel project, string search)
+        => search.Length == 0
                || project.Title.Contains(search, StringComparison.OrdinalIgnoreCase)
                || project.WorkshopId.Contains(search, StringComparison.OrdinalIgnoreCase);
-    }
 
     private bool MatchesKind(WallpaperProjectKind kind)
         => KindFilter switch
@@ -1221,15 +1258,21 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
         }
 
         _problemStateChanged = false;
-        RefreshProjection();
+        if (ShowOnlyProblems)
+        {
+            RefreshProjection();
+        }
     }
 
     private void OnCardPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        var wrapper = sender is WallpaperCardViewModel card
-            ? _allProjects.FirstOrDefault(project => ReferenceEquals(project.Card, card))
-            : null;
-        wrapper?.NotifyCardStateChanged();
+        if (sender is not WallpaperCardViewModel card
+            || !_projectsByCard.TryGetValue(card, out var wrapper))
+        {
+            return;
+        }
+
+        wrapper.NotifyCardStateChanged(e.PropertyName);
 
         if (e.PropertyName == nameof(WallpaperCardViewModel.IsSelectedForUnpack))
         {
@@ -1285,6 +1328,8 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
         {
             project.Card.PropertyChanged -= OnCardPropertyChanged;
         }
+
+        _projectsByCard.Clear();
     }
 
     private int FindVisibleProjectIndex(BrowseProjectViewModel project)

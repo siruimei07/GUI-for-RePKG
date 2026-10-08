@@ -816,6 +816,12 @@ internal static class ProjectBrowserProjectionRegressionTests
            || method.DeclaringType == typeof(BitmapEncoder)
            || method.DeclaringType?.IsSubclassOf(typeof(BitmapEncoder)) == true;
 
+    private static readonly string[] FilePInvokeNameFragments =
+    [
+        "File", "Directory", "Path", "FindFirst", "FindNext", "FindClose",
+        "MapView", "UnmapView"
+    ];
+
     private static bool IsFilePInvoke(MethodBase method)
     {
         var import = method.GetCustomAttribute<DllImportAttribute>();
@@ -827,11 +833,8 @@ internal static class ProjectBrowserProjectionRegressionTests
         var entryPoint = string.IsNullOrWhiteSpace(import.EntryPoint)
             ? method.Name
             : import.EntryPoint;
-        return new[]
-        {
-            "File", "Directory", "Path", "FindFirst", "FindNext", "FindClose",
-            "MapView", "UnmapView"
-        }.Any(fragment => entryPoint.Contains(fragment, StringComparison.OrdinalIgnoreCase));
+        return FilePInvokeNameFragments.Any(fragment =>
+            entryPoint.Contains(fragment, StringComparison.OrdinalIgnoreCase));
     }
 
     private static bool IsPreviewDecoderBoundary(MethodBase method)
@@ -939,7 +942,7 @@ internal static class ProjectBrowserProjectionRegressionTests
     private static string AllowedPathProbe(string left, string right)
         => Path.GetFullPath(Path.Combine(left, right));
 
-    private static readonly IReadOnlyDictionary<int, OpCode> IlOpCodes = typeof(OpCodes)
+    private static readonly Dictionary<int, OpCode> IlOpCodes = typeof(OpCodes)
         .GetFields(BindingFlags.Public | BindingFlags.Static)
         .Where(field => field.FieldType == typeof(OpCode))
         .Select(field => (OpCode)field.GetValue(null)!)
@@ -1629,7 +1632,7 @@ internal static class ProjectBrowserProjectionRegressionTests
     private static void Require(
         bool condition,
         string contract,
-        ICollection<string> missing)
+        List<string> missing)
     {
         if (!condition)
         {

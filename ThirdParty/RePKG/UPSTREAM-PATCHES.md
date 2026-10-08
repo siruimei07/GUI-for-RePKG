@@ -20,15 +20,40 @@ they are not represented as unmodified upstream code.
   decoder failures are reported as controlled `UnsafeTexException` failures.
 - `Texture/Helpers/DXT.cs` now requires the exact block payload size before
   allocating its RGBA result.
+- Conversion staging/native pixel storage also debits the same file and batch
+  decoded-byte limits before image allocation. PNG reserves eight bytes per
+  cropped output pixel; GIF reserves ten bytes for every expanded frame pixel,
+  including repeated references to the same source image.
+- Rotated GIF frame dimensions must match the canvas during parsing, before
+  conversion can allocate a large canvas for an incompatible tiny frame.
 
 Regression coverage: `TexBudgetRegressionTests` exercises structural failures,
 malicious-fixture timing, cumulative overflow, and every public numeric limit at
 `limit-1`, `limit`, and `limit+1`.
 
-## ImageSharp ownership and bounded encoding
+## Windows image encoding and bounded output
 
-- `TexToImageConverter` explicitly disposes source images, GIF canvases,
-  sequence images, frame clones, and streams on success and failure paths.
+- `TexToImageConverter` uses Windows WPF/WIC PNG and GIF encoders. The
+  ImageSharp dependency and custom ImageSharp pixel interfaces were removed.
+  `RePKG.Application` targets `net10.0-windows` with WPF enabled;
+  `RePKG.Core` retains its `netstandard2.0` target.
+- `TexPixelConverter` copies only the required crop, translates RGBA/RG88/R8
+  into BGRA, and performs right-angle rotations with exact pixel indexing.
+  PNG crops remain centered, matching the earlier converter.
+- Frozen WPF bitmap sources remain scoped to each encoding operation. GIFs
+  are encoded one frame at a time, so the encoder does not retain every
+  expanded frame. Native WIC resources follow WPF's managed lifetime; they
+  are not treated as `IDisposable`. Streams are disposed and encoder frame
+  references are cleared on success and failure.
+- GIF frames with up to 256 colors use exact palettes. Larger palettes use
+  WIC quantization; transparency reserves palette index zero and uses the
+  GIF binary alpha threshold of 128. The GIF palette limit is 256 entries.
+- WPF's GIF encoder does not support frame metadata. `GifFrameAssembler`
+  validates each single-frame WIC output, copies its palette and compressed
+  pixels, and writes explicit frame delays using the original float midpoint
+  rounding. Unspecified disposal and play-once behavior match the prior
+  converter defaults. It rejects malformed
+  blocks, missing palettes, mismatched dimensions and extra images.
 - PNG/GIF conversion validates a conservative encoded upper bound before image
   allocation and writes through a bounded stream so output cannot exceed the
   file budget.
@@ -36,8 +61,12 @@ malicious-fixture timing, cumulative overflow, and every public numeric limit at
   and the application service shares one batch budget across an unpack request.
 
 Regression coverage: `TexOwnershipRegressionTests` checks raw and GIF loops,
-ImageSharp undisposed-allocation diagnostics, process memory/handle bounds, and
-encoding-failure cleanup.
+output-buffer collection, process memory/handle bounds, and later-frame
+failure cleanup. `GifBudgetSecurityRegressionTests` checks decoded-budget
+exhaustion before allocation, canvas validation, bounded span/async output,
+decoded PNG/GIF pixels, alpha, rotation, palette quantization, frame order,
+delays and disposal. `TexPixelAndGifContainerRegressionTests` additionally
+exercises pixel mapping and GIF framing without Windows image APIs.
 
 ## Bounded C strings
 
@@ -51,9 +80,10 @@ stream position, and an oversized version 4 condition.
 
 ## RG88 pixel semantics
 
-- `Texture/Helpers/RG88.cs` fixes boxed equality to compare `RG88` values and
-  converts pixels as grayscale `G,G,G` with alpha `R`, consistent with the
-  type's established vector/color semantics.
+- `Texture/Helpers/RG88.cs` is a small value type with boxed equality and a
+  BGRA conversion. It interprets grayscale as `G,G,G` and alpha as `R`,
+  preserving the established TEX pixel semantics without a codec-specific
+  pixel interface.
 
 Regression coverage: `TexStringAndPixelRegressionTests` checks equality/hash
 and converts a minimal real RG88 TEX through the product adapter to PNG.
@@ -86,6 +116,8 @@ assembly identity check, and license/notice hash comparison.
 
 ## Deliberate non-changes
 
-- ImageSharp remains on the repository's 2.1.x line; a major-version migration
-  is outside the v1.2.2 patch scope.
+- Already encoded image and video TEX payloads retain their passthrough
+  behavior. Output-extension selection retains the upstream adapter contract.
+- The upstream notice file, including its Apache 2.0 text also used for
+  XamlAnimatedGif attribution, remains intact.
 - Unrelated RePKG naming, style, analyzer, and legacy API issues are unchanged.

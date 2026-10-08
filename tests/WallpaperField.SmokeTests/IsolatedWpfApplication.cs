@@ -22,9 +22,7 @@ internal static class IsolatedWpfApplication
                 ?? throw new MissingMethodException(
                     typeof(WallpaperField.App).FullName,
                     "Application_Startup");
-            var startupHandler = (StartupEventHandler)startupMethod.CreateDelegate(
-                typeof(StartupEventHandler),
-                application);
+            var startupHandler = startupMethod.CreateDelegate<StartupEventHandler>(application);
             application.Startup -= startupHandler;
             return application;
         }

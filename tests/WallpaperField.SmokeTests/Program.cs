@@ -22,6 +22,20 @@ if (args.Length == 1
 }
 
 if (args.Length == 1
+    && string.Equals(args[0], "--tex-hardening-only", StringComparison.Ordinal))
+{
+    TexBudgetRegressionTests.RunBudgetBoundaryTests(Assert);
+    GifBudgetSecurityRegressionTests.Run(Assert);
+    TexPixelAndGifContainerRegressionTests.Run(Assert);
+    TexStringAndPixelRegressionTests.RunCStringTests(Assert);
+    await TexStringAndPixelRegressionTests.RunRg88TestsAsync(Assert);
+    TexOwnershipRegressionTests.Run(Assert);
+    TexBudgetRegressionTests.RunStructuralTests(Assert);
+    Console.WriteLine(metrics.CreateSuccessSummary());
+    return;
+}
+
+if (args.Length == 1
     && string.Equals(args[0], "--project-browser-preview-only", StringComparison.Ordinal))
 {
     await ProjectBrowserPreviewRegressionTests.RunAsync(Assert);
@@ -121,11 +135,15 @@ try
     Directory.CreateDirectory(sourceRoot);
 
     ReleaseContractTests.Run(Assert);
+    GifPreviewSafetyRegressionTests.Run(Assert);
+    PackageBudgetRegressionTests.Run(Assert);
+    await LibraryPreviewSafetyRegressionTests.RunAsync(Assert);
     await RoadmapBehaviorRegressionTests.RunAsync(Assert);
     await CoordinatorRegressionTests.RunAsync(Assert);
     await SessionBoundaryRegressionTests.RunAsync(Assert);
     await ProjectBrowserFoundationRegressionTests.RunAsync(Assert);
     await ProjectBrowserProjectionRegressionTests.RunAsync(Assert);
+    await BrowserPerformanceHardeningRegressionTests.RunAsync(Assert);
     ProjectBrowserNavigationRegressionTests.Run(Assert);
     await ProjectBrowserPreviewRegressionTests.RunAsync(Assert);
     await ProjectBrowserUiRegressionTests.RunAsync(Assert);
@@ -144,6 +162,8 @@ try
     await OutputPlanningRegressionTests.RunAsync(Assert);
     await TransactionRegressionTests.RunAsync(Assert);
     TexBudgetRegressionTests.RunBudgetBoundaryTests(Assert);
+    GifBudgetSecurityRegressionTests.Run(Assert);
+    TexPixelAndGifContainerRegressionTests.Run(Assert);
     TexStringAndPixelRegressionTests.RunCStringTests(Assert);
     await TexStringAndPixelRegressionTests.RunRg88TestsAsync(Assert);
     TexOwnershipRegressionTests.Run(Assert);
@@ -1172,10 +1192,10 @@ async Task ValidateReducedMotionGifPreviewAsync(string path)
                         return;
                     }
 
-                    if (image.Source is not System.Windows.Media.Imaging.BitmapImage { IsFrozen: true })
+                    if (image.Source is not System.Windows.Media.Imaging.BitmapSource { IsFrozen: true })
                     {
                         Finish(new InvalidOperationException(
-                            "Reduced motion did not publish a frozen BitmapImage first frame."));
+                            "Reduced motion did not publish a frozen BitmapSource first frame."));
                         return;
                     }
 
@@ -1194,7 +1214,7 @@ async Task ValidateReducedMotionGifPreviewAsync(string path)
                 if (phase == 2 && image.Source is not null)
                 {
                     if (animator is not null
-                        || image.Source is not System.Windows.Media.Imaging.BitmapImage { IsFrozen: true })
+                        || image.Source is not System.Windows.Media.Imaging.BitmapSource { IsFrozen: true })
                     {
                         Finish(new InvalidOperationException(
                             "Runtime reduced-motion toggle did not replace the animator with a frozen first frame."));

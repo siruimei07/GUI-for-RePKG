@@ -9,7 +9,7 @@
         <!-- Library mode replaces the route with an indexed media aperture. -->
         <Canvas x:Name="LibraryStageOverlay"
                 IsHitTestVisible="False"
-                Opacity="0.12">
+                Opacity="0">
             <Canvas.Style>
                 <Style TargetType="Canvas">
                     <Setter Property="Visibility" Value="Collapsed" />
@@ -20,16 +20,16 @@
                     </Style.Triggers>
                 </Style>
             </Canvas.Style>
-            <Path Stroke="{DynamicResource InkBrush}"
+            <Path Stroke="{DynamicResource BorderBrush}"
                   StrokeThickness="1"
                   Data="M 64,300 L 64,258 L 104,258 M 64,300 L 64,660 L 104,660 M 1040,258 L 1080,258 L 1080,300 M 1040,660 L 1080,660 L 1080,620" />
-            <Line X1="128" Y1="286" X2="1016" Y2="286" Stroke="{DynamicResource InkBrush}" StrokeDashArray="1,12" />
-            <Line X1="128" Y1="632" X2="1016" Y2="632" Stroke="{DynamicResource InkBrush}" StrokeDashArray="1,12" />
+            <Line X1="128" Y1="286" X2="1016" Y2="286" Stroke="{DynamicResource BorderBrush}" StrokeDashArray="1,12" />
+            <Line X1="128" Y1="632" X2="1016" Y2="632" Stroke="{DynamicResource BorderBrush}" StrokeDashArray="1,12" />
             <TextBlock Canvas.Left="82" Canvas.Top="318"
-                       FontFamily="Arial Narrow"
+                       FontFamily="Segoe UI"
                        FontSize="62"
                        FontWeight="Black"
-                       Foreground="{DynamicResource InkBrush}"
+                       Foreground="{DynamicResource TextPrimaryBrush}"
                        Text="MEDIA / CATALOG" />
             <TextBlock Canvas.Left="84" Canvas.Top="382"
                        Style="{StaticResource TechnicalLabel}"
@@ -39,7 +39,7 @@
         <Grid x:Name="LibraryView" RenderTransformOrigin="0.5,0.5">
             <Grid.Style>
                 <Style TargetType="Grid">
-                    <Setter Property="Margin" Value="34,24,28,20" />
+                    <Setter Property="Margin" Value="20,16,20,16" />
                     <Setter Property="Visibility" Value="Collapsed" />
                     <Style.Triggers>
                         <DataTrigger Binding="{Binding IsLibraryPage}" Value="True">
@@ -47,11 +47,11 @@
                         </DataTrigger>
                         <DataTrigger Binding="{Binding LayoutMode, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
                                      Value="{x:Static local:ShellLayoutMode.Compact}">
-                            <Setter Property="Margin" Value="22,16,18,14" />
+                            <Setter Property="Margin" Value="12,10,12,10" />
                         </DataTrigger>
                         <DataTrigger Binding="{Binding LayoutMode, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
                                      Value="{x:Static local:ShellLayoutMode.Regular}">
-                            <Setter Property="Margin" Value="28,20,22,16" />
+                            <Setter Property="Margin" Value="16,12,16,12" />
                         </DataTrigger>
                     </Style.Triggers>
                 </Style>
@@ -64,7 +64,7 @@
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
-                    <Grid x:Name="LibraryPageHeader" Grid.Row="0" Margin="0,0,0,18">
+                    <Grid x:Name="LibraryPageHeader" Grid.Row="0" Margin="0,0,0,12">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
@@ -75,12 +75,12 @@
                                        Foreground="{DynamicResource TextMutedBrush}"
                                        Text="LOCAL ARCHIVE / 03 · OUTPUT CATALOG" />
                             <TextBlock x:Name="LibraryPageTitle"
-                                       Margin="0,8,0,0"
+                                       Margin="0,5,0,0"
                                        Style="{StaticResource SectionTitle}"
                                        AutomationProperties.HeadingLevel="Level1"
                                        Text="输出壁纸库" />
                             <TextBlock x:Name="LibraryDescription"
-                                       Margin="2,9,0,0"
+                                       Margin="0,6,0,0"
                                        MaxWidth="650"
                                        FontSize="13"
                                        Foreground="{DynamicResource TextMutedBrush}"
@@ -111,7 +111,7 @@
                                 </Style>
                             </StackPanel.Style>
                             <TextBlock HorizontalAlignment="Right" Style="{StaticResource TechnicalLabel}" Text="AVAILABLE RECORDS" />
-                            <TextBlock HorizontalAlignment="Right" Margin="0,2,0,0" FontFamily="Arial Narrow" FontSize="34" FontWeight="Bold" Text="{Binding LibrarySession.Count, StringFormat={}{0:00}}" />
+                            <TextBlock HorizontalAlignment="Right" Margin="0,2,0,0" FontFamily="Segoe UI" FontSize="24" FontWeight="Bold" Text="{Binding LibrarySession.Count, StringFormat={}{0:00}}" />
                         </StackPanel>
                         <StackPanel x:Name="LibraryActionPanel"
                                     Grid.Column="2"
@@ -141,17 +141,17 @@
 
                     <Border x:Name="LibraryPathPanel"
                             Grid.Row="1"
-                            Margin="0,0,0,14"
-                            Padding="18,14"
+                            Margin="0,0,0,10"
+                            Padding="14,12"
                             Background="{DynamicResource InkBrush}"
-                            CornerRadius="15">
+                            CornerRadius="3">
                         <Grid>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
-                            <Border Width="34" Height="34" Background="{DynamicResource SignalBrush}" CornerRadius="11">
+                            <Border Width="34" Height="34" Background="{DynamicResource AccentActionBrush}" CornerRadius="3">
                                 <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" FontFamily="Segoe Fluent Icons" FontSize="14" Foreground="{DynamicResource SignalTextBrush}" Text="&#xE8B7;" />
                             </Border>
                             <StackPanel Grid.Column="1" Margin="13,0,18,0" VerticalAlignment="Center">
@@ -162,7 +162,7 @@
                                     MinWidth="116"
                                     Style="{StaticResource GhostButton}"
                                     Foreground="{DynamicResource PaperBrush}"
-                                    BorderBrush="{DynamicResource Paper24Brush}"
+                                    BorderBrush="{DynamicResource BorderStrongBrush}"
                                     Command="{Binding BrowseOutputCommand}"
                                     Content="更换目录" />
                         </Grid>
@@ -171,11 +171,11 @@
                     <Border x:Name="LibraryProblemSummary"
                             Grid.Row="2"
                             Margin="0,0,0,12"
-                            Padding="14,11"
-                            Background="{DynamicResource PaperElevatedBrush}"
+                            Padding="12,9"
+                            Background="{DynamicResource SurfaceBrush}"
                             BorderBrush="{DynamicResource SignalPressedBrush}"
-                            BorderThickness="5,1,1,1"
-                            CornerRadius="12"
+                            BorderThickness="3,1,1,1"
+                            CornerRadius="3"
                             AutomationProperties.LiveSetting="Polite">
                         <Grid>
                             <Grid.ColumnDefinitions>
@@ -183,14 +183,14 @@
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
-                            <Border Width="24" Height="24" Background="{DynamicResource SignalBrush}" CornerRadius="8">
+                            <Border Width="24" Height="24" Background="{DynamicResource AccentActionBrush}" CornerRadius="3">
                                 <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" FontWeight="Black" Foreground="{DynamicResource SignalTextBrush}" Text="!" />
                             </Border>
                             <StackPanel Grid.Column="1" Margin="0,0,14,0">
                                 <TextBlock Style="{StaticResource TechnicalLabel}" Text="PROBLEM SUMMARY / 输出图库" />
                                 <TextBlock Margin="0,4,0,0"
                                            FontSize="11"
-                                           Foreground="{DynamicResource InkBrush}"
+                                           Foreground="{DynamicResource TextPrimaryBrush}"
                                            Text="{Binding ProblemCenterSession.LibrarySummary}" />
                             </StackPanel>
                             <Button Grid.Column="2"
@@ -209,7 +209,7 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <StackPanel VerticalAlignment="Center">
-                            <TextBlock FontSize="18" FontWeight="SemiBold" Text="壁纸记录" />
+                            <TextBlock FontSize="16" FontWeight="SemiBold" Text="壁纸记录" />
                             <TextBlock Margin="0,3,0,0"
                                        Style="{StaticResource TechnicalLabel}"
                                        Text="NAME FILTER / 实时筛选" />
@@ -217,7 +217,7 @@
                         <Border Grid.Column="1" Height="1" Margin="16,0" VerticalAlignment="Center" Background="{DynamicResource BorderBrush}" />
                         <Grid x:Name="LibrarySearchPanel"
                               Grid.Column="2"
-                              Height="50">
+                              Height="40">
                             <Grid.Style>
                                 <Style TargetType="Grid">
                                     <Setter Property="Width" Value="430" />
@@ -240,7 +240,7 @@
                                        IsHitTestVisible="False"
                                        FontFamily="Segoe Fluent Icons"
                                        FontSize="15"
-                                       Foreground="{DynamicResource InkBrush}"
+                                       Foreground="{DynamicResource TextPrimaryBrush}"
                                        Text="&#xE721;" />
                             <TextBlock Margin="47,0,154,0"
                                        VerticalAlignment="Center"
@@ -264,18 +264,18 @@
                                     HorizontalAlignment="Right"
                                     VerticalAlignment="Center"
                                     BorderThickness="1"
-                                    CornerRadius="8"
+                                    CornerRadius="3"
                                     IsHitTestVisible="False">
                                 <Border.Style>
                                     <Style TargetType="Border">
                                         <Setter Property="Margin" Value="0,0,7,0" />
-                                        <Setter Property="Background" Value="{DynamicResource PaperMutedBrush}" />
+                                        <Setter Property="Background" Value="{DynamicResource SurfaceMutedBrush}" />
                                         <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}" />
                                         <Style.Triggers>
                                             <DataTrigger Binding="{Binding LibrarySession.HasSearchText}" Value="True">
                                                 <Setter Property="Margin" Value="0,0,51,0" />
-                                                <Setter Property="Background" Value="{DynamicResource SignalBrush}" />
-                                                <Setter Property="BorderBrush" Value="{DynamicResource InkBrush}" />
+                                                <Setter Property="Background" Value="{DynamicResource AccentActionBrush}" />
+                                                <Setter Property="BorderBrush" Value="{DynamicResource SignalBrush}" />
                                             </DataTrigger>
                                         </Style.Triggers>
                                     </Style>
@@ -284,8 +284,17 @@
                                             FontFamily="Consolas"
                                             FontSize="10"
                                             FontWeight="SemiBold"
-                                            Foreground="{DynamicResource InkBrush}"
                                             AutomationProperties.LiveSetting="Polite">
+                                     <TextBlock.Style>
+                                         <Style TargetType="TextBlock">
+                                             <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+                                             <Style.Triggers>
+                                                 <DataTrigger Binding="{Binding LibrarySession.HasSearchText}" Value="True">
+                                                     <Setter Property="Foreground" Value="{DynamicResource SignalTextBrush}" />
+                                                 </DataTrigger>
+                                             </Style.Triggers>
+                                         </Style>
+                                     </TextBlock.Style>
                                      <AutomationProperties.Name>
                                          <MultiBinding StringFormat="输出壁纸库匹配 {0} 项，共 {1} 项">
                                              <Binding Path="FilteredLibraryCount" />
@@ -328,7 +337,7 @@
                                         <Style.Triggers>
                                             <DataTrigger Binding="{Binding LibrarySession.HasSearchText}" Value="True">
                                                 <Setter Property="Height" Value="3" />
-                                                <Setter Property="Background" Value="{DynamicResource SignalBrush}" />
+                                                <Setter Property="Background" Value="{DynamicResource AccentActionBrush}" />
                                             </DataTrigger>
                                         </Style.Triggers>
                                     </Style>
@@ -374,11 +383,11 @@
                             </ListBox.ItemsPanel>
                         </ListBox>
 
-                        <Border Padding="34"
-                                Background="{DynamicResource PaperBrush}"
+                        <Border Padding="20"
+                                Background="{DynamicResource BackgroundBrush}"
                                 BorderBrush="{DynamicResource BorderBrush}"
                                 BorderThickness="1"
-                                CornerRadius="16">
+                                CornerRadius="3">
                             <Border.Style>
                                 <Style TargetType="Border">
                                     <Setter Property="Visibility" Value="Collapsed" />
@@ -390,7 +399,7 @@
                                 </Style>
                             </Border.Style>
                             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-                                    <Border Width="62" Height="62" BorderBrush="{DynamicResource BorderStrongBrush}" BorderThickness="1" CornerRadius="31">
+                                    <Border Width="62" Height="62" BorderBrush="{DynamicResource BorderStrongBrush}" BorderThickness="1" CornerRadius="3">
                                         <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" FontFamily="Segoe Fluent Icons" FontSize="25" Foreground="{DynamicResource TextMutedBrush}" Text="&#xE838;" />
                                 </Border>
                                 <TextBlock Margin="0,16,0,0" HorizontalAlignment="Center" FontSize="16" FontWeight="SemiBold" Text="{Binding LibrarySession.EmptyTitle}" />

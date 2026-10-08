@@ -7,7 +7,7 @@ internal sealed record StartupOptions
 {
     private const double MaximumWindowDimension = 16_384d;
 
-    private static readonly IReadOnlyDictionary<string, OptionDescriptor> OptionTable =
+    private static readonly Dictionary<string, OptionDescriptor> OptionTable =
         new Dictionary<string, OptionDescriptor>(StringComparer.OrdinalIgnoreCase)
         {
             ["--source"] = new(true, ParseRequiredText, (state, value) => state.SourceDirectory = (string)value!),

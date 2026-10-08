@@ -13,6 +13,18 @@ using WallpaperField.ViewModels;
 internal static class UiStructureRegressionTests
 {
     private const string XamlNamespace = "http://schemas.microsoft.com/winfx/2006/xaml";
+    private static readonly string[] PageCodeFileNames =
+    [
+        "ScanPageView.xaml.cs",
+        "LibraryPageView.xaml.cs",
+        "ProblemCenterView.xaml.cs"
+    ];
+    private static readonly string[] SnapshotPageTypeNames =
+    [
+        "WallpaperField.Views.ScanPageView",
+        "WallpaperField.Views.LibraryPageView",
+        "WallpaperField.Views.ProblemCenterView"
+    ];
 
     internal static void Run(Action<bool, string> assert)
     {
@@ -148,7 +160,7 @@ internal static class UiStructureRegressionTests
                && shell.ScanIssueCount == 2
                && shell.LibraryIssueCount == 1
                && shell.HighestOpenIssueSeverity == AppIssueSeverity.Error
-               && shell.ScanIssueSummary.Contains("2", StringComparison.Ordinal)
+               && shell.ScanIssueSummary.Contains('2')
                && shell.ScanIssueSummary.Contains("警告", StringComparison.Ordinal)
                && shell.LibraryIssueSummary.Contains("错误", StringComparison.Ordinal),
             "Problem summaries do not project open counts and highest severity by page source.");
@@ -902,12 +914,7 @@ internal static class UiStructureRegressionTests
         var windowCode = File.ReadAllText(FindRepositoryFile("MainWindow.xaml.cs"));
         var pageCode = string.Join(
             Environment.NewLine,
-            new[]
-            {
-                "ScanPageView.xaml.cs",
-                "LibraryPageView.xaml.cs",
-                "ProblemCenterView.xaml.cs"
-            }.Select(fileName => File.ReadAllText(
+            PageCodeFileNames.Select(fileName => File.ReadAllText(
                 FindRepositoryFile(Path.Combine("Views", fileName)))));
         var positionerCode = File.ReadAllText(
             FindRepositoryFile(Path.Combine("Views", "SnapshotListPositioner.cs")));
@@ -917,12 +924,7 @@ internal static class UiStructureRegressionTests
             "Programmatic list positioning still calls ancestor BringIntoView.");
         assert(!windowCode.Contains("ResultsList", StringComparison.Ordinal)
                && !windowCode.Contains("ProblemDetails_", StringComparison.Ordinal)
-               && new[]
-               {
-                   "WallpaperField.Views.ScanPageView",
-                   "WallpaperField.Views.LibraryPageView",
-                   "WallpaperField.Views.ProblemCenterView"
-               }.All(typeName =>
+               && SnapshotPageTypeNames.All(typeName =>
                {
                    var method = typeof(WallpaperField.MainWindow).Assembly
                        .GetType(typeName, throwOnError: true)!

@@ -1,9 +1,12 @@
+using System.Diagnostics.CodeAnalysis;
 using WallpaperField.Models;
 
 namespace WallpaperField.Services;
 
 public sealed class PathInputValidator
 {
+    [SuppressMessage("Performance", "CA1822:Mark members as static",
+        Justification = "Preserve the public validator instance API used by injected services and callers.")]
     public PathValidationResult ValidateSyntax(PathValidationRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);

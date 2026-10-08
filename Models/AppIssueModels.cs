@@ -460,9 +460,9 @@ public sealed class AppIssueStore
         => (int)Math.Min((long)left + right, int.MaxValue);
 
     private int ApplyResolutions(
-        IReadOnlyList<AppIssueResolutionRequest> requests)
+        AppIssueResolutionRequest[] requests)
     {
-        if (requests.Count == 0 || _items.Count == 0)
+        if (requests.Length == 0 || _items.Count == 0)
         {
             return 0;
         }
@@ -527,21 +527,21 @@ public sealed class AppIssueStore
         return resolved;
     }
 
-    private int ApplyPublications(IReadOnlyList<AppIssue> publications)
+    private int ApplyPublications(AppIssue[] publications)
     {
-        if (publications.Count == 0)
+        if (publications.Length == 0)
         {
             return 0;
         }
 
-        if ((long)_items.Count + publications.Count > MaxVisibleIssues)
+        if ((long)_items.Count + publications.Length > MaxVisibleIssues)
         {
             foreach (var issue in publications)
             {
                 ApplyPublicationAtBudget(issue);
             }
 
-            return publications.Count;
+            return publications.Length;
         }
 
         var openProjects = new Dictionary<ProjectIssueKey, int>();
@@ -599,7 +599,7 @@ public sealed class AppIssueStore
             }
         }
 
-        return publications.Count;
+        return publications.Length;
     }
 
     private void ApplyPublicationAtBudget(AppIssue issue)

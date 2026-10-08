@@ -98,7 +98,7 @@ internal static class SnapshotCaptureRegressionTests
     private static void VerifyWriterSurface(Action<bool, string> assert)
     {
         ISnapshotPngWriter writer = new AtomicSnapshotPngWriter();
-        ISnapshotDiagnosticWriter diagnosticWriter =
+        AppLogSnapshotDiagnosticWriter diagnosticWriter =
             new AppLogSnapshotDiagnosticWriter();
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
@@ -136,7 +136,7 @@ internal static class SnapshotCaptureRegressionTests
         assert(failure is ArgumentException
                && stages.Count == 0
                && !File.Exists(target)
-               && !FindOwnedTemps(target).Any(),
+               && FindOwnedTemps(target).Length == 0,
             "A non-frozen bitmap crossed the writer boundary or performed filesystem work.");
     }
 
@@ -239,7 +239,7 @@ internal static class SnapshotCaptureRegressionTests
                     .GetResult());
             assert(failure is ControlledSnapshotWriteException
                    && File.ReadAllBytes(target).SequenceEqual(sentinel)
-                   && !FindOwnedTemps(target).Any(),
+                   && FindOwnedTemps(target).Length == 0,
                 $"A controlled {stage} failure changed the old target or left an owned temp file.");
         }
 
@@ -257,7 +257,7 @@ internal static class SnapshotCaptureRegressionTests
                 .GetResult());
         assert(absentFailure is ControlledSnapshotWriteException
                && !File.Exists(absentTarget)
-               && !FindOwnedTemps(absentTarget).Any(),
+               && FindOwnedTemps(absentTarget).Length == 0,
             "A failed new snapshot created a target or left an owned temp file.");
     }
 
@@ -280,7 +280,7 @@ internal static class SnapshotCaptureRegressionTests
                 .GetResult());
         assert(failure is IOException
                && ReadLockedBytes(lockStream).SequenceEqual(sentinel)
-               && !FindOwnedTemps(target).Any(),
+               && FindOwnedTemps(target).Length == 0,
             "A locked destination was overwritten, deleted, or left with an owned temp file.");
     }
 
@@ -306,7 +306,7 @@ internal static class SnapshotCaptureRegressionTests
                 .GetResult());
         assert(failure is IOException
                && File.ReadAllBytes(target).SequenceEqual(rivalBytes)
-               && !FindOwnedTemps(target).Any(),
+               && FindOwnedTemps(target).Length == 0,
             "An initially absent target that appeared at CommitCritical was silently replaced.");
     }
 
@@ -333,7 +333,7 @@ internal static class SnapshotCaptureRegressionTests
                     .GetResult());
             assert(failure is OperationCanceledException
                    && File.ReadAllBytes(precommitTarget).SequenceEqual(precommitSentinel)
-                   && !FindOwnedTemps(precommitTarget).Any(),
+                   && FindOwnedTemps(precommitTarget).Length == 0,
                 "Cancellation before the commit boundary changed the old target or left a temp file.");
         }
 
@@ -359,7 +359,7 @@ internal static class SnapshotCaptureRegressionTests
                 committedSentinel,
                 assert);
             assert(cancellation.IsCancellationRequested
-                   && !FindOwnedTemps(committedTarget).Any(),
+                   && FindOwnedTemps(committedTarget).Length == 0,
                 "Cancellation after the commit-critical cutoff reversed success or left a temp file.");
         }
     }
@@ -392,7 +392,7 @@ internal static class SnapshotCaptureRegressionTests
                    Path.GetDirectoryName(temporaryPaths[0]),
                    Path.GetDirectoryName(target),
                    StringComparison.OrdinalIgnoreCase)
-               && !FindOwnedTemps(target).Any(),
+               && FindOwnedTemps(target).Length == 0,
             "Atomic PNG stages were out of order, ran on the caller, used another directory, or left a temp file.");
     }
 
@@ -439,7 +439,7 @@ internal static class SnapshotCaptureRegressionTests
         return bitmap;
     }
 
-    private static IEnumerable<string> FindOwnedTemps(string target)
+    private static string[] FindOwnedTemps(string target)
     {
         var directory = Path.GetDirectoryName(target)!;
         var pattern = $".{Path.GetFileName(target)}.*.snapshot.tmp";

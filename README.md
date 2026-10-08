@@ -5,23 +5,15 @@
 当前维护版本为 **v1.3.0**；完整改进与已知限制见 [v1.3.0 release notes](docs/releases/v1.3.0.md)。
 
 > [!NOTE]
-> 这是一个非官方社区项目，与 Wallpaper Engine、Arknights: Endfield、Hypergryph 或其关联公司无隶属或背书关系。界面采用原创的 Endfield-inspired 技术终端风格，不包含官方徽标、角色图、宣传素材或字体。
+> 这是一个非官方社区项目，与 Wallpaper Engine 或其关联公司无隶属或背书关系。界面采用深灰与蓝色的桌面图库样式，不包含官方徽标、角色图、宣传素材或字体。
 
-![项目浏览器：高密度网格、组合筛选、详情与批量处理托盘](docs/images/project-browser.png)
+![项目浏览器：高密度网格、组合筛选、详情与批量处理托盘](https://github.com/siruimei07/GUI-for-RePKG/releases/download/v1.3.0/browser-wide.png)
 
-_项目浏览器：成功扫描后以虚拟化网格浏览同一份稳定快照；当前项、键盘焦点和批量选择彼此独立。_
+_项目浏览器：方形封面、紧凑工具栏与右侧详情；当前项、键盘焦点和批量选择彼此独立。_
 
-![紧凑扫描中心：组合筛选并选择当前匹配的可处理壁纸](docs/images/scan-center.png)
+![窄窗口项目浏览器](https://github.com/siruimei07/GUI-for-RePKG/releases/download/v1.3.0/browser-compact.png)
 
-_Compact 扫描中心：显示当前成功快照、组合筛选、批量选择、真实进度与可见取消入口。_
-
-![输出壁纸库：浏览已保存的壁纸记录](docs/images/output-library.png)
-
-_输出壁纸库：递归读取稳定的 metadata 记录；点击卡片即可在 Windows 文件资源管理器中打开对应文件夹。_
-
-![问题中心：筛选、复制并导出结构化诊断](docs/images/problem-center.png)
-
-_问题中心：集中浏览完整问题、磁盘事实与下一步操作；扫描和图库页只保留紧凑摘要。_
+_窄窗口保留搜索、筛选与批量操作，详情通过浮层查看。以上为 v1.3.0 Windows 实际运行截图，封面使用生成的抽象测试图案。_
 
 ## 功能概览
 
@@ -45,7 +37,7 @@ _问题中心：集中浏览完整问题、磁盘事实与下一步操作；扫�
 - 独立问题中心支持严重度/来源/文本筛选、复制、清理已解决问题、打开日志/输出目录、查看版本与导出默认脱敏诊断。
 - 大型壁纸库使用回收式列表虚拟化和异步图片解码，深度滚动时不会反复创建全部卡片。
 - 扫描、解包与图库刷新均有进度/状态和可见取消；关闭窗口会先等待安全提交或回滚完成。
-- High Contrast 使用 Windows 系统颜色；键盘焦点在深/浅/黄色表面保持可见；减少动态效果同时覆盖页面、控件和 GIF。
+- High Contrast 使用 Windows 系统颜色；键盘焦点在深色与蓝色表面保持可见；减少动态效果同时覆盖页面、控件和 GIF。
 - 发布版是 Windows x64 自包含单文件 EXE，不需要另外安装 .NET 或 RePKG。
 
 ## 运行要求

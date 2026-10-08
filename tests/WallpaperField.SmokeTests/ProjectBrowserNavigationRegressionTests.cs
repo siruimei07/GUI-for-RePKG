@@ -66,30 +66,39 @@ internal static class ProjectBrowserNavigationRegressionTests
             "BrowsePageView is not a public sealed UserControl route boundary.");
 
         var document = XDocument.Load(FindRepositoryFile("MainWindow.xaml"));
-        var operationLabel = document.Descendants().FirstOrDefault(element =>
-            element.Name.LocalName == "TextBlock"
-            && (string?)element.Attribute("Text") == "OPERATIONS / 04");
-        assert(operationLabel is not null,
+        var rail = FindNamedElement(document, "NavigationRail");
+        var operationLabel = FindNamedElement(document, "NavSectionLabel");
+        assert(rail is not null
+               && operationLabel?.Ancestors().Contains(rail) == true
+               && Attribute(operationLabel, "Text")?.EndsWith("04", StringComparison.Ordinal) == true
+               && ((string?)operationLabel.Attribute("AutomationProperties.Name"))
+                   ?.Contains("4 个页面", StringComparison.Ordinal) == true,
             "Main rail does not announce the four-operation route count.");
 
         var expected = new[]
         {
-            ("NavigateScanCommand", "01", "扫描中心"),
-            ("NavigateBrowseCommand", "02", "项目浏览"),
-            ("NavigateLibraryCommand", "03", "输出壁纸库"),
-            ("NavigateProblemsCommand", "04", "问题中心")
+            ("NavigateScanCommand", "扫描中心", "扫描中心"),
+            ("NavigateBrowseCommand", "项目浏览", "项目浏览"),
+            ("NavigateLibraryCommand", "输出库", "输出壁纸库"),
+            ("NavigateProblemsCommand", "问题中心", "问题中心")
         };
-        foreach (var (command, number, automationName) in expected)
+        var navigationButtons = rail?.Descendants()
+            .Where(element => element.Name.LocalName == "Button")
+            .ToArray() ?? [];
+        assert(navigationButtons.Length == expected.Length,
+            "Main rail does not expose exactly four page actions.");
+        foreach (var (command, label, automationName) in expected)
         {
-            var button = document.Descendants().FirstOrDefault(element =>
-                element.Name.LocalName == "Button"
-                && Attribute(element, "Command") == $"{{Binding {command}}}");
-            assert(button is not null
-                   && button.Attributes().Any(attribute => attribute.Value == automationName)
+            var matches = navigationButtons.Where(element =>
+                Attribute(element, "Command") == $"{{Binding {command}}}").ToArray();
+            var button = matches.Length == 0 ? null : matches[0];
+            assert(matches.Length == 1
+                   && button is not null
+                   && (string?)button.Attribute("AutomationProperties.Name") == automationName
                    && button.Descendants().Any(element =>
                        element.Name.LocalName == "TextBlock"
-                       && Attribute(element, "Text") == number),
-                $"Rail route {command} is missing number {number} or its automation name.");
+                       && Attribute(element, "Text") == label),
+                $"Rail route {command} must have one action with its visible label and automation name.");
         }
 
         var host = FindNamedElement(document, "BrowsePage");

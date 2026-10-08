@@ -376,7 +376,7 @@ internal static class TransactionalDirectoryCommitter
     private static void CreateSafeDirectoryChain(
         string rootDirectory,
         string targetDirectory,
-        ISet<string> createdDirectories)
+        HashSet<string> createdDirectories)
     {
         var relative = Path.GetRelativePath(rootDirectory, targetDirectory);
         if (relative == ".")
@@ -476,7 +476,7 @@ internal static class TransactionalDirectoryCommitter
         string path,
         string itemRoot,
         string requiredPrefix,
-        ICollection<Exception> errors)
+        List<Exception> errors)
     {
         try
         {

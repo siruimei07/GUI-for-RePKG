@@ -21,7 +21,10 @@ public sealed class ScanSession : ObservableObject
     private readonly TaskLifecycleCoordinator _taskLifecycleCoordinator;
     private readonly ProblemCenterSession _problemCenter;
     private readonly SynchronizationContext? _lifecycleOwnerContext;
+    private readonly Dispatcher? _ownerDispatcher;
     private readonly int _ownerThreadId;
+    private readonly object _progressGate = new();
+    private ScanProgressLease? _activeProgressLease;
     private Func<bool> _isClosing;
     private CancellationTokenSource? _pathValidationCancellation;
     private long _pathValidationVersion;
@@ -81,6 +84,9 @@ public sealed class ScanSession : ObservableObject
         _isClosing = isClosing ?? (() => false);
         _lifecycleOwnerContext = SynchronizationContext.Current
             ?? CaptureDispatcherContext();
+        _ownerDispatcher = _lifecycleOwnerContext is DispatcherSynchronizationContext
+            ? Dispatcher.FromThread(Thread.CurrentThread)
+            : null;
         _ownerThreadId = Environment.CurrentManagedThreadId;
 
         ScannedWallpapers.CollectionChanged += OnCollectionChanged;
@@ -347,7 +353,57 @@ public sealed class ScanSession : ObservableObject
         set => SetProperty(ref _selectedWallpaper, value);
     }
 
-    public async Task ScanAsync()
+    public Task ScanAsync()
+    {
+        // A WPF dispatcher may exist even when a legacy host has not installed
+        // SynchronizationContext.Current. Restore that owner for the complete
+        // operation so its awaits, progress, and coordinator cleanup stay on UI.
+        // Custom contexts are intentionally left to their caller: some consumers
+        // capture queued notification contexts without pumping operation awaits.
+        if (_lifecycleOwnerContext is not DispatcherSynchronizationContext ownerContext
+            || _ownerDispatcher is not { } dispatcher)
+        {
+            return ScanOnOwnerAsync();
+        }
+
+        if (dispatcher.HasShutdownStarted || dispatcher.HasShutdownFinished)
+        {
+            return Task.FromCanceled(new CancellationToken(canceled: true));
+        }
+
+        if (Environment.CurrentManagedThreadId == _ownerThreadId)
+        {
+            return InvokeScanWithOwnerContext(ownerContext);
+        }
+
+        try
+        {
+            // Observe queue abortion as well as execution: Post can silently
+            // discard the callback during dispatcher shutdown.
+            return dispatcher.InvokeAsync(() => InvokeScanWithOwnerContext(ownerContext))
+                .Task.Unwrap();
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or TaskCanceledException)
+        {
+            return Task.FromException(exception);
+        }
+    }
+
+    private Task InvokeScanWithOwnerContext(DispatcherSynchronizationContext ownerContext)
+    {
+        var previousContext = SynchronizationContext.Current;
+        try
+        {
+            SynchronizationContext.SetSynchronizationContext(ownerContext);
+            return ScanOnOwnerAsync();
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(previousContext);
+        }
+    }
+
+    private async Task ScanOnOwnerAsync()
     {
         try
         {
@@ -603,45 +659,58 @@ public sealed class ScanSession : ObservableObject
         Guid operationId,
         CancellationToken cancellationToken)
     {
-        if (!Directory.Exists(SourcePath))
-        {
-            ClearError();
-            CurrentStage = "FAILED";
-            _problemCenter.Publish(
-            [
-                AppIssue.Create(
-                    "SCAN_OPERATION_FAILED",
-                    AppIssueSeverity.Error,
-                    AppIssueSource.Scan,
-                    "扫描源目录在执行前已不存在或不可访问。",
-                    "目录状态在输入验证后发生变化；未执行扫描。",
-                    AppDiskFact.NotModified,
-                    AppIssueAction.ReviewInput,
-                    NormalizeIssueContext(SourcePath),
-                    operationId,
-                    SourcePath)
-            ]);
-            PresentError("壁纸目录不存在或当前不可访问");
-            throw new HandledScanException(
-                new DirectoryNotFoundException(
-                    "The validated scan directory is no longer available."));
-        }
-
+        // Freeze input before the first worker hop; edits during discovery must
+        // not change the identity of the request that owns this operation.
+        var request = new WallpaperScanRequest(SourcePath.Trim(), OutputPath.Trim());
         ClearError();
         ResetProgress();
         IsScanning = true;
         CurrentStage = "DISCOVERY";
         SetStatus("正在发现 Workshop 壁纸目录…", "Working");
 
-        var progress = new Progress<ScanProgress>(UpdateProgress);
+        var progressLease = new ScanProgressLease(operationId);
+        lock (_progressGate)
+        {
+            _activeProgressLease = progressLease;
+        }
+
+        var progress = new Progress<ScanProgress>(value => UpdateProgress(progressLease, value));
         try
         {
-            var request = new WallpaperScanRequest(
-                SourcePath.Trim(),
-                OutputPath.Trim());
-            var result = await _scanService
-                .ScanAsync(request, progress, cancellationToken)
+            var sourceExists = await Task.Run(
+                    () => Directory.Exists(request.SourceDirectory),
+                    cancellationToken).ConfigureAwait(true);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!sourceExists)
+            {
+                CloseProgressLease(progressLease);
+                CurrentStage = "FAILED";
+                _problemCenter.Publish(
+                [
+                    AppIssue.Create(
+                        "SCAN_OPERATION_FAILED",
+                        AppIssueSeverity.Error,
+                        AppIssueSource.Scan,
+                        "扫描源目录在执行前已不存在或不可访问。",
+                        "目录状态在输入验证后发生变化；未执行扫描。",
+                        AppDiskFact.NotModified,
+                        AppIssueAction.ReviewInput,
+                        NormalizeIssueContext(request.SourceDirectory),
+                        operationId,
+                        request.SourceDirectory)
+                ]);
+                PresentError("壁纸目录不存在或当前不可访问");
+                throw new HandledScanException(
+                    new DirectoryNotFoundException(
+                        "The validated scan directory is no longer available."));
+            }
+
+            var result = await Task.Run(
+                    () => _scanService.ScanAsync(request, progress, cancellationToken),
+                    cancellationToken)
                 .ConfigureAwait(true);
+            CloseProgressLease(progressLease);
+            cancellationToken.ThrowIfCancellationRequested();
 
             var identity = new ScanSnapshotIdentity(
                 OutputPathPolicy.NormalizeDirectoryPath(
@@ -750,12 +819,18 @@ public sealed class ScanSession : ObservableObject
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            CloseProgressLease(progressLease);
             CurrentStage = "CANCELED";
             SetStatus($"扫描已取消 · 已处理 {ScannedCount} 个目录", "Neutral");
             throw;
         }
+        catch (HandledScanException)
+        {
+            throw;
+        }
         catch (Exception exception)
         {
+            CloseProgressLease(progressLease);
             CurrentStage = "FAILED";
             _problemCenter.Publish(
             [
@@ -767,15 +842,16 @@ public sealed class ScanSession : ObservableObject
                     exception.Message,
                     AppDiskFact.NotModified,
                     AppIssueAction.Retry,
-                    NormalizeIssueContext(SourcePath),
+                    NormalizeIssueContext(request.SourceDirectory),
                     operationId,
-                    SourcePath)
+                    request.SourceDirectory)
             ]);
             PresentError("扫描未能完成", exception);
             throw new HandledScanException(exception);
         }
         finally
         {
+            CloseProgressLease(progressLease);
             IsScanning = false;
         }
     }
@@ -920,24 +996,51 @@ public sealed class ScanSession : ObservableObject
         _taskLifecycleCoordinator.RequestCancellation();
     }
 
-    private void UpdateProgress(ScanProgress progress)
+    private void CloseProgressLease(ScanProgressLease lease)
     {
-        ScannedCount = progress.ScannedCount;
-        TotalCount = progress.TotalCount;
-        ProgressValue = progress.Percent;
-        CurrentFolder = progress.CurrentFolder ?? string.Empty;
-        CurrentTitle = progress.CurrentTitle ?? string.Empty;
-        CurrentStage = progress.Stage.ToString();
-
-        if (!string.IsNullOrWhiteSpace(progress.Message))
+        lock (_progressGate)
         {
-            SetStatus(progress.Message, "Working");
-        }
-        else if (!string.IsNullOrWhiteSpace(CurrentFolder))
-        {
-            SetStatus($"正在扫描 · {Path.GetFileName(CurrentFolder)}", "Working");
+            if (ReferenceEquals(_activeProgressLease, lease))
+            {
+                _activeProgressLease = null;
+            }
         }
     }
+
+    private void UpdateProgress(ScanProgressLease lease, ScanProgress progress)
+    {
+        lock (_progressGate)
+        {
+            if (!ReferenceEquals(_activeProgressLease, lease)
+                || _taskLifecycleCoordinator.Current is not
+                {
+                    OperationId: var operationId,
+                    State: TaskLifecycleState.Running
+                }
+                || operationId != lease.OperationId)
+            {
+                return;
+            }
+
+            ScannedCount = progress.ScannedCount;
+            TotalCount = progress.TotalCount;
+            ProgressValue = progress.Percent;
+            CurrentFolder = progress.CurrentFolder ?? string.Empty;
+            CurrentTitle = progress.CurrentTitle ?? string.Empty;
+            CurrentStage = progress.Stage.ToString();
+
+            if (!string.IsNullOrWhiteSpace(progress.Message))
+            {
+                SetStatus(progress.Message, "Working");
+            }
+            else if (!string.IsNullOrWhiteSpace(CurrentFolder))
+            {
+                SetStatus($"正在扫描 · {Path.GetFileName(CurrentFolder)}", "Working");
+            }
+        }
+    }
+
+    private sealed record ScanProgressLease(Guid OperationId);
 
     private void ResetProgress()
     {
@@ -978,7 +1081,7 @@ public sealed class ScanSession : ObservableObject
     }
 
     private bool TryCreateProcessRequest(
-        IReadOnlyList<WallpaperRecord> items,
+        WallpaperRecord[] items,
         out FrozenWallpaperProcessRequest? request)
     {
         request = null;
@@ -990,7 +1093,7 @@ public sealed class ScanSession : ObservableObject
         var snapshot = ProjectSnapshot;
         if (snapshot is null
             || !IsCurrentScanIdentity()
-            || items.Count == 0)
+            || items.Length == 0)
         {
             request = null;
             return false;
@@ -1197,8 +1300,12 @@ public sealed class ScanSession : ObservableObject
         UpdateCommandStates();
     }
 
-    private static SynchronizationContext? CaptureDispatcherContext()
-        => Dispatcher.FromThread(Thread.CurrentThread) is { } dispatcher
+    private static DispatcherSynchronizationContext? CaptureDispatcherContext()
+        // Imaging can create an incidental Dispatcher on an MTA worker without
+        // a message pump. Only infer WPF UI ownership from an STA dispatcher;
+        // explicitly supplied synchronization contexts are captured separately.
+        => Thread.CurrentThread.GetApartmentState() == ApartmentState.STA
+            && Dispatcher.FromThread(Thread.CurrentThread) is { } dispatcher
             ? new DispatcherSynchronizationContext(dispatcher)
             : null;
 

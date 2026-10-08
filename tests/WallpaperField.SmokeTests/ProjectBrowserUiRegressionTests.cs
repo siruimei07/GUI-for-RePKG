@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Reflection;
 using System.Runtime.ExceptionServices;
@@ -32,6 +33,7 @@ internal static class ProjectBrowserUiRegressionTests
 {
     private const string XamlNamespace = "http://schemas.microsoft.com/winfx/2006/xaml";
     private const int RuntimeProjectCount = 1_000;
+    private static readonly string[] ChangingSnapshotFingerprints = ["A", "B", "C", "D"];
     private static readonly (
         double Width,
         double Height,
@@ -43,8 +45,8 @@ internal static class ProjectBrowserUiRegressionTests
         (1059d, 680d, "Compact", 3, 0d),
         (1060d, 760d, "Regular", 4, 294d),
         (1189d, 800d, "Regular", 4, 294d),
-        (1190d, 800d, "Wide", 5, 328d),
-        (1600d, 1000d, "Wide", 6, 328d)
+        (1190d, 800d, "Wide", 5, 300d),
+        (1600d, 1000d, "Wide", 6, 300d)
     ];
 
     internal static async Task RunAsync(Action<bool, string> assert)
@@ -223,7 +225,7 @@ internal static class ProjectBrowserUiRegressionTests
             var name = element.Attributes().FirstOrDefault(attribute =>
                 attribute.Name.LocalName == "AutomationProperties.Name")?.Value;
             if (string.IsNullOrWhiteSpace(content)
-                || content.StartsWith("{", StringComparison.Ordinal)
+                || content.StartsWith('{')
                 || string.IsNullOrWhiteSpace(name))
             {
                 continue;
@@ -638,6 +640,18 @@ internal static class ProjectBrowserUiRegressionTests
         window.Height = 1000;
         PumpLayout(window);
 
+        assert(Math.Abs(window.ActualWidth - window.Width) < 1.0
+               && Math.Abs(window.ActualHeight - window.Height) < 1.0
+               && window.LayoutMode == WallpaperField.ShellLayoutMode.Wide
+               && visualLayout.IsSixColumn,
+            "Task 7 visual host did not realize its requested 1600x1000 Wide viewport "
+            + "and initial six-column layout before details inspection: "
+            + $"requested={window.Width:0.###}x{window.Height:0.###}; "
+            + $"actual={window.ActualWidth:0.###}x{window.ActualHeight:0.###}; "
+            + $"mode={window.LayoutMode}; initial_columns={visualLayout.ColumnCount}; "
+            + $"initial_grid={visualLayout.GridWidth:0.###}; "
+            + $"initial_panels=[{string.Join(',', visualLayout.RealizedColumns)}].");
+
         browse.KindFilter = ProjectBrowserKindFilter.Package;
         browse.Sort = ProjectBrowserSort.WorkshopId;
         browse.CurrentProject = browse.VisibleProjects.First(project => project.HasProblems);
@@ -657,8 +671,17 @@ internal static class ProjectBrowserUiRegressionTests
             var persistentDetails = WpfElementFinder.FindByName<Border>(
                 window,
                 "BrowsePersistentDetails")!;
-            var persistentProblems = FindVisualDescendants<Button>(persistentDetails)
-                .Single(button => button.Name == "BrowseProjectProblemsButton");
+            var persistentProblemButtons = FindVisualDescendants<Button>(persistentDetails)
+                .Where(button => button.Name == "BrowseProjectProblemsButton")
+                .ToArray();
+            assert(IsPositiveAreaVisible(persistentDetails)
+                   && persistentProblemButtons.Length == 1,
+                "Task 7 Wide details did not realize its unique current-project problem action: "
+                + $"mode={window.LayoutMode}; actual_width={window.ActualWidth:0.###}; "
+                + $"details_visible={persistentDetails.IsVisible}; "
+                + $"details_size={persistentDetails.ActualWidth:0.###}x{persistentDetails.ActualHeight:0.###}; "
+                + $"problem_buttons={persistentProblemButtons.Length}.");
+            var persistentProblems = persistentProblemButtons.Single();
             var persistentContrast = BrushContrastRatio(
                 persistentProblems.Foreground,
                 persistentDetails.Background);
@@ -1085,7 +1108,7 @@ internal static class ProjectBrowserUiRegressionTests
                 "; ",
                 results.Select(item =>
                     $"{item.Page}=success:{item.Result.Succeeded},"
-                    + $"index:{item.Result.PositionedIndex?.ToString() ?? "null"},"
+                    + $"index:{item.Result.PositionedIndex?.ToString(CultureInfo.InvariantCulture) ?? "null"},"
                     + $"last:{item.LastRealized},diag:{item.Result.Diagnostic}"))
             + $"; strict={strictResult}; empty={emptyResult}; "
             + $"strictCanceled={canceled}; legacyCanceled={legacyCanceled}");
@@ -2339,7 +2362,7 @@ internal static class ProjectBrowserUiRegressionTests
             "The snapshot fingerprint gate did not reset A,B,B until the third observation.");
 
         gate.Reset();
-        assert(!new[] { "A", "B", "C", "D" }.Any(gate.Observe),
+        assert(!ChangingSnapshotFingerprints.Any(gate.Observe),
             "The snapshot fingerprint gate accepted a continuously changing A,B,C,D sequence.");
     }
 
@@ -2658,7 +2681,7 @@ internal static class ProjectBrowserUiRegressionTests
         return (bool)method.Invoke(page, null)!;
     }
 
-    private static ImageSource CreateFrozenSnapshotBitmap(byte marker)
+    private static WriteableBitmap CreateFrozenSnapshotBitmap(byte marker)
     {
         var writable = new System.Windows.Media.Imaging.WriteableBitmap(
             2,
@@ -3507,6 +3530,13 @@ internal static class ProjectBrowserUiRegressionTests
             window.Width = item.Width;
             window.Height = item.Height;
             PumpLayout(window);
+            assert(Math.Abs(window.ActualWidth - item.Width) < 1.0
+                   && Math.Abs(window.ActualHeight - item.Height) < 1.0,
+                "The responsive fixture could not realize its requested viewport; "
+                + "the Windows test desktop must support the full size matrix: "
+                + $"requested={item.Width:0.###}x{item.Height:0.###}; "
+                + $"actual={window.ActualWidth:0.###}x{window.ActualHeight:0.###}; "
+                + $"primary_screen={SystemParameters.PrimaryScreenWidth:0.###}x{SystemParameters.PrimaryScreenHeight:0.###}.");
             var grid = WpfElementFinder.FindByName<ListBox>(window, "BrowseProjectGrid")!;
             var details = WpfElementFinder.FindByName<FrameworkElement>(window, "BrowsePersistentDetails");
             var detailColumn = WpfElementFinder.FindByName<ColumnDefinition>(window, "BrowseDetailColumn");
@@ -3529,17 +3559,17 @@ internal static class ProjectBrowserUiRegressionTests
             var cards = FindCardButtons(grid).Take(item.Columns).ToArray();
             assert(cards.Length == item.Columns
                    && cards.All(card => card.ActualWidth >= 104 - 0.75
-                                         && Math.Abs(card.ActualHeight - card.ActualWidth * 10d / 16d) < 1.0
+                                         && Math.Abs(card.ActualHeight - card.ActualWidth) < 1.0
                                          && card.Effect is null),
-                $"Browse card 104-DIP minimum, 16:10 geometry, or shadow boundary failed at {item.Width:0} DIP. "
+                $"Browse card 104-DIP minimum, square geometry, or shadow boundary failed at {item.Width:0} DIP. "
                 + $"cards={cards.Length}; values=[{string.Join(';', cards.Select(card =>
                     $"{card.ActualWidth:0.###}x{card.ActualHeight:0.###}/effect={card.Effect?.GetType().Name ?? "none"}"))}].");
             if (cards.Length >= 2)
             {
                 var cell = cards[0].Parent as FrameworkElement;
                 var gap = (cell?.Margin.Left ?? 0) + (cell?.Margin.Right ?? 0);
-                assert(Math.Abs(gap - 8) < 0.75,
-                    $"Browse horizontal card gap was {gap:0.###} instead of 8 DIP at {item.Width:0}.");
+                assert(Math.Abs(gap - 6) < 0.75,
+                    $"Browse horizontal card gap was {gap:0.###} instead of 6 DIP at {item.Width:0}.");
             }
 
             var longTitleProject = shell.BrowsePageViewModel.VisibleProjects.First(project =>
@@ -5329,11 +5359,26 @@ internal static class ProjectBrowserUiRegressionTests
             var normalPreviewLayer = FindVisualDescendants<Grid>(normalCard)
                 .First(candidate => candidate.Name == "BrowsePreviewLayer");
             focusWindow.SetReducedMotion(false);
+            assert(focusWindow.MotionEnabled == SystemParameters.ClientAreaAnimation,
+                "Clearing the CLI reduced-motion request must still honor the Windows animation preference.");
+            Console.WriteLine(
+                $"TASK7_SYSTEM_MOTION system_enabled={SystemParameters.ClientAreaAnimation} "
+                + $"policy_enabled={focusWindow.MotionEnabled}");
+            // This presentation check supplies the enabled policy output explicitly:
+            // hosted Windows runners may disable system animations. The policy contract
+            // above and AccessibilityRegressionTests retain the OS/CLI truth table.
+            var normalSearch = WpfElementFinder.FindByName<TextBox>(
+                focusWindow,
+                "BrowseSearchTextBox")!;
+            assert(normalSearch.Focus() && normalSearch.IsKeyboardFocusWithin,
+                "The normal-motion fixture could not establish its search-to-card focus transition.");
+            focusWindow.SetCurrentValue(WallpaperField.MainWindow.MotionEnabledProperty, true);
             assert(normalCard.Focus() && normalCard.IsKeyboardFocusWithin,
                 "The normal-motion fixture lost real WPF keyboard focus on its Browse card.");
             PumpLayout(focusWindow);
             var normalTransform = (ScaleTransform)normalPreviewLayer.RenderTransform;
-            assert(Math.Abs(normalTransform.ScaleX - 1.02) < 0.001
+            assert(focusWindow.MotionEnabled
+                   && Math.Abs(normalTransform.ScaleX - 1.02) < 0.001
                    && Math.Abs(normalTransform.ScaleY - 1.02) < 0.001,
                 "Normal motion did not retain the accepted focused image-only scale of exactly 1.02.");
             var normalBrowseRoot = WpfElementFinder.FindByName<FrameworkElement>(
@@ -5348,7 +5393,8 @@ internal static class ProjectBrowserUiRegressionTests
             focusWindow.SetReducedMotion(true);
             PumpLayout(focusWindow);
             var restoredTransform = (ScaleTransform)normalPreviewLayer.RenderTransform;
-            assert(Math.Abs(restoredTransform.ScaleX - 1.0) < 0.001
+            assert(!focusWindow.MotionEnabled
+                   && Math.Abs(restoredTransform.ScaleX - 1.0) < 0.001
                    && Math.Abs(restoredTransform.ScaleY - 1.0) < 0.001,
                 "Returning to reduced motion did not restore the image layer to exact scale 1.0.");
         }
@@ -5819,7 +5865,7 @@ internal static class ProjectBrowserUiRegressionTests
     }
 
     private static void AddAnimated(
-        ICollection<string> failures,
+        List<string> failures,
         string owner,
         string property,
         Animatable? value)
@@ -6048,7 +6094,7 @@ internal static class ProjectBrowserUiRegressionTests
                 || rowBounds.Right > viewportWidth + 0.75
                 || cardBounds.Any(bounds => bounds.Left < -0.75
                                             || bounds.Right > viewportWidth + 0.75)
-                || minimumGap < 7.99)
+                || minimumGap < 5.99)
             {
                 rowFailures.Add(
                     $"{grid.ItemContainerGenerator.IndexFromContainer(row)}:"
@@ -6284,7 +6330,7 @@ internal static class ProjectBrowserUiRegressionTests
         Console.WriteLine(
             "PERF_METRIC name=browse.grid.real_reflow_3_4_5_6 "
             + "service=projection_rows_wpf_layout_render_contextidle "
-            + $"samples_ms=[{string.Join(',', samples.Select(value => value.ToString("0.###")))}] "
+            + $"samples_ms=[{string.Join(',', samples.Select(value => value.ToString("0.###", CultureInfo.InvariantCulture)))}] "
             + $"p95_ms={p95:0.###} budget_ms={budgetMilliseconds:0} "
             + $"result={(p95 <= budgetMilliseconds ? "PASS" : "FAIL")} "
             + $"transitions=[{string.Join(',', transitions)}] fixture={RuntimeProjectCount} "
@@ -6368,7 +6414,7 @@ internal static class ProjectBrowserUiRegressionTests
             var p95 = NearestRank95(samples);
             Console.WriteLine(
                 $"PERF_METRIC name=browse.grid.scroll_round_{round} "
-                + $"service=ui_layout_render_dispatch samples_ms=[{string.Join(',', samples.Select(value => value.ToString("0.###")))}] "
+                + $"service=ui_layout_render_dispatch samples_ms=[{string.Join(',', samples.Select(value => value.ToString("0.###", CultureInfo.InvariantCulture)))}] "
                 + $"p95_ms={p95:0.###} budget_ms={budgetMilliseconds:0.0} "
                 + $"result={(p95 <= budgetMilliseconds ? "PASS" : "FAIL")}");
             assert(samples.Count == stepsPerDirection * 2 && p95 <= budgetMilliseconds,
@@ -6935,7 +6981,7 @@ internal static class ProjectBrowserUiRegressionTests
         }
     }
 
-    private static IReadOnlyDictionary<string, PreviewThumbnailStatus>
+    private static Dictionary<string, PreviewThumbnailStatus>
         CreateExpectedPreviewStatuses(
             PerformanceRegressionTests.ProjectBrowserPerformanceFixture fixture)
     {
@@ -7108,7 +7154,7 @@ internal static class ProjectBrowserUiRegressionTests
         var peakObservedObservers = 0;
         string? firstBudgetFailure = null;
         PreviewThumbnailMetrics metrics;
-        IReadOnlyList<(ThumbnailPreviewImage Image, BrowseProjectViewModel Project)> visible;
+        List<(ThumbnailPreviewImage Image, BrowseProjectViewModel Project)> visible;
         do
         {
             PumpLayout(window);
@@ -7224,7 +7270,7 @@ internal static class ProjectBrowserUiRegressionTests
             peakObservedObservers);
     }
 
-    private static IReadOnlyList<(
+    private static List<(
         ThumbnailPreviewImage Image,
         BrowseProjectViewModel Project)> CaptureVisibleCardPreviews(
         ListBox grid,
@@ -8438,14 +8484,14 @@ internal static class ProjectBrowserUiRegressionTests
                 : File.GetLastWriteTimeUtc(previewPath);
             var items = Enumerable.Range(0, ProjectCount).Select(index =>
             {
-                var projectSource = Path.Combine(sourceRoot, index.ToString("D4"));
+                var projectSource = Path.Combine(sourceRoot, index.ToString("D4", CultureInfo.InvariantCulture));
                 var hasPreview = previewPath is not null && index == 0;
                 return new WallpaperRecord
                 {
                     WorkshopId = $"task5-{index:D4}",
                     Title = $"Task 5 runtime project {index:D4}",
                     SourceDirectory = projectSource,
-                    OutputDirectory = Path.Combine(outputRoot, index.ToString("D4")),
+                    OutputDirectory = Path.Combine(outputRoot, index.ToString("D4", CultureInfo.InvariantCulture)),
                     WallpaperType = (index % 4) switch
                     {
                         1 => "video",

@@ -15,10 +15,7 @@ public static class PreviewThumbnailLimits
 
     public static int GetSizeBucket(int requestedPixelWidth)
     {
-        if (requestedPixelWidth <= 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(requestedPixelWidth));
-        }
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(requestedPixelWidth);
 
         var clamped = Math.Min(requestedPixelWidth, MaximumDimension);
         return Math.Min(((clamped + 63) / 64) * 64, MaximumDimension);
@@ -88,15 +85,8 @@ public sealed record PreviewThumbnailRequest
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(projectKey);
         ArgumentException.ThrowIfNullOrWhiteSpace(previewPath);
-        if (scanFileLength < 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(scanFileLength));
-        }
-
-        if (generation < 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(generation));
-        }
+        ArgumentOutOfRangeException.ThrowIfNegative(scanFileLength);
+        ArgumentOutOfRangeException.ThrowIfNegative(generation);
 
         ProjectKey = projectKey;
         CanonicalPath = Path.GetFullPath(previewPath);

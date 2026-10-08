@@ -60,7 +60,7 @@ internal static class ProjectBrowserProcessingRegressionTests
     }
 
     private static async Task VerifyFolderOpenRejectsReparseSwapAsync(
-        ICollection<string> failures)
+        List<string> failures)
     {
         var testRoot = Path.Combine(
             Path.GetTempPath(),
@@ -112,7 +112,7 @@ internal static class ProjectBrowserProcessingRegressionTests
     }
 
     private static async Task VerifyFolderLeaseBlocksPostValidationReplacementAsync(
-        ICollection<string> failures)
+        List<string> failures)
     {
         var testRoot = Path.Combine(
             Path.GetTempPath(),
@@ -176,7 +176,7 @@ internal static class ProjectBrowserProcessingRegressionTests
     }
 
     private static void VerifySystemFolderServiceHoldsLeaseThroughShellCall(
-        ICollection<string> failures)
+        List<string> failures)
     {
         var testRoot = Path.Combine(
             Path.GetTempPath(),
@@ -272,7 +272,7 @@ internal static class ProjectBrowserProcessingRegressionTests
     }
 
     private static async Task VerifyFolderOpenFailureContractsAsync(
-        ICollection<string> failures)
+        List<string> failures)
     {
         var testRoot = Path.Combine(
             Path.GetTempPath(),
@@ -348,7 +348,7 @@ internal static class ProjectBrowserProcessingRegressionTests
     }
 
     private static void VerifySystemFolderServiceBlocksConcurrentDirectoryWrite(
-        ICollection<string> failures)
+        List<string> failures)
     {
         const int errorSharingViolation = 32;
         var testRoot = Path.Combine(
@@ -437,7 +437,7 @@ internal static class ProjectBrowserProcessingRegressionTests
         IntPtr templateFile);
 
     private static void VerifyContextResolversAreLegacyOnly(
-        ICollection<string> failures)
+        List<string> failures)
     {
         const string code = "LEGACY_RESOLVER_DIRECT";
         const string context = "shared-context";
@@ -506,7 +506,7 @@ internal static class ProjectBrowserProcessingRegressionTests
     }
 
     private static async Task VerifySameIdWarningsAreAttributedExactlyAsync(
-        ICollection<string> failures)
+        List<string> failures)
     {
         var testRoot = Path.Combine(
             Path.GetTempPath(),
@@ -619,7 +619,7 @@ internal static class ProjectBrowserProcessingRegressionTests
     }
 
     private static async Task VerifyIssueTransactionsStayBoundedAsync(
-        ICollection<string> failures)
+        List<string> failures)
     {
         const int itemCount = 1_000;
         const int notificationBudget = 2;
@@ -760,7 +760,7 @@ internal static class ProjectBrowserProcessingRegressionTests
     }
 
     private static async Task VerifyResultsStayInsideFrozenScopeAsync(
-        ICollection<string> failures)
+        List<string> failures)
     {
         var testRoot = Path.Combine(
             Path.GetTempPath(),
@@ -912,7 +912,7 @@ internal static class ProjectBrowserProcessingRegressionTests
     }
 
     private static async Task VerifyActiveScopeObserverCannotDriftServiceEntryAsync(
-        ICollection<string> failures)
+        List<string> failures)
     {
         var testRoot = Path.Combine(
             Path.GetTempPath(),
@@ -972,7 +972,7 @@ internal static class ProjectBrowserProcessingRegressionTests
     }
 
     private static async Task VerifyPreServiceCancellationReportsCancelledAsync(
-        ICollection<string> failures)
+        List<string> failures)
     {
         var testRoot = Path.Combine(
             Path.GetTempPath(),
@@ -1043,7 +1043,7 @@ internal static class ProjectBrowserProcessingRegressionTests
     }
 
     private static async Task VerifyLateProgressCannotOverwriteTerminalProjectionAsync(
-        ICollection<string> failures)
+        List<string> failures)
     {
         var testRoot = Path.Combine(
             Path.GetTempPath(),
@@ -1119,7 +1119,7 @@ internal static class ProjectBrowserProcessingRegressionTests
     }
 
     private static async Task MeasureThousandItemCompletionAsync(
-        ICollection<string> failures)
+        List<string> failures)
     {
         const int itemCount = 1_000;
         const double maximumCompletionMilliseconds = 250;
@@ -1174,7 +1174,7 @@ internal static class ProjectBrowserProcessingRegressionTests
     }
 
     private static void VerifyCompletionTrayIncludesSkippedFact(
-        ICollection<string> failures)
+        List<string> failures)
     {
         var document = XDocument.Load(FindRepositoryFile(
             Path.Combine("Views", "BrowsePageView.xaml")));
@@ -1240,7 +1240,7 @@ internal static class ProjectBrowserProcessingRegressionTests
                     [issue]));
             var document = JsonSerializer.Deserialize<DiagnosticExportDocument>(
                 await File.ReadAllTextAsync(destination, Encoding.UTF8),
-                new JsonSerializerOptions(JsonSerializerDefaults.Web));
+                JsonSerializerOptions.Web);
             var exportedIssue = document?.Issues.SingleOrDefault();
             if (exportedIssue is null
                 || !string.Equals(
@@ -2448,7 +2448,7 @@ internal static class ProjectBrowserProcessingRegressionTests
     }
 
     private static async Task VerifyShellProcessingAndExactNavigationAsync(
-        ICollection<string> failures)
+        List<string> failures)
     {
         var shellType = typeof(ShellViewModel);
         if (shellType.GetProperty("ProcessCurrentBrowseProjectCommand")
@@ -2872,7 +2872,7 @@ internal static class ProjectBrowserProcessingRegressionTests
     }
 
     private static async Task VerifyPreviewAndFolderBrowseIssueFactsAsync(
-        ICollection<string> failures)
+        List<string> failures)
     {
         var testRoot = Path.Combine(
             Path.GetTempPath(),
@@ -3120,7 +3120,7 @@ internal static class ProjectBrowserProcessingRegressionTests
     }
 
     private static async Task VerifyScanAndUnpackIssuesUseExactProjectKeysAsync(
-        ICollection<string> failures)
+        List<string> failures)
     {
         var testRoot = Path.Combine(
             Path.GetTempPath(),
@@ -3195,7 +3195,7 @@ internal static class ProjectBrowserProcessingRegressionTests
     }
 
     private static async Task VerifyUnpackErrorPathsAreAmbiguitySafeAsync(
-        ICollection<string> failures)
+        List<string> failures)
     {
         var testRoot = Path.Combine(
             Path.GetTempPath(),
@@ -3282,7 +3282,7 @@ internal static class ProjectBrowserProcessingRegressionTests
     }
 
     private static async Task VerifyRejectedLegacyFallbackResolvesNothingAsync(
-        ICollection<string> failures)
+        List<string> failures)
     {
         var testRoot = Path.Combine(
             Path.GetTempPath(),
@@ -3367,7 +3367,7 @@ internal static class ProjectBrowserProcessingRegressionTests
     }
 
     private static void VerifyExactProjectIssueLifecycle(
-        ICollection<string> failures)
+        List<string> failures)
     {
         var projectKeyProperty = typeof(AppIssue).GetProperty("ProjectKey");
         if (projectKeyProperty is null
@@ -3462,7 +3462,7 @@ internal static class ProjectBrowserProcessingRegressionTests
     }
 
     private static async Task VerifyActiveScopeAndCompletionOwnershipAsync(
-        ICollection<string> failures)
+        List<string> failures)
     {
         var testRoot = Path.Combine(
             Path.GetTempPath(),
@@ -3626,7 +3626,7 @@ internal static class ProjectBrowserProcessingRegressionTests
     }
 
     private static async Task VerifyInSlotIdentityGateAsync(
-        ICollection<string> failures)
+        List<string> failures)
     {
         var testRoot = Path.Combine(
             Path.GetTempPath(),
@@ -3671,7 +3671,7 @@ internal static class ProjectBrowserProcessingRegressionTests
     }
 
     private static async Task VerifyTerminalResultsCannotClearReselectionAsync(
-        ICollection<string> failures)
+        List<string> failures)
     {
         var testRoot = Path.Combine(
             Path.GetTempPath(),

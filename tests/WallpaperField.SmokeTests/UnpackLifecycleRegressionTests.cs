@@ -602,7 +602,7 @@ internal static class UnpackLifecycleRegressionTests
                        && shell.TaskState == TaskLifecycleState.CommitCritical
                        && !shell.CanCancelUnpack
                        && indeterminate == false
-                       && workText?.Contains("5", StringComparison.Ordinal) == true
+                       && workText?.Contains('5') == true
                        && workText.Contains("10", StringComparison.Ordinal),
                     "Commit progress did not enter the non-cancellable commit-critical UI state.");
             }
@@ -1005,13 +1005,13 @@ internal static class UnpackLifecycleRegressionTests
 
     private static void WritePackage(
         string path,
-        IReadOnlyList<(string Path, byte[] Bytes)> entries)
+        (string Path, byte[] Bytes)[] entries)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         using var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
         using var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: false);
         WriteSizedUtf8(writer, "PKGV0024");
-        writer.Write(entries.Count);
+        writer.Write(entries.Length);
 
         var offset = 0;
         foreach (var entry in entries)

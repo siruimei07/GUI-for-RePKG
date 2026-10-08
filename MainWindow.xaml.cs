@@ -23,6 +23,10 @@ public enum ShellLayoutMode
     Wide
 }
 
+[System.Diagnostics.CodeAnalysis.SuppressMessage(
+    "Design",
+    "CA1001:Types that own disposable fields should be disposable",
+    Justification = "WPF owns Window lifetime; Window_Closed unsubscribes and disposes the motion policy and snapshot cancellation source.")]
 public partial class MainWindow : Window
 {
     private const int DwmWindowCornerPreference = 33;
@@ -39,6 +43,11 @@ public partial class MainWindow : Window
         "Paper24Brush",
         "BackgroundBrush",
         "SurfaceBrush",
+        "SurfaceMutedBrush",
+        "SurfacePressedBrush",
+        "InputBackgroundBrush",
+        "AccentActionBrush",
+        "AccentTextBrush",
         "InkBrush",
         "InkRaisedBrush",
         "InkSoftBrush",
@@ -542,11 +551,15 @@ public partial class MainWindow : Window
     private void UpdateWindowStateVisuals()
     {
         var maximized = WindowState == WindowState.Maximized;
-        WindowFrame.CornerRadius = maximized ? new CornerRadius(0) : new CornerRadius(16);
+        WindowFrame.CornerRadius = maximized ? new CornerRadius(0) : new CornerRadius(4);
         WindowFrame.BorderThickness = maximized ? new Thickness(0) : new Thickness(1);
         MaximizeGlyph.Text = maximized ? "\uE923" : "\uE922";
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Performance",
+        "CA1822:Mark members as static",
+        Justification = "Keep the existing instance entry point used by window accessibility regression tests to exercise live palette changes.")]
     private void ApplyHighContrastPalette(bool enabled)
     {
         var resources = System.Windows.Application.Current?.Resources;
@@ -568,7 +581,6 @@ public partial class MainWindow : Window
         SetResourceBrushes(
             resources,
             SystemColors.WindowBrush,
-            "PaperBrush",
             "PaperElevatedBrush",
             "PaperMutedBrush",
             "PaperPressedBrush",
@@ -577,13 +589,18 @@ public partial class MainWindow : Window
             "Paper24Brush",
             "BackgroundBrush",
             "SurfaceBrush",
-            "TextOnDarkMutedBrush");
+            "SurfaceMutedBrush",
+            "SurfacePressedBrush",
+            "InputBackgroundBrush",
+            "InkBrush",
+            "InkRaisedBrush",
+            "InkSoftBrush");
         SetResourceBrushes(
             resources,
             SystemColors.WindowTextBrush,
-            "InkBrush",
-            "InkRaisedBrush",
-            "InkSoftBrush",
+            "PaperBrush",
+            "TextOnDarkMutedBrush",
+            "AccentTextBrush",
             "TextPrimaryBrush",
             "TextSecondaryBrush",
             "TextMutedBrush",
@@ -597,6 +614,7 @@ public partial class MainWindow : Window
             "SignalBrush",
             "SignalPressedBrush",
             "AccentBrush",
+            "AccentActionBrush",
             "SelectionBackgroundBrush",
             "FocusInnerBrush",
             "SuccessBrush",
@@ -609,7 +627,7 @@ public partial class MainWindow : Window
             "SuccessInkBrush");
         resources["DisabledBrush"] = SystemColors.GrayTextBrush;
         resources["ModalBackdropBrush"] = SystemColors.WindowTextBrush;
-        resources["OverlayBrush"] = SystemColors.WindowTextBrush;
+        resources["OverlayBrush"] = SystemColors.WindowBrush;
         resources["ShadowBrush"] = SystemColors.WindowTextBrush;
     }
 

@@ -13,6 +13,7 @@ public sealed class BrowseProjectViewModel : ObservableObject
     {
         Owner = owner ?? throw new ArgumentNullException(nameof(owner));
         Card = card ?? throw new ArgumentNullException(nameof(card));
+        ProjectKey = card.ProjectKey;
     }
 
     public BrowsePageViewModel Owner { get; }
@@ -21,7 +22,7 @@ public sealed class BrowseProjectViewModel : ObservableObject
 
     public WallpaperRecord Record => Card.Record;
 
-    public string ProjectKey => Card.ProjectKey;
+    public string ProjectKey { get; }
 
     public string WorkshopId => Card.WorkshopId;
 
@@ -103,11 +104,24 @@ public sealed class BrowseProjectViewModel : ObservableObject
            + $"提示 {WarningCount} 条；{(IsCurrent ? "当前项目" : "非当前项目")}；"
            + (IsSelected ? "已加入处理选择" : "未加入处理选择");
 
-    internal void NotifyCardStateChanged()
-        => OnPropertiesChanged(
-            nameof(HasProblems),
-            nameof(IsSelected),
-            nameof(WarningCount),
-            nameof(HasWarnings),
-            nameof(AutomationSummary));
+    internal void NotifyCardStateChanged(string? propertyName)
+    {
+        if (propertyName == nameof(WallpaperCardViewModel.IsSelectedForUnpack))
+        {
+            OnPropertiesChanged(nameof(IsSelected), nameof(AutomationSummary));
+        }
+        else if (propertyName == nameof(WallpaperCardViewModel.HasOpenIssues))
+        {
+            OnPropertyChanged(nameof(HasProblems));
+        }
+        else if (string.IsNullOrEmpty(propertyName))
+        {
+            OnPropertiesChanged(
+                nameof(HasProblems),
+                nameof(IsSelected),
+                nameof(WarningCount),
+                nameof(HasWarnings),
+                nameof(AutomationSummary));
+        }
+    }
 }

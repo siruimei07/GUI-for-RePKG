@@ -61,10 +61,7 @@ public sealed class PreviewThumbnailService : IDisposable
 
     public void SetGeneration(long generation)
     {
-        if (generation < 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(generation));
-        }
+        ArgumentOutOfRangeException.ThrowIfNegative(generation);
 
         List<CancellationTokenSource>? cancellations = null;
         List<PreviewThumbnailSignalEventArgs>? signals = null;

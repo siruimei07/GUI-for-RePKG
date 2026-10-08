@@ -4,7 +4,7 @@ using System.Text;
 using RePKG.Application.Exceptions;
 using RePKG.Application.Texture;
 using RePKG.Core.Texture;
-using SixLabors.ImageSharp.Diagnostics;
+using System.Runtime.CompilerServices;
 
 internal static class TexOwnershipRegressionTests
 {
@@ -23,7 +23,7 @@ internal static class TexOwnershipRegressionTests
         GC.Collect();
         GC.WaitForPendingFinalizers();
         GC.Collect();
-        var baselineUndisposed = MemoryDiagnostics.TotalUndisposedAllocationCount;
+        var outputs = new List<WeakReference>();
         using var process = Process.GetCurrentProcess();
         process.Refresh();
         var baselinePrivateBytes = process.PrivateMemorySize64;
@@ -51,32 +51,43 @@ internal static class TexOwnershipRegressionTests
         }
 
         process.Refresh();
-        var undisposedAfterLoop = MemoryDiagnostics.TotalUndisposedAllocationCount;
         var handleDelta = process.HandleCount - baselineHandles;
         var privatePeakDelta = peakPrivateBytes - baselinePrivateBytes;
 
-        var beforeFailurePaths = MemoryDiagnostics.TotalUndisposedAllocationCount;
         ConvertWithExhaustedOutputBudget(textureBytes);
         ConvertWithExhaustedOutputBudget(CreateGifTex(32, 32));
-        ConvertGifWithPartiallyAllocatedSequence();
-        var afterFailurePaths = MemoryDiagnostics.TotalUndisposedAllocationCount;
+        for (var index = 0; index < 8; index++)
+        {
+            ConvertGifWithInvalidLaterFrame();
+            outputs.Add(ConvertWithoutRetainingOutput(textureBytes));
+            outputs.Add(ConvertWithoutRetainingOutput(CreateGifTex(32, 32)));
+        }
 
         GC.Collect();
         GC.WaitForPendingFinalizers();
         GC.Collect();
 
         assert(
-            undisposedAfterLoop <= baselineUndisposed,
-            $"TEX conversion leaked ImageSharp owners: before={baselineUndisposed}, after={undisposedAfterLoop}.");
+            outputs.All(output => !output.IsAlive),
+            "TEX converters retained completed output buffers after collection.");
+        process.Refresh();
         assert(
-            afterFailurePaths <= beforeFailurePaths,
-            $"Failed TEX encoding leaked ImageSharp owners: before={beforeFailurePaths}, after={afterFailurePaths}.");
+            process.PrivateMemorySize64 - baselinePrivateBytes <= privateMemoryAllowance,
+            "WIC conversion success/failure paths retained excessive private memory after collection.");
         assert(
             handleDelta <= handleAllowance,
             $"TEX conversion handle delta exceeded the wide bound: {handleDelta}/{handleAllowance}.");
         assert(
             privatePeakDelta <= privateMemoryAllowance,
             $"TEX conversion private-memory peak exceeded the wide bound: {privatePeakDelta}/{privateMemoryAllowance}.");
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static WeakReference ConvertWithoutRetainingOutput(byte[] textureBytes)
+    {
+        var scope = new TexDecodeBudget().BeginFile(textureBytes.LongLength);
+        var image = new TexToImageConverter(scope).ConvertToImage(ReadTex(textureBytes, scope));
+        return new WeakReference(image.Bytes);
     }
 
     private static ITex ReadTex(byte[] bytes)
@@ -112,7 +123,7 @@ internal static class TexOwnershipRegressionTests
         }
     }
 
-    private static void ConvertGifWithPartiallyAllocatedSequence()
+    private static void ConvertGifWithInvalidLaterFrame()
     {
         var bytes = CreateGifTex(32, 32);
         var scope = new TexDecodeBudget().BeginFile(bytes.LongLength);
@@ -127,6 +138,7 @@ internal static class TexOwnershipRegressionTests
             Bytes = [0]
         });
         texture.ImagesContainer.Images.Add(invalidImage);
+        texture.FrameInfoContainer.Frames[1].ImageId = 1;
 
         try
         {
@@ -134,7 +146,7 @@ internal static class TexOwnershipRegressionTests
             throw new InvalidOperationException(
                 "Malformed GIF sequence unexpectedly converted successfully.");
         }
-        catch (ArgumentException)
+        catch (UnsafeTexException)
         {
         }
     }

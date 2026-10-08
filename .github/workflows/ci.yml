@@ -4,6 +4,11 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      prepare_release:
+        description: Prepare a v1.3.0 draft from this verified main commit
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -17,11 +22,22 @@ jobs:
       DOTNET_NOLOGO: "1"
 
     steps:
+      - name: Prepare desktop for native layout checks
+        shell: pwsh
+        run: |
+          Set-DisplayResolution -Width 1920 -Height 1080 -Force
+          Add-Type -AssemblyName System.Windows.Forms
+          $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          Write-Host "Native desktop: $($bounds.Width)x$($bounds.Height)"
+          if ($bounds.Width -lt 1920 -or $bounds.Height -lt 1080) {
+            throw 'The native desktop is too small for the 1600-DIP browser layout matrix.'
+          }
+
       - name: Check out source
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up .NET 10
-        uses: actions/setup-dotnet@v6
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
         with:
           dotnet-version: 10.0.x
 
@@ -36,17 +52,39 @@ jobs:
       - name: Enforce first-party warnings
         shell: pwsh
         run: |
-          dotnet build .\WallpaperField.csproj --configuration Release --no-restore --no-dependencies -p:EnableNETAnalyzers=true -p:AnalysisMode=Recommended -p:TreatWarningsAsErrors=true
+          dotnet build .\WallpaperField.csproj --configuration Release --no-restore --no-dependencies --no-incremental -p:EnableNETAnalyzers=true -p:AnalysisMode=Recommended -p:TreatWarningsAsErrors=true
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          dotnet build .\tests\WallpaperField.SmokeTests\WallpaperField.SmokeTests.csproj --configuration Release --no-restore --no-dependencies -p:EnableNETAnalyzers=true -p:AnalysisMode=Recommended -p:TreatWarningsAsErrors=true
+          dotnet build .\tests\WallpaperField.SmokeTests\WallpaperField.SmokeTests.csproj --configuration Release --no-restore --no-dependencies --no-incremental -p:EnableNETAnalyzers=true -p:AnalysisMode=Recommended -p:TreatWarningsAsErrors=true
 
-      - name: Run and verify SmokeTests
+      - name: Capture browser previews
         shell: pwsh
         run: |
-          $output = @(& dotnet run --project .\tests\WallpaperField.SmokeTests\WallpaperField.SmokeTests.csproj --configuration Release --no-build --no-restore 2>&1)
+          $previewRoot = Join-Path $env:RUNNER_TEMP 'WallpaperField-previews'
+          .\scripts\capture-browser-previews.ps1 -OutputDirectory $previewRoot
+
+      - name: Retain browser previews
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: browser-previews
+          path: ${{ runner.temp }}/WallpaperField-previews/*.png
+          if-no-files-found: error
+
+      - name: Run and verify SmokeTests
+        id: smoke
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          $output = [System.Collections.Generic.List[string]]::new()
+          & dotnet run --project .\tests\WallpaperField.SmokeTests\WallpaperField.SmokeTests.csproj --configuration Release --no-build --no-restore 2>&1 | ForEach-Object {
+            $line = $_.ToString()
+            $output.Add($line)
+            Write-Host $line
+          }
           $exitCode = $LASTEXITCODE
-          $output | ForEach-Object { Write-Host $_ }
           if ($exitCode -ne 0) {
+            $detail = ($output | Select-Object -Last 20) -join "`n"
+            $detail = $detail.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Host "::error title=SmokeTests failure::$detail"
             throw "SmokeTests exited with $exitCode."
           }
 
@@ -58,6 +96,38 @@ jobs:
           if ($output[-1] -ne $summary[0]) {
             throw "SMOKE_RESULT must be the final output line."
           }
+          Write-Host "::notice title=SmokeTests verified::$($summary[0])"
+
+      - name: Verify native imaging and browser state matrices
+        if: ${{ !cancelled() && (success() || steps.smoke.outcome == 'failure') }}
+        timeout-minutes: 12
+        shell: pwsh
+        run: |
+          $failures = @()
+          foreach ($mode in @('--tex-hardening-only', '--project-browser-task7-wpf-only', '--project-browser-task7-visual-only')) {
+            $output = [System.Collections.Generic.List[string]]::new()
+            & dotnet run --project .\tests\WallpaperField.SmokeTests\WallpaperField.SmokeTests.csproj --configuration Release --no-build --no-restore -- $mode 2>&1 | ForEach-Object {
+              $line = $_.ToString()
+              $output.Add($line)
+              Write-Host $line
+            }
+            $exitCode = $LASTEXITCODE
+            if ($exitCode -ne 0) {
+              $detail = ($output | Select-Object -Last 20) -join "`n"
+              $detail = $detail.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+              Write-Host "::error title=Native regression failure::$mode $detail"
+              $failures += "$mode exited with $exitCode."
+              continue
+            }
+            $summary = @($output | Where-Object { $_ -match '^SMOKE_RESULT tests=([1-9][0-9]*) assertions=([1-9][0-9]*) passed=1 failed=0$' })
+            if ($summary.Count -ne 1 -or $output[-1] -ne $summary[0]) {
+              $failures += "$mode did not end with exactly one positive SMOKE_RESULT."
+            } else {
+              Write-Host "::notice title=Native regression verified::$mode $($summary[0])"
+            }
+          }
+          if ($failures.Count -gt 0) { throw ($failures -join "`n") }
+          exit 0
 
       - name: Verify failing assertion exits nonzero
         shell: pwsh
@@ -120,8 +190,19 @@ jobs:
         shell: pwsh
         run: |
           $probeRoot = Join-Path $env:RUNNER_TEMP "WallpaperField-v1.3.0-source-contract-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
-          .\scripts\verify-release-source-cleanliness.ps1 -WorkRoot $probeRoot
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $trace = [System.Collections.Generic.List[string]]::new()
+          try {
+            & .\scripts\verify-release-source-cleanliness.ps1 -WorkRoot $probeRoot *>&1 | ForEach-Object {
+              $trace.Add($_.ToString())
+              Write-Host $_
+            }
+            if ($LASTEXITCODE -ne 0) { throw "Source gate exited with $LASTEXITCODE." }
+          } catch {
+            $detail = (@($trace | Select-Object -Last 30) + $_.Exception.ToString() + $_.ScriptStackTrace) -join "`n"
+            $detail = $detail.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Host "::error title=Release source gate failure::$detail"
+            throw
+          }
 
       - name: Verify dirty clones cannot start a release
         shell: pwsh
@@ -225,4 +306,73 @@ jobs:
         shell: pwsh
         run: |
           $releaseRoot = Join-Path $env:RUNNER_TEMP "WallpaperField-v1.3.0-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
-          .\build-release.ps1 -OutputDirectory $releaseRoot
+          $trace = [System.Collections.Generic.List[string]]::new()
+          try {
+            & .\build-release.ps1 -OutputDirectory $releaseRoot *>&1 | ForEach-Object {
+              $trace.Add($_.ToString())
+              Write-Host $_
+            }
+            if ($LASTEXITCODE -ne 0) { throw "Release build exited with $LASTEXITCODE." }
+          } catch {
+            $detail = (@($trace | Select-Object -Last 30) + $_.Exception.ToString() + $_.ScriptStackTrace) -join "`n"
+            $detail = $detail.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Host "::error title=Release build failure::$detail"
+            throw
+          }
+
+      - name: Retain verified release candidate
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: WallpaperField-v1.3.0-win-x64
+          path: ${{ runner.temp }}/WallpaperField-v1.3.0-${{ github.run_id }}-${{ github.run_attempt }}/*
+          if-no-files-found: error
+
+  prepare-release:
+    if: github.event_name == 'workflow_dispatch' && inputs.prepare_release && github.ref == 'refs/heads/main'
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Check out verified source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Download verified candidate
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: WallpaperField-v1.3.0-win-x64
+          path: release-candidate
+      - name: Download real WPF previews
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: browser-previews
+          path: release-previews
+      - name: Verify candidate identity and hashes
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release-candidate
+          sha256sum --check --strict SHA256SUMS
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          manifest = json.loads(Path('release-manifest.json').read_text())
+          assert manifest['sourceCommit'] == os.environ['GITHUB_SHA'], 'Candidate source commit mismatch'
+          assert manifest['version'] == '1.3.0', 'Candidate version mismatch'
+          assert manifest['sourceTree']['dirtyWorktree'] is False, 'Candidate source was dirty'
+          PY
+      - name: Prepare draft with complete assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ -n "$(git ls-remote origin refs/tags/v1.3.0)" ]; then
+            echo 'v1.3.0 already exists; refusing to overwrite its tag.' >&2
+            exit 1
+          fi
+          gh release create v1.3.0 --draft --target "$GITHUB_SHA" \
+            --title 'Wallpaper Field v1.3.0' --notes-file docs/releases/v1.3.0.md \
+            release-candidate/WallpaperField-v1.3.0-win-x64.zip \
+            release-candidate/SHA256SUMS release-candidate/release-manifest.json \
+            release-candidate/dependencies.json release-previews/*.png

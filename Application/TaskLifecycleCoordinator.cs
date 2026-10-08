@@ -152,10 +152,7 @@ public sealed class TaskLifecycleCoordinator
 
     public async Task<bool> WaitForQuiescenceAsync(TimeSpan timeout)
     {
-        if (timeout <= TimeSpan.Zero)
-        {
-            throw new ArgumentOutOfRangeException(nameof(timeout));
-        }
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(timeout, TimeSpan.Zero);
 
         var startedAt = Stopwatch.GetTimestamp();
         while (true)

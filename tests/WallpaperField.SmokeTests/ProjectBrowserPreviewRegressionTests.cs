@@ -21,7 +21,9 @@ internal static class ProjectBrowserPreviewRegressionTests
         ArgumentNullException.ThrowIfNull(assert);
 
         VerifySurfaceAndLimits(assert);
-        await VerifyRealDecoderAsync(assert);
+        // Keep a dedicated UI owner alive across awaits; a ThreadPool caller's
+        // thread can otherwise be reused legitimately by a later decode worker.
+        await RunOnStaAsync(() => VerifyRealDecoderAsync(assert));
         await VerifyImmutableValidatedSourceAsync(assert);
         await VerifyHandleIdentityAgainstAncestorSwapAsync(assert);
         await VerifyInFlightAndConcurrencyAsync(assert);
@@ -115,6 +117,10 @@ internal static class ProjectBrowserPreviewRegressionTests
 
     private static async Task VerifyRealDecoderAsync(Action<bool, string> assert)
     {
+        assert(Thread.CurrentThread.GetApartmentState() == ApartmentState.STA
+               && !Thread.CurrentThread.IsThreadPoolThread
+               && SynchronizationContext.Current is DispatcherSynchronizationContext,
+            "The real preview decoder worker test requires a dedicated STA dispatcher caller.");
         using var fixture = new PreviewFixture();
         var pngPath = fixture.WriteImage("preview.png", new PngBitmapEncoder(), 512, 320);
         var jpegPath = fixture.WriteImage("preview.jpg", new JpegBitmapEncoder(), 320, 200);
@@ -1234,6 +1240,10 @@ internal static class ProjectBrowserPreviewRegressionTests
         }
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Usage",
+        "CA2201:Do not raise reserved exception types",
+        Justification = "This regression deliberately injects a fatal decoder fault to verify lease completion and recovery without exhausting memory.")]
     private static async Task VerifyFatalDecoderCompletionAsync(
         Action<bool, string> assert)
     {

@@ -23,11 +23,11 @@
                     <Grid Margin="-6" SnapsToDevicePixels="True">
                         <Border BorderBrush="{DynamicResource FocusOuterBrush}"
                                 BorderThickness="2"
-                                CornerRadius="18" />
+                                CornerRadius="5" />
                         <Border Margin="3"
                                 BorderBrush="{DynamicResource FocusInnerBrush}"
                                 BorderThickness="2"
-                                CornerRadius="15" />
+                                CornerRadius="3" />
                     </Grid>
                 </ControlTemplate>
             </Setter.Value>
