@@ -220,6 +220,30 @@ public partial class MainWindow : Window
         _settingsStore = settingsStore;
         _persistSettingsOnClose = persistSettings;
         Closing += Window_Closing;
+        if (System.Windows.Application.Current is { } application)
+        {
+            application.SessionEnding += Application_SessionEnding;
+        }
+    }
+
+    private void Application_SessionEnding(object? sender, SessionEndingCancelEventArgs e)
+    {
+        // Windows logoff and shutdown do not raise Window.Closing, so keep the chosen paths here.
+        if (ViewModel is not { } viewModel || _settingsStore is null)
+        {
+            return;
+        }
+
+        viewModel.CancelPendingWork();
+        if (_persistSettingsOnClose && !_allowCloseWithoutSettings)
+        {
+            _ = _settingsStore.Save(new UserSettings
+            {
+                SourcePath = viewModel.SourcePath.Trim(),
+                OutputPath = viewModel.OutputPath.Trim(),
+                Density = viewModel.Density
+            });
+        }
     }
 
     public void SetReducedMotion(bool reduceMotion)
@@ -274,6 +298,11 @@ public partial class MainWindow : Window
     private void Window_Closed(object? sender, EventArgs e)
     {
         Closing -= Window_Closing;
+        if (System.Windows.Application.Current is { } application)
+        {
+            application.SessionEnding -= Application_SessionEnding;
+        }
+
         DataContextChanged -= OnDataContextChanged;
         if (DataContext is INotifyPropertyChanged viewModel)
         {
@@ -617,7 +646,8 @@ public partial class MainWindow : Window
 
         // Masked lateral wipe: an ink slab with a cyan edge crosses the stage once.
         var stageWidth = Math.Max(StageHost.ActualWidth, 1);
-        var wipeTravel = new DoubleAnimation(-PageWipe.Width - 80, stageWidth + 80, TimeSpan.FromMilliseconds(520))
+        var wipeWidth = double.IsNaN(PageWipe.Width) ? PageWipe.ActualWidth : PageWipe.Width;
+        var wipeTravel = new DoubleAnimation(-wipeWidth - 80, stageWidth + 80, TimeSpan.FromMilliseconds(520))
         {
             EasingFunction = new CubicEase { EasingMode = EasingMode.EaseInOut }
         };
