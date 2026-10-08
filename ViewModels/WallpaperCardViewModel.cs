@@ -9,6 +9,8 @@ public sealed class WallpaperCardViewModel : ObservableObject
 {
     private readonly Action? _unpackSelectionChanged;
     private readonly Func<bool>? _canChangeUnpackSelection;
+    private string? _projectKey;
+    private string? _sourceIssueContext;
     private bool _hasOpenIssues;
     private bool _isSelectedForUnpack;
 
@@ -50,7 +52,16 @@ public sealed class WallpaperCardViewModel : ObservableObject
 
     public WallpaperProjectKind ProjectKind => Record.ProjectKind;
 
-    public string ProjectKey => Record.ProjectKey;
+    // Record is immutable, so hash and normalize its source path at most once
+    // per card instead of on every problem-center sync or unpack result lookup.
+    // Lazy, so cards that never need these keys pay nothing.
+    public string ProjectKey => _projectKey ??= Record.ProjectKey;
+
+    /// <summary>
+    /// Full-path form of <see cref="SourceFolder"/> used as a scan issue context.
+    /// </summary>
+    internal string SourceIssueContext
+        => _sourceIssueContext ??= NormalizeIssueContext(SourceFolder);
 
     public bool IsProcessable => Record.IsProcessable;
 
@@ -135,6 +146,24 @@ public sealed class WallpaperCardViewModel : ObservableObject
             return Path.GetFileName(trimmedPath) is { Length: > 0 } folderName
                 ? folderName
                 : WorkshopId;
+        }
+    }
+
+    private static string NormalizeIssueContext(string? value)
+    {
+        var trimmed = value?.Trim() ?? string.Empty;
+        if (trimmed.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            return Path.GetFullPath(trimmed);
+        }
+        catch
+        {
+            return trimmed;
         }
     }
 }
