@@ -554,15 +554,33 @@ function Invoke-ReleaseProbe
         }
         'symlink-tree-entry'
         {
+            # Exercise the committed-tree policy without requiring Windows
+            # symlink privileges or inheriting the runner's core.symlinks value.
+            # Git's plain-file fallback still retains mode 120000 in the tree.
+            Invoke-GitChecked -RepositoryPath $repositoryPath -Arguments @(
+                'config', 'core.symlinks', 'false') | Out-Null
             $linkTargetPath = Join-Path $CaseRoot 'link-target-bytes.txt'
-            [System.IO.File]::WriteAllText($linkTargetPath, "tracked.txt`n", $utf8NoBom)
+            [System.IO.File]::WriteAllText($linkTargetPath, 'tracked.txt', $utf8NoBom)
             $linkBlob = ((Invoke-GitChecked -RepositoryPath $repositoryPath -Arguments @(
                 '-c', 'core.autocrlf=false', 'hash-object', '-w', '--no-filters', '--', $linkTargetPath)) -join '').Trim()
             Invoke-GitChecked -RepositoryPath $repositoryPath -Arguments @(
                 'update-index', '--add', '--cacheinfo', "120000,$linkBlob,fixture-link") | Out-Null
             Invoke-GitChecked -RepositoryPath $repositoryPath -Arguments @(
                 'commit', '--quiet', '-m', 'fixture symlink tree entry') | Out-Null
-            [System.IO.File]::WriteAllText((Join-Path $repositoryPath 'fixture-link'), "tracked.txt`n", $utf8NoBom)
+            Invoke-GitChecked -RepositoryPath $repositoryPath -Arguments @(
+                'checkout-index', '--force', '--', 'fixture-link') | Out-Null
+            $linkTree = @(Invoke-GitChecked -RepositoryPath $repositoryPath -Arguments @(
+                'ls-tree', 'HEAD', '--', 'fixture-link'))
+            if ($linkTree.Count -ne 1 -or $linkTree[0] -ne "120000 blob $linkBlob`tfixture-link")
+            {
+                throw 'The symlink fixture did not retain its committed mode 120000 entry.'
+            }
+            $linkStatus = @(Invoke-GitChecked -RepositoryPath $repositoryPath -Arguments @(
+                'status', '--porcelain=v1', '--untracked-files=all'))
+            if ($linkStatus.Count -ne 0)
+            {
+                throw "The symlink tree fixture was dirty before its release probe: $($linkStatus -join ', ')"
+            }
         }
         'gitlink-tree-entry'
         {
