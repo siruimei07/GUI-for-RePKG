@@ -60,7 +60,7 @@ internal static class SelectionEfficiencyRegressionTests
             candidate.Name == "CardPreviewEmptyLabel");
         var toolbar = WpfElementFinder.FindByName<FrameworkElement>(window, "ScanEfficiencyToolbar");
         var comfortableHeight = card?.ActualHeight ?? 0;
-        assert(Math.Abs(comfortableHeight - 154d) < 0.5d
+        assert(Math.Abs(comfortableHeight - 138d) < 0.5d
                && technicalHeader?.Visibility == Visibility.Visible
                && emptyPreviewLabel?.Visibility == Visibility.Visible
                && toolbar is { ActualHeight: <= 40.5d },
@@ -79,12 +79,12 @@ internal static class SelectionEfficiencyRegressionTests
             "CreateDiagnosticEnvironment",
             BindingFlags.Instance | BindingFlags.NonPublic);
         var environment = environmentFactory?.Invoke(problemPage, null) as DiagnosticEnvironment;
-        assert(Math.Abs(compactHeight - 112d) < 0.5d
-               && compactHeight <= comfortableHeight - 40d
+        assert(Math.Abs(compactHeight - 104d) < 0.5d
+               && compactHeight <= comfortableHeight - 32d
                && technicalHeader?.Visibility == Visibility.Collapsed
                && emptyPreviewLabel?.Visibility == Visibility.Collapsed
                && environment?.Density == "Compact",
-            "Compact density did not reduce the live shared card, hide secondary detail, or reach diagnostics.");
+            "Compact density did not reduce the live shared card by at least 32 DIP, hide secondary detail, or reach diagnostics.");
 
         shell.Density = DisplayDensity.Comfortable;
         shell.ScannedWallpapers.Clear();

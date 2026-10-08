@@ -22,6 +22,20 @@ if (args.Length == 1
 }
 
 if (args.Length == 1
+    && string.Equals(args[0], "--tex-hardening-only", StringComparison.Ordinal))
+{
+    TexBudgetRegressionTests.RunBudgetBoundaryTests(Assert);
+    GifBudgetSecurityRegressionTests.Run(Assert);
+    TexPixelAndGifContainerRegressionTests.Run(Assert);
+    TexStringAndPixelRegressionTests.RunCStringTests(Assert);
+    await TexStringAndPixelRegressionTests.RunRg88TestsAsync(Assert);
+    TexOwnershipRegressionTests.Run(Assert);
+    TexBudgetRegressionTests.RunStructuralTests(Assert);
+    Console.WriteLine(metrics.CreateSuccessSummary());
+    return;
+}
+
+if (args.Length == 1
     && string.Equals(args[0], "--project-browser-preview-only", StringComparison.Ordinal))
 {
     await ProjectBrowserPreviewRegressionTests.RunAsync(Assert);

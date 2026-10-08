@@ -126,7 +126,8 @@
                         <TextBlock x:Name="NavSectionLabel"
                                    Margin="10,0,0,8"
                                    Foreground="{DynamicResource TextOnDarkMutedBrush}"
-                                   Text="工作区 / WORKSPACE">
+                                   AutomationProperties.Name="工作区，4 个页面"
+                                   Text="工作区 / 04">
                             <TextBlock.Style>
                                 <Style TargetType="TextBlock" BasedOn="{StaticResource TechnicalLabel}">
                                     <Style.Triggers>
@@ -223,10 +224,16 @@
                                     <TextBlock Margin="0,2,0,0" FontFamily="Consolas" FontSize="9" Text="PROJECT BROWSER" />
                                 </StackPanel>
                                 <StackPanel Grid.Column="2" Margin="8,0,0,0" VerticalAlignment="Center">
-                                    <TextBlock HorizontalAlignment="Right"
-                                               FontFamily="Consolas"
-                                               FontSize="10"
-                                               Text="02" />
+                                    <StackPanel.Style>
+                                        <Style TargetType="StackPanel">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding LayoutMode, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                                             Value="{x:Static local:ShellLayoutMode.Compact}">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </StackPanel.Style>
                                     <TextBlock HorizontalAlignment="Right"
                                                Margin="0,2,0,0"
                                                FontFamily="Consolas"

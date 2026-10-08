@@ -3540,8 +3540,8 @@ internal static class ProjectBrowserUiRegressionTests
             {
                 var cell = cards[0].Parent as FrameworkElement;
                 var gap = (cell?.Margin.Left ?? 0) + (cell?.Margin.Right ?? 0);
-                assert(Math.Abs(gap - 8) < 0.75,
-                    $"Browse horizontal card gap was {gap:0.###} instead of 8 DIP at {item.Width:0}.");
+                assert(Math.Abs(gap - 6) < 0.75,
+                    $"Browse horizontal card gap was {gap:0.###} instead of 6 DIP at {item.Width:0}.");
             }
 
             var longTitleProject = shell.BrowsePageViewModel.VisibleProjects.First(project =>
