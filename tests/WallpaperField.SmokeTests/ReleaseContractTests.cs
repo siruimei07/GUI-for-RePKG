@@ -7,8 +7,8 @@ using WallpaperField;
 
 internal static class ReleaseContractTests
 {
-    private const string ProductVersion = "1.3.0";
-    private const string FileVersion = "1.3.0.0";
+    private const string ProductVersion = "1.4.0";
+    private const string FileVersion = "1.4.0.0";
 
     internal static void Run(Action<bool, string> assert)
     {

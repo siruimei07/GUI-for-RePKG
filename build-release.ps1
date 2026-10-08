@@ -10,8 +10,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$ProductVersion = '1.3.0'
-$FileVersion = '1.3.0.0'
+$ProductVersion = '1.4.0'
+$FileVersion = '1.4.0.0'
 $AssemblyVersion = '1.0.0.0'
 $RuntimeIdentifier = 'win-x64'
 $Configuration = 'Release'
@@ -658,7 +658,7 @@ $releaseSourceRoot = Join-Path $workspace 'source'
 $projectPath = Join-Path $releaseSourceRoot 'WallpaperField.csproj'
 $solutionPath = Join-Path $releaseSourceRoot 'WallpaperField.slnx'
 $nugetConfigPath = Join-Path $releaseSourceRoot 'NuGet.Config'
-$releaseNotesPath = Join-Path $releaseSourceRoot 'docs\releases\v1.3.0.md'
+$releaseNotesPath = Join-Path $releaseSourceRoot 'docs\releases\v1.4.0.md'
 $publishDirectory = Join-Path $workspace 'publish'
 $candidateDirectory = Join-Path $workspace 'candidate'
 $packageDirectory = Join-Path $workspace 'package'
@@ -853,7 +853,7 @@ try
     [System.IO.Directory]::CreateDirectory((Join-Path $qaDirectory 'source\9001')) | Out-Null
     [System.IO.Directory]::CreateDirectory((Join-Path $qaDirectory 'output')) | Out-Null
     $qaProjectJson = @{
-        title = 'v1.3.0 release candidate QA'
+        title = 'v1.4.0 release candidate QA'
         workshopid = '9001'
         type = 'scene'
         file = 'scene.json'

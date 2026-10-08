@@ -22,16 +22,16 @@
     <WindowChrome.WindowChrome>
         <WindowChrome CaptionHeight="0"
                       ResizeBorderThickness="7"
-                      CornerRadius="4"
+                      CornerRadius="0"
                       GlassFrameThickness="0"
                       UseAeroCaptionButtons="False" />
     </WindowChrome.WindowChrome>
 
     <Border x:Name="WindowFrame"
-            BorderBrush="{DynamicResource BorderStrongBrush}"
+            BorderBrush="{DynamicResource InkBrush}"
             BorderThickness="1"
             Background="{DynamicResource BackgroundBrush}"
-            CornerRadius="4"
+            CornerRadius="0"
             ClipToBounds="True">
         <Grid>
             <Grid.ColumnDefinitions>
@@ -39,10 +39,10 @@
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
 
-            <!-- Global navigation rail. All four application pages remain reachable at every width. -->
+            <!-- Edge dock. All four application pages remain reachable at every width. -->
             <Border x:Name="NavigationRail"
                     Grid.Column="0"
-                    BorderBrush="{DynamicResource BorderBrush}"
+                    BorderBrush="{DynamicResource DockRuleBrush}"
                     BorderThickness="0,0,1,0"
                     Background="{DynamicResource InkBrush}">
                 <Border.Style>
@@ -56,7 +56,7 @@
                         </Style.Triggers>
                     </Style>
                 </Border.Style>
-                <Grid Margin="10,14,10,12">
+                <Grid Margin="10,12,10,12">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="18" />
@@ -65,36 +65,38 @@
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
 
-                    <Grid Grid.Row="0" Height="48">
+                    <Grid Grid.Row="0" Height="50">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="48" />
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
-                        <Border Width="44"
-                                Height="44"
-                                HorizontalAlignment="Left"
-                                VerticalAlignment="Top"
-                                Background="{DynamicResource AccentActionBrush}"
-                                CornerRadius="3">
-                            <Grid>
-                                <TextBlock HorizontalAlignment="Center"
-                                           VerticalAlignment="Center"
-                                           FontFamily="Arial Narrow"
-                                           FontSize="19"
-                                           FontWeight="Black"
-                                           Foreground="{DynamicResource SignalTextBrush}"
-                                           Text="WF" />
-                                <Border Width="7"
-                                        Height="7"
-                                        Margin="0,0,5,5"
-                                        HorizontalAlignment="Right"
-                                        VerticalAlignment="Bottom"
-                                        BorderBrush="{DynamicResource BorderStrongBrush}"
-                                        BorderThickness="1"
-                                        CornerRadius="3" />
-                            </Grid>
-                        </Border>
-                        <StackPanel x:Name="BrandCopy" Grid.Column="1" Margin="5,3,0,0">
+                        <Grid Width="46"
+                              Height="46"
+                              HorizontalAlignment="Left"
+                              VerticalAlignment="Top">
+                            <Border Background="{DynamicResource AccentActionBrush}" />
+                            <Path Width="12"
+                                  Height="12"
+                                  HorizontalAlignment="Right"
+                                  VerticalAlignment="Bottom"
+                                  Data="M 12,0 L 12,12 0,12 Z"
+                                  Fill="{DynamicResource InkBrush}" />
+                            <Border Width="14"
+                                    Height="3"
+                                    Margin="6,6,0,0"
+                                    HorizontalAlignment="Left"
+                                    VerticalAlignment="Top"
+                                    Background="{DynamicResource SignalTextBrush}" />
+                            <TextBlock HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       Margin="0,3,0,0"
+                                       FontFamily="{DynamicResource DisplayFontFamily}"
+                                       FontSize="21"
+                                       FontWeight="Bold"
+                                       Foreground="{DynamicResource SignalTextBrush}"
+                                       Text="WF" />
+                        </Grid>
+                        <StackPanel x:Name="BrandCopy" Grid.Column="1" Margin="7,2,0,0">
                             <StackPanel.Style>
                                 <Style TargetType="StackPanel">
                                     <Style.Triggers>
@@ -105,26 +107,31 @@
                                     </Style.Triggers>
                                 </Style>
                             </StackPanel.Style>
-                            <TextBlock FontFamily="Arial Narrow"
-                                       FontSize="15"
+                            <TextBlock FontFamily="{DynamicResource DisplayFontFamily}"
+                                       FontSize="17"
                                        FontWeight="Bold"
                                        Foreground="{DynamicResource PaperBrush}"
                                        Text="WALLPAPER" />
                             <TextBlock Margin="0,1,0,0"
                                        Style="{StaticResource TechnicalLabel}"
                                        Foreground="{DynamicResource TextOnDarkMutedBrush}"
-                                       Text="FIELD / CATALOG" />
+                                       Text="FIELD · TERMINAL" />
+                            <Border Width="38"
+                                    Height="3"
+                                    Margin="0,5,0,0"
+                                    HorizontalAlignment="Left"
+                                    Background="{DynamicResource AccentActionBrush}" />
                         </StackPanel>
                     </Grid>
 
                     <Border Grid.Row="1"
                             Margin="0,4,0,8"
-                            BorderBrush="{DynamicResource BorderStrongBrush}"
+                            BorderBrush="{DynamicResource DockRuleBrush}"
                             BorderThickness="0,1,0,0" />
 
                     <StackPanel Grid.Row="2">
                         <TextBlock x:Name="NavSectionLabel"
-                                   Margin="10,0,0,8"
+                                   Margin="4,0,0,10"
                                    Foreground="{DynamicResource TextOnDarkMutedBrush}"
                                    AutomationProperties.Name="工作区，4 个页面"
                                    Text="工作区 / 04">
@@ -141,7 +148,7 @@
                         </TextBlock>
 
                         <Button x:Name="ScanNavButton"
-                                Margin="0,0,0,8"
+                                Margin="0,0,0,6"
                                 Command="{Binding NavigateScanCommand}"
                                 ToolTip="扫描中心"
                                 AutomationProperties.Name="扫描中心">
@@ -150,23 +157,45 @@
                                     <Setter Property="Foreground" Value="{DynamicResource TextOnDarkMutedBrush}" />
                                     <Style.Triggers>
                                         <DataTrigger Binding="{Binding IsScanPage}" Value="True">
-                                            <Setter Property="Background" Value="{DynamicResource AccentActionBrush}" />
-                                            <Setter Property="Foreground" Value="{DynamicResource SignalTextBrush}" />
+                                            <Setter Property="Background" Value="{DynamicResource PaperBrush}" />
+                                            <Setter Property="Foreground" Value="{DynamicResource InkBrush}" />
+                                            <Setter Property="Tag" Value="Active" />
                                         </DataTrigger>
                                     </Style.Triggers>
                                 </Style>
                             </Button.Style>
                             <Grid>
                                 <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
                                     <ColumnDefinition Width="26" />
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
-                                <TextBlock VerticalAlignment="Center"
-                                           FontFamily="Segoe Fluent Icons"
+                                <TextBlock x:Name="ScanNavIndex"
+                                           Margin="0,0,8,0"
+                                           VerticalAlignment="Center"
+                                           FontFamily="{DynamicResource LabelFontFamily}"
+                                           FontSize="11"
+                                           FontWeight="Bold"
+                                           Opacity="0.7"
+                                           Text="01">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding LayoutMode, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                                             Value="{x:Static local:ShellLayoutMode.Compact}">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                                <TextBlock Grid.Column="1"
+                                           VerticalAlignment="Center"
+                                           FontFamily="{DynamicResource IconFontFamily}"
                                            FontSize="17"
                                            Text="&#xE721;" />
-                                <StackPanel x:Name="ScanNavCopy" Grid.Column="1" VerticalAlignment="Center">
+                                <StackPanel x:Name="ScanNavCopy" Grid.Column="2" VerticalAlignment="Center">
                                     <StackPanel.Style>
                                         <Style TargetType="StackPanel">
                                             <Style.Triggers>
@@ -177,14 +206,14 @@
                                             </Style.Triggers>
                                         </Style>
                                     </StackPanel.Style>
-                                    <TextBlock FontSize="14" FontWeight="SemiBold" Text="扫描中心" />
-                                    <TextBlock Margin="0,2,0,0" FontFamily="Consolas" FontSize="9" Text="SCAN FIELD" />
+                                    <TextBlock FontSize="14" FontWeight="Bold" Text="扫描中心" />
+                                    <TextBlock Margin="0,1,0,0" FontFamily="{DynamicResource LabelFontFamily}" FontSize="10" FontWeight="SemiBold" Opacity="0.78" Text="SCAN FIELD" />
                                 </StackPanel>
                             </Grid>
                         </Button>
 
                         <Button x:Name="BrowseNavButton"
-                                Margin="0,0,0,8"
+                                Margin="0,0,0,6"
                                 Command="{Binding NavigateBrowseCommand}"
                                 ToolTip="项目浏览"
                                 AutomationProperties.Name="项目浏览">
@@ -193,23 +222,45 @@
                                     <Setter Property="Foreground" Value="{DynamicResource TextOnDarkMutedBrush}" />
                                     <Style.Triggers>
                                         <DataTrigger Binding="{Binding IsBrowsePage}" Value="True">
-                                            <Setter Property="Background" Value="{DynamicResource AccentActionBrush}" />
-                                            <Setter Property="Foreground" Value="{DynamicResource SignalTextBrush}" />
+                                            <Setter Property="Background" Value="{DynamicResource PaperBrush}" />
+                                            <Setter Property="Foreground" Value="{DynamicResource InkBrush}" />
+                                            <Setter Property="Tag" Value="Active" />
                                         </DataTrigger>
                                     </Style.Triggers>
                                 </Style>
                             </Button.Style>
                             <Grid>
                                 <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
                                     <ColumnDefinition Width="26" />
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
-                                <TextBlock VerticalAlignment="Center"
-                                           FontFamily="Segoe Fluent Icons"
+                                <TextBlock x:Name="BrowseNavIndex"
+                                           Margin="0,0,8,0"
+                                           VerticalAlignment="Center"
+                                           FontFamily="{DynamicResource LabelFontFamily}"
+                                           FontSize="11"
+                                           FontWeight="Bold"
+                                           Opacity="0.7"
+                                           Text="02">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding LayoutMode, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                                             Value="{x:Static local:ShellLayoutMode.Compact}">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                                <TextBlock Grid.Column="1"
+                                           VerticalAlignment="Center"
+                                           FontFamily="{DynamicResource IconFontFamily}"
                                            FontSize="17"
                                            Text="&#xE8B7;" />
-                                <StackPanel x:Name="BrowseNavCopy" Grid.Column="1" VerticalAlignment="Center">
+                                <StackPanel x:Name="BrowseNavCopy" Grid.Column="2" VerticalAlignment="Center">
                                     <StackPanel.Style>
                                         <Style TargetType="StackPanel">
                                             <Style.Triggers>
@@ -220,10 +271,10 @@
                                             </Style.Triggers>
                                         </Style>
                                     </StackPanel.Style>
-                                    <TextBlock FontSize="14" FontWeight="SemiBold" Text="项目浏览" />
-                                    <TextBlock Margin="0,2,0,0" FontFamily="Consolas" FontSize="9" Text="PROJECT BROWSER" />
+                                    <TextBlock FontSize="14" FontWeight="Bold" Text="项目浏览" />
+                                    <TextBlock Margin="0,1,0,0" FontFamily="{DynamicResource LabelFontFamily}" FontSize="10" FontWeight="SemiBold" Opacity="0.78" Text="PROJECT BROWSER" />
                                 </StackPanel>
-                                <StackPanel Grid.Column="2" Margin="8,0,0,0" VerticalAlignment="Center">
+                                <StackPanel Grid.Column="3" Margin="6,0,0,0" VerticalAlignment="Center">
                                     <StackPanel.Style>
                                         <Style TargetType="StackPanel">
                                             <Style.Triggers>
@@ -235,16 +286,16 @@
                                         </Style>
                                     </StackPanel.Style>
                                     <TextBlock HorizontalAlignment="Right"
-                                               Margin="0,2,0,0"
-                                               FontFamily="Consolas"
-                                               FontSize="9"
+                                               FontFamily="{DynamicResource LabelFontFamily}"
+                                               FontSize="10"
+                                               FontWeight="SemiBold"
                                                Text="{Binding BrowsePageViewModel.TotalProjectCount, StringFormat={}{0} 项}" />
                                 </StackPanel>
                             </Grid>
                         </Button>
 
                         <Button x:Name="LibraryNavButton"
-                                Margin="0,0,0,8"
+                                Margin="0,0,0,6"
                                 Command="{Binding NavigateLibraryCommand}"
                                 ToolTip="输出壁纸库"
                                 AutomationProperties.Name="输出壁纸库">
@@ -253,23 +304,45 @@
                                     <Setter Property="Foreground" Value="{DynamicResource TextOnDarkMutedBrush}" />
                                     <Style.Triggers>
                                         <DataTrigger Binding="{Binding IsLibraryPage}" Value="True">
-                                            <Setter Property="Background" Value="{DynamicResource AccentActionBrush}" />
-                                            <Setter Property="Foreground" Value="{DynamicResource SignalTextBrush}" />
+                                            <Setter Property="Background" Value="{DynamicResource PaperBrush}" />
+                                            <Setter Property="Foreground" Value="{DynamicResource InkBrush}" />
+                                            <Setter Property="Tag" Value="Active" />
                                         </DataTrigger>
                                     </Style.Triggers>
                                 </Style>
                             </Button.Style>
                             <Grid>
                                 <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
                                     <ColumnDefinition Width="26" />
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
-                                <TextBlock VerticalAlignment="Center"
-                                           FontFamily="Segoe Fluent Icons"
+                                <TextBlock x:Name="LibraryNavIndex"
+                                           Margin="0,0,8,0"
+                                           VerticalAlignment="Center"
+                                           FontFamily="{DynamicResource LabelFontFamily}"
+                                           FontSize="11"
+                                           FontWeight="Bold"
+                                           Opacity="0.7"
+                                           Text="03">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding LayoutMode, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                                             Value="{x:Static local:ShellLayoutMode.Compact}">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                                <TextBlock Grid.Column="1"
+                                           VerticalAlignment="Center"
+                                           FontFamily="{DynamicResource IconFontFamily}"
                                            FontSize="17"
                                            Text="&#xE8F1;" />
-                                <StackPanel x:Name="LibraryNavCopy" Grid.Column="1" VerticalAlignment="Center">
+                                <StackPanel x:Name="LibraryNavCopy" Grid.Column="2" VerticalAlignment="Center">
                                     <StackPanel.Style>
                                         <Style TargetType="StackPanel">
                                             <Style.Triggers>
@@ -280,13 +353,14 @@
                                             </Style.Triggers>
                                         </Style>
                                     </StackPanel.Style>
-                                    <TextBlock FontSize="14" FontWeight="SemiBold" Text="输出库" />
-                                    <TextBlock Margin="0,2,0,0" FontFamily="Consolas" FontSize="9" Text="OUTPUT LIBRARY" />
+                                    <TextBlock FontSize="14" FontWeight="Bold" Text="输出库" />
+                                    <TextBlock Margin="0,1,0,0" FontFamily="{DynamicResource LabelFontFamily}" FontSize="10" FontWeight="SemiBold" Opacity="0.78" Text="OUTPUT LIBRARY" />
                                 </StackPanel>
                             </Grid>
                         </Button>
 
                         <Button x:Name="ProblemNavButton"
+                                Margin="0"
                                 Command="{Binding NavigateProblemsCommand}"
                                 ToolTip="问题中心"
                                 AutomationProperties.Name="问题中心">
@@ -295,23 +369,45 @@
                                     <Setter Property="Foreground" Value="{DynamicResource TextOnDarkMutedBrush}" />
                                     <Style.Triggers>
                                         <DataTrigger Binding="{Binding IsProblemsPage}" Value="True">
-                                            <Setter Property="Background" Value="{DynamicResource AccentActionBrush}" />
-                                            <Setter Property="Foreground" Value="{DynamicResource SignalTextBrush}" />
+                                            <Setter Property="Background" Value="{DynamicResource PaperBrush}" />
+                                            <Setter Property="Foreground" Value="{DynamicResource InkBrush}" />
+                                            <Setter Property="Tag" Value="Active" />
                                         </DataTrigger>
                                     </Style.Triggers>
                                 </Style>
                             </Button.Style>
                             <Grid>
                                 <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
                                     <ColumnDefinition Width="26" />
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
-                                <TextBlock VerticalAlignment="Center"
-                                           FontFamily="Segoe Fluent Icons"
+                                <TextBlock x:Name="ProblemNavIndex"
+                                           Margin="0,0,8,0"
+                                           VerticalAlignment="Center"
+                                           FontFamily="{DynamicResource LabelFontFamily}"
+                                           FontSize="11"
+                                           FontWeight="Bold"
+                                           Opacity="0.7"
+                                           Text="04">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding LayoutMode, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                                             Value="{x:Static local:ShellLayoutMode.Compact}">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                                <TextBlock Grid.Column="1"
+                                           VerticalAlignment="Center"
+                                           FontFamily="{DynamicResource IconFontFamily}"
                                            FontSize="17"
                                            Text="&#xE814;" />
-                                <StackPanel x:Name="ProblemNavCopy" Grid.Column="1" VerticalAlignment="Center">
+                                <StackPanel x:Name="ProblemNavCopy" Grid.Column="2" VerticalAlignment="Center">
                                     <StackPanel.Style>
                                         <Style TargetType="StackPanel">
                                             <Style.Triggers>
@@ -322,11 +418,12 @@
                                             </Style.Triggers>
                                         </Style>
                                     </StackPanel.Style>
-                                    <TextBlock FontSize="14" FontWeight="SemiBold" Text="问题中心" />
-                                    <TextBlock Margin="0,2,0,0" FontFamily="Consolas" FontSize="9" Text="PROBLEM CENTER" />
+                                    <TextBlock FontSize="14" FontWeight="Bold" Text="问题中心" />
+                                    <TextBlock Margin="0,1,0,0" FontFamily="{DynamicResource LabelFontFamily}" FontSize="10" FontWeight="SemiBold" Opacity="0.78" Text="PROBLEM CENTER" />
                                 </StackPanel>
                             </Grid>
                         </Button>
+
                     </StackPanel>
 
                     <Grid x:Name="RailFooter" Grid.Row="4">
@@ -345,54 +442,71 @@
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
-                        <Border Padding="12"
-                                Background="{DynamicResource SurfaceMutedBrush}"
-                                BorderBrush="{DynamicResource BorderStrongBrush}"
-                                BorderThickness="1"
-                                CornerRadius="3">
+                        <Border Background="{DynamicResource InkRaisedBrush}"
+                                BorderBrush="{DynamicResource DockRuleBrush}"
+                                BorderThickness="1">
                             <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="18" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
-                                <Ellipse x:Name="SignalBeacon"
-                                         Width="8"
-                                         Height="8"
-                                         HorizontalAlignment="Left"
-                                         VerticalAlignment="Top"
-                                         Margin="1,4,0,0"
-                                         Fill="{DynamicResource SuccessBrush}" />
-                                <StackPanel x:Name="RailFooterCopy" Grid.Column="1">
-                                    <StackPanel.Style>
-                                        <Style TargetType="StackPanel">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <Border Height="4">
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="Background" Value="{DynamicResource HazardStripeBrush}" />
                                             <Style.Triggers>
-                                                <DataTrigger Binding="{Binding LayoutMode, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                                             Value="{x:Static local:ShellLayoutMode.Compact}">
-                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                <DataTrigger Binding="{Binding IsHighContrastActive, RelativeSource={RelativeSource AncestorType={x:Type Window}}}" Value="True">
+                                                    <Setter Property="Background" Value="{DynamicResource AccentActionBrush}" />
                                                 </DataTrigger>
                                             </Style.Triggers>
                                         </Style>
-                                    </StackPanel.Style>
-                                    <TextBlock Style="{StaticResource TechnicalLabel}"
-                                               Foreground="{DynamicResource TextOnDarkMutedBrush}"
-                                               Text="OUTPUT TARGET" />
-                                    <TextBlock Margin="0,5,0,0"
-                                               FontFamily="Consolas"
-                                               FontSize="10"
-                                               Foreground="{DynamicResource PaperBrush}"
-                                               Text="{Binding OutputPath, TargetNullValue=尚未选择}"
-                                               TextTrimming="CharacterEllipsis"
-                                               ToolTip="{Binding OutputPath}" />
-                                </StackPanel>
+                                    </Border.Style>
+                                </Border>
+                                <Grid Grid.Row="1" Margin="12,10,12,12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="16" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Ellipse x:Name="SignalBeacon"
+                                             Width="8"
+                                             Height="8"
+                                             HorizontalAlignment="Left"
+                                             VerticalAlignment="Top"
+                                             Margin="0,3,0,0"
+                                             Fill="{DynamicResource SuccessBrush}" />
+                                    <StackPanel x:Name="RailFooterCopy" Grid.Column="1">
+                                        <StackPanel.Style>
+                                            <Style TargetType="StackPanel">
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding LayoutMode, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                                                 Value="{x:Static local:ShellLayoutMode.Compact}">
+                                                        <Setter Property="Visibility" Value="Collapsed" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </StackPanel.Style>
+                                        <TextBlock Style="{StaticResource TechnicalLabel}"
+                                                   Foreground="{DynamicResource TextOnDarkMutedBrush}"
+                                                   Text="OUTPUT TARGET" />
+                                        <TextBlock Margin="0,5,0,0"
+                                                   FontFamily="{DynamicResource TechnicalFontFamily}"
+                                                   FontSize="10"
+                                                   Foreground="{DynamicResource PaperBrush}"
+                                                   Text="{Binding OutputPath, TargetNullValue=尚未选择}"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   ToolTip="{Binding OutputPath}" />
+                                    </StackPanel>
+                                </Grid>
                             </Grid>
                         </Border>
                         <TextBlock x:Name="RailFooterStatus"
                                    Grid.Row="1"
-                                   Margin="12,12,0,0"
-                                   FontFamily="Consolas"
-                                   FontSize="9"
+                                   Margin="2,10,0,0"
+                                   FontFamily="{DynamicResource LabelFontFamily}"
+                                   FontSize="10"
+                                   FontWeight="SemiBold"
                                    Foreground="{DynamicResource TextOnDarkMutedBrush}"
-                                   Text="LOCAL WORKSHOP">
+                                   Text="LOCAL WORKSHOP · OFFLINE">
                             <TextBlock.Style>
                                 <Style TargetType="TextBlock">
                                     <Style.Triggers>
@@ -415,13 +529,13 @@
                     <RowDefinition Height="28" />
                 </Grid.RowDefinitions>
 
-                <!-- Custom title bar -->
+                <!-- Dark top dock: system coordinate, current page index, live state and caption actions. -->
                 <Border Grid.Row="0"
-                        BorderBrush="{DynamicResource BorderBrush}"
-                        BorderThickness="0,0,0,1"
-                        Background="{DynamicResource BackgroundBrush}"
+                        BorderBrush="{DynamicResource AccentActionBrush}"
+                        BorderThickness="0,0,0,2"
+                        Background="{DynamicResource InkBrush}"
                         MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
-                    <Grid Margin="14,0,8,0">
+                    <Grid Margin="14,0,6,0">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
@@ -429,12 +543,30 @@
                         </Grid.ColumnDefinitions>
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                             <TextBlock Style="{StaticResource TechnicalLabel}"
-                                       Foreground="{DynamicResource TextPrimaryBrush}"
-                                       Text="WALLPAPER FIELD / LOCAL WORKSHOP" />
-                            <Border Width="1" Height="15" Margin="16,0" Background="{DynamicResource BorderBrush}" />
+                                       VerticalAlignment="Center"
+                                       Foreground="{DynamicResource TextOnDarkMutedBrush}"
+                                       Text="WALLPAPER FIELD / TERMINAL" />
+                            <Path Width="9"
+                                  Height="14"
+                                  Margin="14,0"
+                                  VerticalAlignment="Center"
+                                  Data="M 7,0 L 9,0 2,14 0,14 Z"
+                                  Fill="{DynamicResource AccentActionBrush}" />
+                            <Border Padding="5,1"
+                                    VerticalAlignment="Center"
+                                    Background="{DynamicResource PaperBrush}">
+                                <TextBlock FontFamily="{DynamicResource LabelFontFamily}"
+                                           FontSize="11"
+                                           FontWeight="Bold"
+                                           Foreground="{DynamicResource InkBrush}"
+                                           Text="{Binding PageCode}" />
+                            </Border>
                             <TextBlock x:Name="PageBreadcrumb"
-                                       FontSize="12"
-                                       Foreground="{DynamicResource TextMutedBrush}"
+                                       Margin="9,0,0,0"
+                                       VerticalAlignment="Center"
+                                       FontSize="13"
+                                       FontWeight="SemiBold"
+                                       Foreground="{DynamicResource PaperBrush}"
                                        Text="{Binding CurrentPageTitle}">
                                 <TextBlock.Style>
                                     <Style TargetType="TextBlock">
@@ -451,73 +583,101 @@
 
                         <Border Grid.Column="1"
                                 Margin="0,0,10,0"
-                                Padding="10,5"
+                                Padding="10,4"
                                 VerticalAlignment="Center"
-                                Background="{DynamicResource InkBrush}"
-                                AutomationProperties.LiveSetting="Polite"
-                                CornerRadius="3">
+                                Background="{DynamicResource InkRaisedBrush}"
+                                BorderBrush="{DynamicResource DockRuleBrush}"
+                                BorderThickness="1"
+                                AutomationProperties.LiveSetting="Polite">
                             <StackPanel Orientation="Horizontal">
-                                <Ellipse Width="7" Height="7" Margin="0,0,7,0">
-                                    <Ellipse.Style>
-                                        <Style TargetType="Ellipse">
+                                <Rectangle Width="7" Height="7" Margin="0,0,8,0" VerticalAlignment="Center">
+                                    <Rectangle.Style>
+                                        <Style TargetType="Rectangle">
                                             <Setter Property="Fill" Value="{DynamicResource SuccessBrush}" />
                                             <Style.Triggers>
                                                 <DataTrigger Binding="{Binding StatusKind}" Value="Working">
                                                     <Setter Property="Fill" Value="{DynamicResource SignalBrush}" />
                                                 </DataTrigger>
                                                 <DataTrigger Binding="{Binding StatusKind}" Value="Warning">
-                                                    <Setter Property="Fill" Value="{DynamicResource SignalBrush}" />
+                                                    <Setter Property="Fill" Value="{DynamicResource WarningBrush}" />
                                                 </DataTrigger>
                                                 <DataTrigger Binding="{Binding StatusKind}" Value="Error">
-                                                    <Setter Property="Fill" Value="{DynamicResource SignalPressedBrush}" />
+                                                    <Setter Property="Fill" Value="{DynamicResource DangerBrush}" />
                                                 </DataTrigger>
                                             </Style.Triggers>
                                         </Style>
-                                    </Ellipse.Style>
-                                </Ellipse>
+                                    </Rectangle.Style>
+                                </Rectangle>
                                 <TextBlock Style="{StaticResource TechnicalLabel}"
+                                           FontSize="11"
                                            Foreground="{DynamicResource PaperBrush}"
                                            Text="{Binding StateLabel}" />
                             </StackPanel>
                         </Border>
 
                         <StackPanel Grid.Column="2" Orientation="Horizontal">
-                            <Button Width="40" Height="40" Style="{StaticResource IconButton}" Click="Minimize_Click" ToolTip="最小化" AutomationProperties.Name="最小化窗口">
-                                <TextBlock FontFamily="Segoe Fluent Icons" FontSize="11" Text="&#xE921;" />
+                            <Button Width="40" Height="40" Style="{StaticResource IconButton}" Foreground="{DynamicResource PaperBrush}" BorderBrush="Transparent" Click="Minimize_Click" ToolTip="最小化" AutomationProperties.Name="最小化窗口">
+                                <TextBlock FontFamily="{DynamicResource IconFontFamily}" FontSize="11" Text="&#xE921;" />
                             </Button>
-                            <Button Width="40" Height="40" Margin="5,0,0,0" Style="{StaticResource IconButton}" Click="Maximize_Click" ToolTip="最大化或还原" AutomationProperties.Name="最大化或还原窗口">
-                                <TextBlock x:Name="MaximizeGlyph" FontFamily="Segoe Fluent Icons" FontSize="11" Text="&#xE922;" />
+                            <Button Width="40" Height="40" Style="{StaticResource IconButton}" Foreground="{DynamicResource PaperBrush}" BorderBrush="Transparent" Click="Maximize_Click" ToolTip="最大化或还原" AutomationProperties.Name="最大化或还原窗口">
+                                <TextBlock x:Name="MaximizeGlyph" FontFamily="{DynamicResource IconFontFamily}" FontSize="11" Text="&#xE922;" />
                             </Button>
-                            <Button Width="40" Height="40" Margin="5,0,0,0" Style="{StaticResource IconButton}" Click="Close_Click" ToolTip="关闭" AutomationProperties.Name="关闭窗口">
-                                <TextBlock FontFamily="Segoe Fluent Icons" FontSize="11" Text="&#xE8BB;" />
+                            <Button Width="40" Height="40" Style="{StaticResource IconButton}" Foreground="{DynamicResource PaperBrush}" BorderBrush="Transparent" Click="Close_Click" ToolTip="关闭" AutomationProperties.Name="关闭窗口">
+                                <TextBlock FontFamily="{DynamicResource IconFontFamily}" FontSize="11" Text="&#xE8BB;" />
                             </Button>
                         </StackPanel>
                     </Grid>
                 </Border>
 
-                <Grid Grid.Row="1" ClipToBounds="True">
-                    <!-- Quiet catalogue surface; retained named motion layers preserve reduced-motion behavior. -->
+                <Grid x:Name="StageHost" Grid.Row="1" ClipToBounds="True">
+                    <!-- Stage layers: blueprint grid, page coordinate and calibration instrument.
+                         They are decoration only; motion is gated by MotionEnabled and hidden in High Contrast. -->
                     <Rectangle x:Name="GridLayer"
-                               Visibility="Collapsed"
                                Margin="-56"
-                               Fill="{StaticResource EngineeringGridBrush}"
+                               Fill="{DynamicResource EngineeringGridBrush}"
                                IsHitTestVisible="False">
+                        <Rectangle.Style>
+                            <Style TargetType="Rectangle">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsHighContrastActive, RelativeSource={RelativeSource AncestorType={x:Type Window}}}" Value="True">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Rectangle.Style>
                         <Rectangle.RenderTransform>
                             <TranslateTransform x:Name="BackgroundGridOffset" />
                         </Rectangle.RenderTransform>
                     </Rectangle>
 
-
+                    <TextBlock x:Name="StageCoordinate"
+                               Margin="0,0,28,-22"
+                               HorizontalAlignment="Right"
+                               VerticalAlignment="Bottom"
+                               Text="{Binding PageCode}">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock" BasedOn="{StaticResource StageWatermark}">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding LayoutMode, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                                 Value="{x:Static local:ShellLayoutMode.Compact}">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding IsHighContrastActive, RelativeSource={RelativeSource AncestorType={x:Type Window}}}" Value="True">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
 
                     <Grid x:Name="CalibrationInstrument"
-                          Visibility="Collapsed"
-                          Width="210"
-                          Height="210"
-                          Margin="0,40,44,0"
+                          Width="220"
+                          Height="220"
+                          Margin="0,-34,-34,0"
                           HorizontalAlignment="Right"
                           VerticalAlignment="Top"
                           IsHitTestVisible="False"
-                          Opacity="0.17"
+                          Opacity="0.6"
                           RenderTransformOrigin="0.5,0.5">
                         <Grid.Style>
                             <Style TargetType="Grid">
@@ -526,22 +686,28 @@
                                                  Value="{x:Static local:ShellLayoutMode.Compact}">
                                         <Setter Property="Visibility" Value="Collapsed" />
                                     </DataTrigger>
+                                    <DataTrigger Binding="{Binding IsHighContrastActive, RelativeSource={RelativeSource AncestorType={x:Type Window}}}" Value="True">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
                                 </Style.Triggers>
                             </Style>
                         </Grid.Style>
                         <Grid.RenderTransform>
                             <RotateTransform x:Name="CalibrationRotation" />
                         </Grid.RenderTransform>
-                        <Ellipse Margin="14" Stroke="{DynamicResource InkBrush}" StrokeThickness="1" StrokeDashArray="2,8" />
-                        <Ellipse Margin="48" Stroke="{DynamicResource InkBrush}" StrokeThickness="1" />
-                        <Line X1="105" Y1="0" X2="105" Y2="210" Stroke="{DynamicResource InkBrush}" StrokeThickness="1" />
-                        <Line X1="0" Y1="105" X2="210" Y2="105" Stroke="{DynamicResource InkBrush}" StrokeThickness="1" />
-                        <Path Stroke="{DynamicResource SignalPressedBrush}"
-                              StrokeThickness="7"
-                              StrokeStartLineCap="Round"
-                              StrokeEndLineCap="Round"
-                              Data="M 105,18 A 87,87 0 0 1 185,72" />
-                        <Border Width="16" Height="16" Background="{DynamicResource InkBrush}" CornerRadius="3" />
+                        <Ellipse Margin="6" Stroke="{DynamicResource DecorationLineBrush}" StrokeThickness="1" StrokeDashArray="1,6" />
+                        <Ellipse Margin="30" Stroke="{DynamicResource DecorationLineBrush}" StrokeThickness="1" />
+                        <Ellipse Margin="70" Stroke="{DynamicResource DecorationLineBrush}" StrokeThickness="1" StrokeDashArray="4,4" />
+                        <Line X1="110" Y1="0" X2="110" Y2="220" Stroke="{DynamicResource DecorationLineBrush}" StrokeThickness="1" />
+                        <Line X1="0" Y1="110" X2="220" Y2="110" Stroke="{DynamicResource DecorationLineBrush}" StrokeThickness="1" />
+                        <Path Stroke="{DynamicResource AccentActionBrush}"
+                              StrokeThickness="5"
+                              StrokeStartLineCap="Flat"
+                              StrokeEndLineCap="Flat"
+                              Data="M 110,30 A 80,80 0 0 1 185,82" />
+                        <Path Fill="{DynamicResource TextPrimaryBrush}"
+                              Data="M 104,18 L 116,18 110,28 Z" />
+                        <Rectangle Width="10" Height="10" Fill="{DynamicResource TextPrimaryBrush}" />
                     </Grid>
 
                     <views:ScanPageView x:Name="ScanPage" />
@@ -552,35 +718,98 @@
 
                     <views:ProblemCenterView x:Name="ProblemCenterPage" />
 
+                    <!-- Foreground task stripe: hazard band that crawls while a scan, unpack or refresh runs. -->
+                    <Border x:Name="BusyStripe"
+                            Height="3"
+                            VerticalAlignment="Top"
+                            IsHitTestVisible="False">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsBusy}" Value="True">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+                        <Border.Background>
+                            <DrawingBrush TileMode="Tile"
+                                          Viewport="0,0,12,3"
+                                          ViewportUnits="Absolute"
+                                          Viewbox="0,0,12,3"
+                                          ViewboxUnits="Absolute">
+                                <DrawingBrush.Drawing>
+                                    <DrawingGroup>
+                                        <GeometryDrawing Brush="{DynamicResource InkBrush}" Geometry="M 0,0 L 12,0 12,3 0,3 Z" />
+                                        <GeometryDrawing Brush="{DynamicResource AccentActionBrush}" Geometry="M 0,3 L 3,0 9,0 6,3 Z" />
+                                    </DrawingGroup>
+                                </DrawingBrush.Drawing>
+                                <DrawingBrush.Transform>
+                                    <TranslateTransform x:Name="BusyStripeOffset" />
+                                </DrawingBrush.Transform>
+                            </DrawingBrush>
+                        </Border.Background>
+                    </Border>
+
+                    <!-- Page switch wipe: an ink slab with a cyan leading edge sweeps the stage once. -->
+                    <Grid x:Name="PageWipe"
+                          Width="180"
+                          HorizontalAlignment="Left"
+                          IsHitTestVisible="False"
+                          Opacity="0">
+                        <Grid.RenderTransform>
+                            <TransformGroup>
+                                <SkewTransform AngleX="-12" />
+                                <TranslateTransform x:Name="PageWipeOffset" />
+                            </TransformGroup>
+                        </Grid.RenderTransform>
+                        <Border Background="{DynamicResource InkBrush}" Opacity="0.92" />
+                        <Border Width="6" HorizontalAlignment="Right" Background="{DynamicResource AccentActionBrush}" />
+                        <Border Width="2" Margin="0,0,14,0" HorizontalAlignment="Right" Background="{DynamicResource AccentActionBrush}" Opacity="0.6" />
+                    </Grid>
                 </Grid>
 
                 <!-- Real status only: current operation, record counts, app identity. -->
                 <Border Grid.Row="2"
                         Background="{DynamicResource InkBrush}"
                         AutomationProperties.LiveSetting="Polite">
-                    <Grid Margin="20,0">
+                    <Grid Margin="0,0,16,0">
                         <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
-                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                            <Border Width="5" Height="5" Margin="0,0,8,0" Background="{DynamicResource AccentActionBrush}" CornerRadius="3" />
-                            <TextBlock Style="{StaticResource TechnicalLabel}" Foreground="{DynamicResource TextOnDarkMutedBrush}" Text="{Binding StatusText}" TextTrimming="CharacterEllipsis" />
-                        </StackPanel>
+                        <Border Width="28" Background="{DynamicResource AccentActionBrush}">
+                            <Path Width="8"
+                                  Height="10"
+                                  HorizontalAlignment="Center"
+                                  VerticalAlignment="Center"
+                                  Data="M 0,0 L 8,5 0,10 Z"
+                                  Fill="{DynamicResource SignalTextBrush}" />
+                        </Border>
                         <TextBlock Grid.Column="1"
+                                   Margin="12,0,0,0"
+                                   VerticalAlignment="Center"
+                                   Style="{StaticResource TechnicalLabel}"
+                                   FontSize="11"
+                                   Foreground="{DynamicResource PaperBrush}"
+                                   Text="{Binding StatusText}"
+                                   TextTrimming="CharacterEllipsis" />
+                        <TextBlock Grid.Column="2"
                                    Margin="18,0"
                                    VerticalAlignment="Center"
-                                   FontFamily="Consolas"
-                                   FontSize="9"
+                                   FontFamily="{DynamicResource TechnicalFontFamily}"
+                                   FontSize="10"
                                    Foreground="{DynamicResource TextOnDarkMutedBrush}"
                                    Text="{Binding OutputPath}"
                                    TextTrimming="CharacterEllipsis" />
-                        <TextBlock Grid.Column="2"
+                        <TextBlock Grid.Column="3"
                                    VerticalAlignment="Center"
                                    Style="{StaticResource TechnicalLabel}"
                                    Foreground="{DynamicResource TextOnDarkMutedBrush}"
-                                   Text="WALLPAPER FIELD · LOCAL" />
+                                   Text="WALLPAPER FIELD · LOCAL TERMINAL" />
                     </Grid>
                 </Border>
             </Grid>

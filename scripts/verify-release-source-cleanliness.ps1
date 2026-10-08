@@ -81,8 +81,8 @@ using System.IO;
 using System.Reflection;
 
 [assembly: AssemblyVersion("1.0.0.0")]
-[assembly: AssemblyFileVersion("1.3.0.0")]
-[assembly: AssemblyInformationalVersion("1.3.0+$SourceCommit")]
+[assembly: AssemblyFileVersion("1.4.0.0")]
+[assembly: AssemblyInformationalVersion("1.4.0+$SourceCommit")]
 
 internal static class Program
 {
@@ -114,7 +114,7 @@ internal static class Program
     }
 
     $version = [Diagnostics.FileVersionInfo]::GetVersionInfo($outputPath)
-    if ($version.FileVersion -ne '1.3.0.0' -or $version.ProductVersion -ne "1.3.0+$SourceCommit")
+    if ($version.FileVersion -ne '1.4.0.0' -or $version.ProductVersion -ne "1.4.0+$SourceCommit")
     {
         throw "Fake published executable version mismatch: FileVersion=$($version.FileVersion), ProductVersion=$($version.ProductVersion)"
     }
@@ -462,7 +462,7 @@ function Invoke-ReleaseProbe
     [System.IO.File]::WriteAllText((Join-Path $repositoryPath 'LICENSE'), "RELEASE_COMMITTED_SOURCE license`r`n", $utf8NoBom)
     [System.IO.File]::WriteAllText((Join-Path $repositoryPath 'THIRD-PARTY-NOTICES.md'), "RELEASE_COMMITTED_SOURCE notices`r`n", $utf8NoBom)
     [System.IO.Directory]::CreateDirectory((Join-Path $repositoryPath 'docs\releases')) | Out-Null
-    [System.IO.File]::WriteAllText((Join-Path $repositoryPath 'docs\releases\v1.3.0.md'), "RELEASE_COMMITTED_SOURCE release notes`r`n", $utf8NoBom)
+    [System.IO.File]::WriteAllText((Join-Path $repositoryPath 'docs\releases\v1.4.0.md'), "RELEASE_COMMITTED_SOURCE release notes`r`n", $utf8NoBom)
     [System.IO.Directory]::CreateDirectory((Join-Path $repositoryPath 'ThirdParty\RePKG')) | Out-Null
     [System.IO.File]::WriteAllText((Join-Path $repositoryPath 'ThirdParty\RePKG\LICENSE.txt'), "RELEASE_COMMITTED_SOURCE RePKG license`r`n", $utf8NoBom)
     [System.IO.File]::WriteAllText((Join-Path $repositoryPath 'ThirdParty\RePKG\THIRD-PARTY-NOTICES.txt'), "RELEASE_COMMITTED_SOURCE RePKG notices`r`n", $utf8NoBom)
@@ -794,7 +794,7 @@ catch
     $startInfo.Environment['RELEASE_GATE_ACTIVE_SOLUTION'] = Join-Path $repositoryPath 'WallpaperField.slnx'
     $startInfo.Environment['RELEASE_GATE_ACTIVE_NUGET'] = Join-Path $repositoryPath 'NuGet.Config'
     $startInfo.Environment['RELEASE_GATE_ACTIVE_LICENSE'] = Join-Path $repositoryPath 'LICENSE'
-    $startInfo.Environment['RELEASE_GATE_ACTIVE_RELEASE_NOTES'] = Join-Path $repositoryPath 'docs\releases\v1.3.0.md'
+    $startInfo.Environment['RELEASE_GATE_ACTIVE_RELEASE_NOTES'] = Join-Path $repositoryPath 'docs\releases\v1.4.0.md'
     if ([string]::Equals(
             $PowerShellPath,
             $windowsPowerShell,
@@ -1014,7 +1014,7 @@ function Invoke-ReleaseDependencyIsolationProbe
     {
         $violations.Add("Windows PowerShell 5.1 release child exited $($result.ExitCode)")
     }
-    if ($result.Output -notlike '*RELEASE_RESULT version=1.3.0*')
+    if ($result.Output -notlike '*RELEASE_RESULT version=1.4.0*')
     {
         $violations.Add('release child did not complete the fake candidate transaction')
     }
