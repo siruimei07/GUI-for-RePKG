@@ -272,7 +272,7 @@
                                         </Style>
                                     </StackPanel.Style>
                                     <TextBlock FontSize="14" FontWeight="Bold" Text="项目浏览" />
-                                    <TextBlock Margin="0,1,0,0" FontFamily="{DynamicResource LabelFontFamily}" FontSize="10" FontWeight="SemiBold" Opacity="0.78" Text="PROJECT BROWSER" />
+                                    <TextBlock Margin="0,1,0,0" FontFamily="{DynamicResource LabelFontFamily}" FontSize="10" FontWeight="SemiBold" Opacity="0.78" Text="PROJECTS" />
                                 </StackPanel>
                                 <StackPanel Grid.Column="3" Margin="6,0,0,0" VerticalAlignment="Center">
                                     <StackPanel.Style>
@@ -671,9 +671,9 @@
                     </TextBlock>
 
                     <Grid x:Name="CalibrationInstrument"
-                          Width="220"
-                          Height="220"
-                          Margin="0,-34,-34,0"
+                          Width="300"
+                          Height="300"
+                          Margin="0,-150,-150,0"
                           HorizontalAlignment="Right"
                           VerticalAlignment="Top"
                           IsHitTestVisible="False"
@@ -695,19 +695,20 @@
                         <Grid.RenderTransform>
                             <RotateTransform x:Name="CalibrationRotation" />
                         </Grid.RenderTransform>
-                        <Ellipse Margin="6" Stroke="{DynamicResource DecorationLineBrush}" StrokeThickness="1" StrokeDashArray="1,6" />
-                        <Ellipse Margin="30" Stroke="{DynamicResource DecorationLineBrush}" StrokeThickness="1" />
-                        <Ellipse Margin="70" Stroke="{DynamicResource DecorationLineBrush}" StrokeThickness="1" StrokeDashArray="4,4" />
-                        <Line X1="110" Y1="0" X2="110" Y2="220" Stroke="{DynamicResource DecorationLineBrush}" StrokeThickness="1" />
-                        <Line X1="0" Y1="110" X2="220" Y2="110" Stroke="{DynamicResource DecorationLineBrush}" StrokeThickness="1" />
+                        <!-- Corner calibration dial: only the lower-left quadrant enters the stage. -->
+                        <Ellipse Margin="4" Stroke="{DynamicResource DecorationLineBrush}" StrokeThickness="1" StrokeDashArray="1,6" />
+                        <Ellipse Margin="34" Stroke="{DynamicResource DecorationLineBrush}" StrokeThickness="1" />
+                        <Ellipse Margin="74" Stroke="{DynamicResource DecorationLineBrush}" StrokeThickness="1" StrokeDashArray="4,4" />
+                        <Line X1="150" Y1="0" X2="150" Y2="300" Stroke="{DynamicResource DecorationLineBrush}" StrokeThickness="1" />
+                        <Line X1="0" Y1="150" X2="300" Y2="150" Stroke="{DynamicResource DecorationLineBrush}" StrokeThickness="1" />
                         <Path Stroke="{DynamicResource AccentActionBrush}"
                               StrokeThickness="5"
-                              StrokeStartLineCap="Flat"
-                              StrokeEndLineCap="Flat"
-                              Data="M 110,30 A 80,80 0 0 1 185,82" />
+                              Data="M 34,150 A 116,116 0 0 0 98,254" />
+                        <Path Stroke="{DynamicResource AccentActionBrush}"
+                              StrokeThickness="5"
+                              Data="M 266,150 A 116,116 0 0 1 202,254" />
                         <Path Fill="{DynamicResource TextPrimaryBrush}"
-                              Data="M 104,18 L 116,18 110,28 Z" />
-                        <Rectangle Width="10" Height="10" Fill="{DynamicResource TextPrimaryBrush}" />
+                              Data="M 144,262 L 156,262 150,272 Z" />
                     </Grid>
 
                     <views:ScanPageView x:Name="ScanPage" />
