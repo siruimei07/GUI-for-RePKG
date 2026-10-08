@@ -222,7 +222,7 @@ public sealed class LibrarySession : ObservableObject
         {
             ClearError();
             CurrentStage = "FAILED";
-            _problemCenter.Publish(
+            _problemCenter.ApplyRefreshBatch(
             [
                 AppIssue.Create(
                     "LIBRARY_OPERATION_FAILED",
@@ -235,7 +235,8 @@ public sealed class LibrarySession : ObservableObject
                     NormalizeIssueContext(OutputPath),
                     operationId,
                     OutputPath)
-            ]);
+            ],
+            []);
             PresentError("输出目录不存在或当前不可访问");
             throw new HandledLibraryException(
                 new DirectoryNotFoundException(
@@ -253,40 +254,40 @@ public sealed class LibrarySession : ObservableObject
                 .LoadAsync(outputPath, cancellationToken)
                 .ConfigureAwait(true);
 
-            _problemCenter.ResolveMatching(
-                AppIssueSource.Library,
-                "LIBRARY_OPERATION_FAILED",
-                NormalizeIssueContext(outputPath));
-
             LibraryWallpapers.ReplaceRange(result.Items.Select(
                 record => new WallpaperCardViewModel(record)));
             LastRefresh = DateTimeOffset.Now;
             NotifyCollectionChanged();
 
-            var recordIssues = new List<AppIssue>();
+            // Every refresh re-derives the library facts, so they are applied as
+            // one batch: one store pass and one projection update, and facts that
+            // are already listed are not published again on each visit.
+            var publications = new List<AppIssue>(
+                result.Items.Count + result.Errors.Count + result.Conflicts.Count);
+            var resolutions = new List<AppIssueResolutionRequest>(
+                1 + (result.Items.Count * 3));
+            AddResolution(
+                resolutions,
+                "LIBRARY_OPERATION_FAILED",
+                NormalizeIssueContext(outputPath));
             foreach (var record in result.Items)
             {
                 var metadataPath = Path.Combine(
                     record.OutputDirectory,
                     WallpaperStorage.MetadataFileName);
-                _problemCenter.ResolveMatching(
-                    AppIssueSource.Library,
-                    "LIBRARY_ITEM_FAILED",
-                    NormalizeIssueContext(metadataPath));
-                _problemCenter.ResolveMatching(
-                    AppIssueSource.Library,
+                var metadataContext = NormalizeIssueContext(metadataPath);
+                AddResolution(resolutions, "LIBRARY_ITEM_FAILED", metadataContext);
+                AddResolution(
+                    resolutions,
                     "LIBRARY_DUPLICATE_ID",
                     NormalizeItemContext(record.WorkshopId));
                 if (record.Warnings.Count == 0)
                 {
-                    _problemCenter.ResolveMatching(
-                        AppIssueSource.Library,
-                        "LIBRARY_ITEM_WARNING",
-                        NormalizeIssueContext(metadataPath));
+                    AddResolution(resolutions, "LIBRARY_ITEM_WARNING", metadataContext);
                 }
                 else
                 {
-                    recordIssues.Add(AppIssue.Create(
+                    publications.Add(AppIssue.Create(
                         "LIBRARY_ITEM_WARNING",
                         AppIssueSeverity.Warning,
                         AppIssueSource.Library,
@@ -294,14 +295,13 @@ public sealed class LibrarySession : ObservableObject
                         string.Join("；", record.Warnings),
                         AppDiskFact.NotModified,
                         AppIssueAction.ReviewInput,
-                        NormalizeIssueContext(metadataPath),
+                        metadataContext,
                         operationId,
                         metadataPath));
                 }
             }
-            _problemCenter.Publish(recordIssues);
 
-            _problemCenter.Publish(result.Errors.Select(error => AppIssue.Create(
+            publications.AddRange(result.Errors.Select(error => AppIssue.Create(
                 "LIBRARY_ITEM_FAILED",
                 AppIssueSeverity.Error,
                 AppIssueSource.Library,
@@ -312,7 +312,7 @@ public sealed class LibrarySession : ObservableObject
                 NormalizeIssueContext(error.Path),
                 operationId,
                 error.Path)));
-            _problemCenter.Publish(result.Conflicts.Select(conflict => AppIssue.Create(
+            publications.AddRange(result.Conflicts.Select(conflict => AppIssue.Create(
                 "LIBRARY_DUPLICATE_ID",
                 AppIssueSeverity.Warning,
                 AppIssueSource.Library,
@@ -322,6 +322,7 @@ public sealed class LibrarySession : ObservableObject
                 AppIssueAction.ReviewInput,
                 NormalizeItemContext(conflict.WorkshopId),
                 operationId)));
+            _problemCenter.ApplyRefreshBatch(publications, resolutions);
 
             var issues = JoinVisibleNotes(
                 JoinIssues(result.Errors),
@@ -346,7 +347,7 @@ public sealed class LibrarySession : ObservableObject
         }
         catch (Exception exception)
         {
-            _problemCenter.Publish(
+            _problemCenter.ApplyRefreshBatch(
             [
                 AppIssue.Create(
                     "LIBRARY_OPERATION_FAILED",
@@ -359,7 +360,8 @@ public sealed class LibrarySession : ObservableObject
                     NormalizeIssueContext(OutputPath),
                     operationId,
                     OutputPath)
-            ]);
+            ],
+            []);
             PresentError("输出壁纸库读取失败", exception);
             throw new HandledLibraryException(exception);
         }
@@ -499,6 +501,22 @@ public sealed class LibrarySession : ObservableObject
 
     private static string NormalizeItemContext(string? value)
         => (value?.Trim() ?? string.Empty).ToUpperInvariant();
+
+    private static void AddResolution(
+        List<AppIssueResolutionRequest> resolutions,
+        string code,
+        string contextKey)
+    {
+        // The batch rejects context-less requests, so an empty key is skipped.
+        if (contextKey.Length > 0)
+        {
+            resolutions.Add(new AppIssueResolutionRequest(
+                AppIssueSource.Library,
+                code,
+                ProjectKey: null,
+                contextKey));
+        }
+    }
 
     private static string GetFriendlyExceptionMessage(Exception exception)
         => exception switch

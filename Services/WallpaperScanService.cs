@@ -90,8 +90,7 @@ public sealed class WallpaperScanService : IWallpaperScanService
 
                 if (knownIds.Contains(candidate.WorkshopId))
                 {
-                    throw new InvalidDataException(
-                        $"workshopid“{candidate.WorkshopId}”重复，已保留先扫描到的目录。");
+                    throw new DuplicateWorkshopIdException(candidate.WorkshopId);
                 }
 
                 var record = CreateRecord(candidate, outputRoot);
@@ -105,8 +104,7 @@ public sealed class WallpaperScanService : IWallpaperScanService
             }
             catch (Exception exception) when (!IsFatalScanException(exception))
             {
-                const string failureMessage =
-                    "项目扫描失败；请检查项目文件格式、访问权限与路径安全性。";
+                var failureMessage = DescribeScanFailure(exception);
                 errors.Add(new ScanError
                 {
                     FolderPath = sourceFolder,
@@ -431,6 +429,23 @@ public sealed class WallpaperScanService : IWallpaperScanService
         }
     }
 
+    // Fixed per-type reasons only: exception messages can carry private paths.
+    private static string DescribeScanFailure(Exception exception)
+        => exception switch
+        {
+            DuplicateWorkshopIdException =>
+                "workshopid 与先扫描到的项目重复，已保留先扫描到的目录。",
+            PathPolicyReparsePointException =>
+                "项目目录是链接或重解析点，出于路径安全已跳过。",
+            InputBudgetExceededException =>
+                $"project.json 超过 {BoundedJsonReader.MaxJsonBytes / (1024 * 1024)} MiB 大小上限，已跳过。",
+            UnauthorizedAccessException =>
+                "没有访问此项目目录或其文件的权限；请检查访问权限后重试。",
+            IOException =>
+                "读取项目文件时发生 I/O 错误；请确认目录仍然存在且文件未被占用后重试。",
+            _ => "项目扫描失败；请检查项目文件格式、访问权限与路径安全性。"
+        };
+
     internal static bool IsFatalScanException(Exception exception)
     {
         ArgumentNullException.ThrowIfNull(exception);
@@ -545,4 +560,13 @@ public sealed class WallpaperScanService : IWallpaperScanService
         long Length,
         DateTimeOffset LastWriteTimeUtc,
         string Format);
+}
+
+// InvalidDataException is sealed; this type only marks duplicates inside the scan loop.
+internal sealed class DuplicateWorkshopIdException : Exception
+{
+    internal DuplicateWorkshopIdException(string workshopId)
+        : base($"workshopid“{workshopId}”重复，已保留先扫描到的目录。")
+    {
+    }
 }

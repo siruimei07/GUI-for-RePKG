@@ -457,7 +457,16 @@ public partial class MainWindow : Window
             or nameof(ShellViewModel.IsProblemsPage)
             or nameof(ShellViewModel.PageCode))
         {
-            Dispatcher.BeginInvoke(AnimateCurrentPage, DispatcherPriority.Loaded);
+            // Start the transition before the next render so the incoming page never flashes
+            // fully drawn for a frame before its fade-in begins.
+            if (Dispatcher.CheckAccess())
+            {
+                AnimateCurrentPage();
+            }
+            else
+            {
+                Dispatcher.BeginInvoke(AnimateCurrentPage, DispatcherPriority.Render);
+            }
         }
 
         if (e.PropertyName == nameof(ShellViewModel.IsBusy))
@@ -741,7 +750,9 @@ public partial class MainWindow : Window
                 break;
             }
 
-            if (child.IsVisible
+            // The page root may still be collapsed while its route trigger catches up, so test
+            // each section's own Visibility rather than IsVisible.
+            if (child.Visibility == Visibility.Visible
                 && child.Opacity > 0.99
                 && (child.RenderTransform is null || ReferenceEquals(child.RenderTransform, Transform.Identity)))
             {

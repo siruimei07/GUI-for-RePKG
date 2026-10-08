@@ -44,6 +44,8 @@ public sealed class AnimatedPreviewImage : Image
     private ScrollViewer? _viewportHost;
     private bool _isWithinViewport = true;
     private int _loadVersion;
+    // SourcePath whose last load failed; viewport refreshes do not retry it until the inputs change or the card unloads.
+    private string? _failedSourcePath;
 
     public AnimatedPreviewImage()
     {
@@ -161,12 +163,20 @@ public sealed class AnimatedPreviewImage : Image
     private static void OnPreviewPropertyChanged(
         DependencyObject dependencyObject,
         DependencyPropertyChangedEventArgs args)
-        => ((AnimatedPreviewImage)dependencyObject).RestartLoad();
+    {
+        var image = (AnimatedPreviewImage)dependencyObject;
+        image._failedSourcePath = null;
+        image.RestartLoad();
+    }
 
     private static void OnAnimationEnabledChanged(
         DependencyObject dependencyObject,
         DependencyPropertyChangedEventArgs args)
-        => ((AnimatedPreviewImage)dependencyObject).RestartLoad();
+    {
+        var image = (AnimatedPreviewImage)dependencyObject;
+        image._failedSourcePath = null;
+        image.RestartLoad();
+    }
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage(
         "Performance",
@@ -190,6 +200,7 @@ public sealed class AnimatedPreviewImage : Image
     {
         DetachViewportTracking();
         ResetPreview();
+        _failedSourcePath = null;
     }
 
     private void OnSizeChanged(object sender, SizeChangedEventArgs args)
@@ -212,7 +223,13 @@ public sealed class AnimatedPreviewImage : Image
     private void OnAnimationError(DependencyObject sender, AnimationErrorEventArgs args)
     {
         AppLog.Write($"Animated GIF playback failed for '{SourcePath}': {args.Exception}");
+        // Only an error raised while this control's GIF is applied belongs to the current source.
+        var currentGifFailed = _gifStream is not null;
         ResetPreview();
+        if (currentGifFailed)
+        {
+            _failedSourcePath = SourcePath;
+        }
     }
 
     private void RestartLoad()
@@ -261,6 +278,7 @@ public sealed class AnimatedPreviewImage : Image
     {
         MemoryStream? memory = null;
         var ownsDecodeSlot = false;
+        var failed = false;
         try
         {
             await DecodeSlots.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -301,9 +319,11 @@ public sealed class AnimatedPreviewImage : Image
         catch (Exception exception) when (
             exception is FileNotFoundException or DirectoryNotFoundException)
         {
+            failed = true;
         }
         catch (Exception exception)
         {
+            failed = true;
             AppLog.Write($"GIF preview load failed for '{path}': {exception}");
         }
         finally
@@ -314,7 +334,7 @@ public sealed class AnimatedPreviewImage : Image
                 DecodeSlots.Release();
             }
 
-            await RetirePendingLoadAsync(version, cancellationToken).ConfigureAwait(false);
+            await RetirePendingLoadAsync(version, failed, cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -325,6 +345,7 @@ public sealed class AnimatedPreviewImage : Image
         CancellationToken cancellationToken)
     {
         var ownsDecodeSlot = false;
+        var failed = false;
         try
         {
             await DecodeSlots.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -349,10 +370,12 @@ public sealed class AnimatedPreviewImage : Image
         catch (Exception exception) when (
             exception is FileNotFoundException or DirectoryNotFoundException)
         {
+            failed = true;
             return;
         }
         catch (Exception exception)
         {
+            failed = true;
             AppLog.Write($"Static preview load failed for '{path}': {exception}");
             return;
         }
@@ -364,7 +387,7 @@ public sealed class AnimatedPreviewImage : Image
                 DecodeSlots.Release();
             }
 
-            await RetirePendingLoadAsync(version, cancellationToken).ConfigureAwait(false);
+            await RetirePendingLoadAsync(version, failed, cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -447,7 +470,19 @@ public sealed class AnimatedPreviewImage : Image
         _loadCancellation = null;
     }
 
-    private async Task RetirePendingLoadAsync(int version, CancellationToken cancellationToken)
+    private void CompleteFailedLoad(int version, CancellationToken cancellationToken)
+    {
+        // A load still owning the pending slot has seen no reset, so SourcePath is the one that failed.
+        if (version == _loadVersion && _loadCancellation is not null
+            && _loadCancellation.Token == cancellationToken)
+        {
+            _failedSourcePath = SourcePath;
+        }
+
+        CompletePendingLoad(version, cancellationToken);
+    }
+
+    private async Task RetirePendingLoadAsync(int version, bool failed, CancellationToken cancellationToken)
     {
         if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished)
         {
@@ -456,7 +491,17 @@ public sealed class AnimatedPreviewImage : Image
 
         try
         {
-            await Dispatcher.InvokeAsync(() => CompletePendingLoad(version, cancellationToken));
+            await Dispatcher.InvokeAsync(() =>
+            {
+                if (failed)
+                {
+                    CompleteFailedLoad(version, cancellationToken);
+                }
+                else
+                {
+                    CompletePendingLoad(version, cancellationToken);
+                }
+            });
         }
         catch (OperationCanceledException) when (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished)
         {
@@ -539,7 +584,9 @@ public sealed class AnimatedPreviewImage : Image
         }
 
         _isWithinViewport = IsInsideViewport();
-        if (_isWithinViewport && Source is null && _gifStream is null && _loadCancellation is null)
+        if (_isWithinViewport && Source is null && _gifStream is null && _loadCancellation is null
+            && (_failedSourcePath is null
+                || !string.Equals(_failedSourcePath, SourcePath, StringComparison.Ordinal)))
         {
             RestartLoad();
             return;

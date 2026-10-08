@@ -118,7 +118,7 @@ public sealed class WpfPreviewThumbnailDecoder : IPreviewThumbnailDecoder
             return Failure(
                 PreviewThumbnailStatus.Unsupported,
                 "PREVIEW_FORMAT_UNSUPPORTED",
-                "预览图不是受支持的 PNG、JPEG 或 GIF。 ");
+                "预览图不是受支持的 PNG、JPEG 或 GIF。");
         }
 
         try

@@ -157,7 +157,7 @@ public sealed class RePkgWallpaperUnpackService : IWallpaperUnpackService
             0,
             eligibleCount == 0
                 ? "所选记录中没有可处理的 PKG 或视频；将全部跳过。"
-                : $"已识别 {eligibleCount} 个可处理项目。 ");
+                : $"已识别 {eligibleCount} 个可处理项目。");
 
         for (var itemIndex = 0; itemIndex < items.Length; itemIndex++)
         {

@@ -1,3 +1,4 @@
+using System.Windows.Threading;
 using WallpaperField.Application;
 using WallpaperField.Infrastructure;
 using WallpaperField.Services;
@@ -57,14 +58,20 @@ public static class AppComposition
             unpackSession,
             librarySession,
             browsePageViewModel);
+        // AppLog is also written from preview and snapshot workers; the issue store's
+        // observable projections and commands must only change on the UI thread.
+        var owner = CaptureOwnerDispatcher();
         AppLog.SetIssueSink(
-            issue => problemCenterSession.Publish([issue]),
+            issue => InvokeOnOwner(owner, () => problemCenterSession.Publish([issue])),
             (source, code, contextKey) =>
-                problemCenterSession.Resolve(
+            {
+                var resolvedAtUtc = DateTimeOffset.UtcNow;
+                InvokeOnOwner(owner, () => problemCenterSession.Resolve(
                     source,
                     code,
                     contextKey,
-                    DateTimeOffset.UtcNow));
+                    resolvedAtUtc));
+            });
         return shell;
     }
 
@@ -97,13 +104,49 @@ public static class AppComposition
     {
         ArgumentNullException.ThrowIfNull(shell);
         var problemCenter = shell.ProblemCenterSession;
+        // Export completes after ConfigureAwait(false), so its outcome may
+        // arrive on a worker thread.
+        var owner = CaptureOwnerDispatcher();
         return new DiagnosticExportService(
-            issue => problemCenter.Publish([issue]),
+            issue => InvokeOnOwner(owner, () => problemCenter.Publish([issue])),
             (source, code, contextKey) =>
-                problemCenter.Resolve(
+            {
+                var resolvedAtUtc = DateTimeOffset.UtcNow;
+                InvokeOnOwner(owner, () => problemCenter.Resolve(
                     source,
                     code,
                     contextKey,
-                    DateTimeOffset.UtcNow));
+                    resolvedAtUtc));
+            });
+    }
+
+    private static Dispatcher? CaptureOwnerDispatcher()
+        // Imaging can register an incidental Dispatcher on an MTA worker without
+        // a message pump. Only an STA dispatcher is treated as the UI owner;
+        // otherwise callbacks keep running inline as before.
+        => Thread.CurrentThread.GetApartmentState() == ApartmentState.STA
+            ? Dispatcher.FromThread(Thread.CurrentThread)
+            : null;
+
+    private static void InvokeOnOwner(Dispatcher? owner, Action action)
+    {
+        if (owner is null || owner.CheckAccess())
+        {
+            action();
+            return;
+        }
+
+        _ = owner.BeginInvoke(() =>
+        {
+            try
+            {
+                action();
+            }
+            catch
+            {
+                // Issue reporting stays best-effort and must not surface as an
+                // unhandled UI exception; inline callers swallow failures too.
+            }
+        });
     }
 }
