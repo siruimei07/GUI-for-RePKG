@@ -6,36 +6,7 @@
              UseLayoutRounding="True">
 
     <Grid>
-        <!-- Library mode replaces the route with an indexed media aperture. -->
-        <Canvas x:Name="LibraryStageOverlay"
-                IsHitTestVisible="False"
-                Opacity="0">
-            <Canvas.Style>
-                <Style TargetType="Canvas">
-                    <Setter Property="Visibility" Value="Collapsed" />
-                    <Style.Triggers>
-                        <DataTrigger Binding="{Binding IsLibraryPage}" Value="True">
-                            <Setter Property="Visibility" Value="Visible" />
-                        </DataTrigger>
-                    </Style.Triggers>
-                </Style>
-            </Canvas.Style>
-            <Path Stroke="{DynamicResource BorderBrush}"
-                  StrokeThickness="1"
-                  Data="M 64,300 L 64,258 L 104,258 M 64,300 L 64,660 L 104,660 M 1040,258 L 1080,258 L 1080,300 M 1040,660 L 1080,660 L 1080,620" />
-            <Line X1="128" Y1="286" X2="1016" Y2="286" Stroke="{DynamicResource BorderBrush}" StrokeDashArray="1,12" />
-            <Line X1="128" Y1="632" X2="1016" Y2="632" Stroke="{DynamicResource BorderBrush}" StrokeDashArray="1,12" />
-            <TextBlock Canvas.Left="82" Canvas.Top="318"
-                       FontFamily="Segoe UI"
-                       FontSize="62"
-                       FontWeight="Black"
-                       Foreground="{DynamicResource TextPrimaryBrush}"
-                       Text="MEDIA / CATALOG" />
-            <TextBlock Canvas.Left="84" Canvas.Top="382"
-                       Style="{StaticResource TechnicalLabel}"
-                       Text="OUTPUT ROOT · METADATA · PREVIEW · FOLDER ACCESS" />
-        </Canvas>
-        <!-- Page 03: output library -->
+        <!-- Page 03: output library. The root stays transparent so the shell stage shows through. -->
         <Grid x:Name="LibraryView" RenderTransformOrigin="0.5,0.5">
             <Grid.Style>
                 <Style TargetType="Grid">
@@ -71,17 +42,36 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <StackPanel>
-                            <TextBlock Style="{StaticResource TechnicalLabel}"
-                                       Foreground="{DynamicResource TextMutedBrush}"
-                                       Text="LOCAL ARCHIVE / 03 · OUTPUT CATALOG" />
+                            <!-- Page coordinate: ink index chip + kicker. -->
+                            <StackPanel Orientation="Horizontal" IsHitTestVisible="False">
+                                <Border Style="{StaticResource IndexChip}" VerticalAlignment="Center">
+                                    <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" Text="03" />
+                                </Border>
+                                <TextBlock Margin="8,0,0,0"
+                                           VerticalAlignment="Center"
+                                           Style="{StaticResource TechnicalLabel}"
+                                           Text="LOCAL ARCHIVE / 本地归档" />
+                            </StackPanel>
                             <TextBlock x:Name="LibraryPageTitle"
-                                       Margin="0,5,0,0"
+                                       Margin="0,6,0,0"
                                        Style="{StaticResource SectionTitle}"
                                        AutomationProperties.HeadingLevel="Level1"
                                        Text="输出壁纸库" />
+                            <Grid Margin="0,7,0,0" IsHitTestVisible="False">
+                                <Border Width="40"
+                                        Height="3"
+                                        HorizontalAlignment="Left"
+                                        VerticalAlignment="Center"
+                                        Background="{DynamicResource AccentActionBrush}" />
+                                <Border Height="1"
+                                        Margin="48,0,0,0"
+                                        VerticalAlignment="Center"
+                                        Background="{DynamicResource BorderBrush}" />
+                            </Grid>
                             <TextBlock x:Name="LibraryDescription"
-                                       Margin="0,6,0,0"
+                                       Margin="0,8,0,0"
                                        MaxWidth="650"
+                                       HorizontalAlignment="Left"
                                        FontSize="13"
                                        Foreground="{DynamicResource TextMutedBrush}"
                                        Text="从指定输出目录递归读取已保存的元数据与 preview；点击任一卡片即可在文件管理器中定位。"
@@ -99,7 +89,8 @@
                             </TextBlock>
                         </StackPanel>
 
-                        <StackPanel x:Name="LibraryStats" Grid.Column="1" Margin="24,0,10,0" HorizontalAlignment="Right" VerticalAlignment="Bottom">
+                        <!-- Record readout: hidden in Compact; the refresh action lives outside it. -->
+                        <StackPanel x:Name="LibraryStats" Grid.Column="1" Margin="24,0,10,0" HorizontalAlignment="Right" VerticalAlignment="Bottom" Orientation="Horizontal">
                             <StackPanel.Style>
                                 <Style TargetType="StackPanel">
                                     <Style.Triggers>
@@ -110,8 +101,11 @@
                                     </Style.Triggers>
                                 </Style>
                             </StackPanel.Style>
-                            <TextBlock HorizontalAlignment="Right" Style="{StaticResource TechnicalLabel}" Text="AVAILABLE RECORDS" />
-                            <TextBlock HorizontalAlignment="Right" Margin="0,2,0,0" FontFamily="Segoe UI" FontSize="24" FontWeight="Bold" Text="{Binding LibrarySession.Count, StringFormat={}{0:00}}" />
+                            <Border Width="1" Background="{DynamicResource BorderBrush}" IsHitTestVisible="False" />
+                            <StackPanel Margin="14,0,0,0">
+                                <TextBlock HorizontalAlignment="Right" Style="{StaticResource TechnicalLabel}" Text="RECORDS / 可用记录" />
+                                <TextBlock HorizontalAlignment="Right" Margin="0,1,0,0" Style="{StaticResource StatReadout}" Text="{Binding LibrarySession.Count, StringFormat={}{0:00}}" />
+                            </StackPanel>
                         </StackPanel>
                         <StackPanel x:Name="LibraryActionPanel"
                                     Grid.Column="2"
@@ -124,8 +118,8 @@
                                     Command="{Binding RefreshLibraryCommand}"
                                     AutomationProperties.Name="刷新输出壁纸库">
                                 <StackPanel Orientation="Horizontal">
-                                    <TextBlock Margin="0,0,8,0" FontFamily="Segoe Fluent Icons" Text="&#xE72C;" />
-                                    <TextBlock Text="刷新输出库" />
+                                    <TextBlock Margin="0,0,8,0" VerticalAlignment="Center" FontFamily="{DynamicResource IconFontFamily}" Text="&#xE72C;" />
+                                    <TextBlock VerticalAlignment="Center" Text="刷新输出库" />
                                 </StackPanel>
                             </Button>
                             <Button x:Name="CancelLibraryRefreshButton"
@@ -139,66 +133,144 @@
                         </StackPanel>
                     </Grid>
 
+                    <!-- Path terminal: a deliberate ink slab with a cyan leading edge. -->
                     <Border x:Name="LibraryPathPanel"
                             Grid.Row="1"
                             Margin="0,0,0,10"
-                            Padding="14,12"
                             Background="{DynamicResource InkBrush}"
-                            CornerRadius="3">
+                            BorderBrush="{DynamicResource AccentActionBrush}"
+                            BorderThickness="4,0,0,0"
+                            CornerRadius="0">
                         <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <Border Width="34" Height="34" Background="{DynamicResource AccentActionBrush}" CornerRadius="3">
-                                <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" FontFamily="Segoe Fluent Icons" FontSize="14" Foreground="{DynamicResource SignalTextBrush}" Text="&#xE8B7;" />
-                            </Border>
-                            <StackPanel Grid.Column="1" Margin="13,0,18,0" VerticalAlignment="Center">
-                                <TextBlock Style="{StaticResource TechnicalLabel}" Foreground="{DynamicResource TextOnDarkMutedBrush}" Text="ACTIVE OUTPUT ROOT" />
-                                <TextBlock Margin="0,3,0,0" FontFamily="Consolas" FontSize="11" Foreground="{DynamicResource PaperBrush}" Text="{Binding LibrarySession.OutputPath}" TextTrimming="CharacterEllipsis" ToolTip="{Binding LibrarySession.OutputPath}" />
-                            </StackPanel>
-                            <Button Grid.Column="2"
-                                    MinWidth="116"
-                                    Style="{StaticResource GhostButton}"
-                                    Foreground="{DynamicResource PaperBrush}"
-                                    BorderBrush="{DynamicResource BorderStrongBrush}"
-                                    Command="{Binding BrowseOutputCommand}"
-                                    Content="更换目录" />
+                            <Grid Margin="14,12,14,12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <Border Width="34"
+                                        Height="34"
+                                        Background="{DynamicResource InkRaisedBrush}"
+                                        BorderBrush="{DynamicResource InkSoftBrush}"
+                                        BorderThickness="1"
+                                        CornerRadius="0"
+                                        IsHitTestVisible="False">
+                                    <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" FontFamily="{DynamicResource IconFontFamily}" FontSize="15" Foreground="{DynamicResource SignalBrush}" Text="&#xE8B7;" />
+                                </Border>
+                                <StackPanel Grid.Column="1" Margin="13,0,18,0" VerticalAlignment="Center">
+                                    <TextBlock Style="{StaticResource TechnicalLabel}" Foreground="{DynamicResource TextOnDarkMutedBrush}" Text="ACTIVE OUTPUT ROOT / 当前输出目录" />
+                                    <Grid Margin="0,4,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Path Width="5"
+                                              Height="8"
+                                              Margin="0,0,8,0"
+                                              VerticalAlignment="Center"
+                                              Data="M 0,0 L 5,4 0,8"
+                                              Stroke="{DynamicResource SignalBrush}"
+                                              StrokeThickness="1.5"
+                                              IsHitTestVisible="False" />
+                                        <TextBlock Grid.Column="1" FontFamily="{DynamicResource TechnicalFontFamily}" FontSize="12" Foreground="{DynamicResource PaperBrush}" Text="{Binding LibrarySession.OutputPath}" TextTrimming="CharacterEllipsis" ToolTip="{Binding LibrarySession.OutputPath}" />
+                                    </Grid>
+                                </StackPanel>
+                                <Button Grid.Column="2"
+                                        MinWidth="116"
+                                        Style="{StaticResource SecondaryButton}"
+                                        Command="{Binding BrowseOutputCommand}"
+                                        Content="更换目录" />
+                            </Grid>
+                            <Path Width="10"
+                                  Height="10"
+                                  HorizontalAlignment="Right"
+                                  VerticalAlignment="Top"
+                                  Data="M 0,0 L 10,0 10,10 Z"
+                                  Fill="{DynamicResource SignalBrush}"
+                                  IsHitTestVisible="False" />
                         </Grid>
                     </Border>
 
+                    <!-- Problem summary banner: white slab, 4px rail + square: amber "!" while library issues are open, cyan check when clear (mirrors Scan). -->
                     <Border x:Name="LibraryProblemSummary"
                             Grid.Row="2"
                             Margin="0,0,0,12"
-                            Padding="12,9"
                             Background="{DynamicResource SurfaceBrush}"
-                            BorderBrush="{DynamicResource SignalPressedBrush}"
-                            BorderThickness="3,1,1,1"
-                            CornerRadius="3"
+                            CornerRadius="0"
                             AutomationProperties.LiveSetting="Polite">
                         <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="34" />
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <Border Width="24" Height="24" Background="{DynamicResource AccentActionBrush}" CornerRadius="3">
-                                <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" FontWeight="Black" Foreground="{DynamicResource SignalTextBrush}" Text="!" />
+                            <Border BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" IsHitTestVisible="False" />
+                            <Border Width="4" HorizontalAlignment="Left" IsHitTestVisible="False">
+                                <Border.Style>
+                                    <Style TargetType="Border">
+                                        <Setter Property="Background" Value="{DynamicResource WarningBrush}" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding ProblemCenterSession.LibraryIssueCount}" Value="0">
+                                                <Setter Property="Background" Value="{DynamicResource AccentActionBrush}" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Border.Style>
                             </Border>
-                            <StackPanel Grid.Column="1" Margin="0,0,14,0">
-                                <TextBlock Style="{StaticResource TechnicalLabel}" Text="PROBLEM SUMMARY / 输出图库" />
-                                <TextBlock Margin="0,4,0,0"
-                                           FontSize="11"
-                                           Foreground="{DynamicResource TextPrimaryBrush}"
-                                           Text="{Binding ProblemCenterSession.LibrarySummary}" />
-                            </StackPanel>
-                            <Button Grid.Column="2"
-                                    MinWidth="124"
-                                    Style="{StaticResource SecondaryButton}"
-                                    Command="{Binding NavigateProblemsCommand}"
-                                    Content="查看全部问题"
-                                    AutomationProperties.Name="查看全部输出图库问题" />
+                            <Grid Margin="16,9,12,9">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="36" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <Border Width="24" Height="24" HorizontalAlignment="Left" CornerRadius="0" IsHitTestVisible="False">
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="Background" Value="{DynamicResource WarningBrush}" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding ProblemCenterSession.LibraryIssueCount}" Value="0">
+                                                    <Setter Property="Background" Value="{DynamicResource AccentActionBrush}" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
+                                    <Grid>
+                                        <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" FontFamily="{DynamicResource LabelFontFamily}" FontSize="14" FontWeight="Bold" Foreground="{DynamicResource SignalTextBrush}" Text="!">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding ProblemCenterSession.LibraryIssueCount}" Value="0">
+                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                        <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" FontFamily="{DynamicResource IconFontFamily}" FontSize="12" Foreground="{DynamicResource SignalTextBrush}" Text="&#xE73E;">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding ProblemCenterSession.LibraryIssueCount}" Value="0">
+                                                            <Setter Property="Visibility" Value="Visible" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </Grid>
+                                </Border>
+                                <StackPanel Grid.Column="1" Margin="0,0,14,0" VerticalAlignment="Center">
+                                    <TextBlock Style="{StaticResource TechnicalLabel}" Text="PROBLEM SUMMARY / 输出图库" />
+                                    <TextBlock Margin="0,4,0,0"
+                                               FontSize="12"
+                                               Foreground="{DynamicResource TextPrimaryBrush}"
+                                               Text="{Binding ProblemCenterSession.LibrarySummary}"
+                                               TextWrapping="Wrap" />
+                                </StackPanel>
+                                <Button Grid.Column="2"
+                                        MinWidth="124"
+                                        Style="{StaticResource SecondaryButton}"
+                                        Command="{Binding NavigateProblemsCommand}"
+                                        Content="查看全部问题"
+                                        AutomationProperties.Name="查看全部输出图库问题" />
+                            </Grid>
                         </Grid>
                     </Border>
 
@@ -209,12 +281,20 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <StackPanel VerticalAlignment="Center">
-                            <TextBlock FontSize="16" FontWeight="SemiBold" Text="壁纸记录" />
-                            <TextBlock Margin="0,3,0,0"
+                            <StackPanel Orientation="Horizontal">
+                                <Border Width="3"
+                                        Height="14"
+                                        Margin="0,0,8,0"
+                                        VerticalAlignment="Center"
+                                        Background="{DynamicResource TextPrimaryBrush}"
+                                        IsHitTestVisible="False" />
+                                <TextBlock VerticalAlignment="Center" FontSize="16" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimaryBrush}" Text="壁纸记录" />
+                            </StackPanel>
+                            <TextBlock Margin="11,3,0,0"
                                        Style="{StaticResource TechnicalLabel}"
                                        Text="NAME FILTER / 实时筛选" />
                         </StackPanel>
-                        <Border Grid.Column="1" Height="1" Margin="16,0" VerticalAlignment="Center" Background="{DynamicResource BorderBrush}" />
+                        <Border Grid.Column="1" Height="1" Margin="16,0" VerticalAlignment="Center" Background="{DynamicResource BorderBrush}" IsHitTestVisible="False" />
                         <Grid x:Name="LibrarySearchPanel"
                               Grid.Column="2"
                               Height="40">
@@ -238,7 +318,7 @@
                                        HorizontalAlignment="Left"
                                        VerticalAlignment="Center"
                                        IsHitTestVisible="False"
-                                       FontFamily="Segoe Fluent Icons"
+                                       FontFamily="{DynamicResource IconFontFamily}"
                                        FontSize="15"
                                        Foreground="{DynamicResource TextPrimaryBrush}"
                                        Text="&#xE721;" />
@@ -264,7 +344,7 @@
                                     HorizontalAlignment="Right"
                                     VerticalAlignment="Center"
                                     BorderThickness="1"
-                                    CornerRadius="3"
+                                    CornerRadius="0"
                                     IsHitTestVisible="False">
                                 <Border.Style>
                                     <Style TargetType="Border">
@@ -275,19 +355,20 @@
                                             <DataTrigger Binding="{Binding LibrarySession.HasSearchText}" Value="True">
                                                 <Setter Property="Margin" Value="0,0,51,0" />
                                                 <Setter Property="Background" Value="{DynamicResource AccentActionBrush}" />
-                                                <Setter Property="BorderBrush" Value="{DynamicResource SignalBrush}" />
+                                                <Setter Property="BorderBrush" Value="{DynamicResource TextPrimaryBrush}" />
                                             </DataTrigger>
                                         </Style.Triggers>
                                     </Style>
                                 </Border.Style>
                                  <TextBlock VerticalAlignment="Center"
-                                            FontFamily="Consolas"
-                                            FontSize="10"
+                                            FontFamily="{DynamicResource LabelFontFamily}"
+                                            FontSize="11"
                                             FontWeight="SemiBold"
+                                            Typography.NumeralAlignment="Tabular"
                                             AutomationProperties.LiveSetting="Polite">
                                      <TextBlock.Style>
                                          <Style TargetType="TextBlock">
-                                             <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+                                             <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
                                              <Style.Triggers>
                                                  <DataTrigger Binding="{Binding LibrarySession.HasSearchText}" Value="True">
                                                      <Setter Property="Foreground" Value="{DynamicResource SignalTextBrush}" />
@@ -318,6 +399,8 @@
                                     Content="&#xE711;">
                                 <Button.Style>
                                     <Style BasedOn="{StaticResource IconButton}" TargetType="Button">
+                                        <Setter Property="FontFamily" Value="{DynamicResource IconFontFamily}" />
+                                        <Setter Property="FontSize" Value="14" />
                                         <Setter Property="Visibility" Value="Collapsed" />
                                         <Style.Triggers>
                                             <DataTrigger Binding="{Binding LibrarySession.HasSearchText}" Value="True">
@@ -383,11 +466,11 @@
                             </ListBox.ItemsPanel>
                         </ListBox>
 
-                        <Border Padding="20"
-                                Background="{DynamicResource BackgroundBrush}"
+                        <!-- Empty state: white slab, cut-corner frame around the glyph, title + muted text. -->
+                        <Border Background="{DynamicResource SurfaceBrush}"
                                 BorderBrush="{DynamicResource BorderBrush}"
                                 BorderThickness="1"
-                                CornerRadius="3">
+                                CornerRadius="0">
                             <Border.Style>
                                 <Style TargetType="Border">
                                     <Setter Property="Visibility" Value="Collapsed" />
@@ -398,13 +481,37 @@
                                     </Style.Triggers>
                                 </Style>
                             </Border.Style>
-                            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-                                    <Border Width="62" Height="62" BorderBrush="{DynamicResource BorderStrongBrush}" BorderThickness="1" CornerRadius="3">
-                                        <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" FontFamily="Segoe Fluent Icons" FontSize="25" Foreground="{DynamicResource TextMutedBrush}" Text="&#xE838;" />
-                                </Border>
-                                <TextBlock Margin="0,16,0,0" HorizontalAlignment="Center" FontSize="16" FontWeight="SemiBold" Text="{Binding LibrarySession.EmptyTitle}" />
-                                <TextBlock Margin="0,6,0,0" HorizontalAlignment="Center" FontSize="12" Foreground="{DynamicResource TextMutedBrush}" Text="{Binding LibrarySession.EmptyDescription}" />
-                            </StackPanel>
+                            <Grid>
+                                <StackPanel Margin="20" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                    <Border Width="56" Height="56" HorizontalAlignment="Center" BorderBrush="{DynamicResource BorderStrongBrush}" BorderThickness="1" CornerRadius="0">
+                                        <Grid>
+                                            <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" FontFamily="{DynamicResource IconFontFamily}" FontSize="24" Foreground="{DynamicResource TextMutedBrush}" Text="&#xE838;" />
+                                            <Path Width="8"
+                                                  Height="8"
+                                                  HorizontalAlignment="Right"
+                                                  VerticalAlignment="Top"
+                                                  Data="M 0,0 L 8,0 8,8 Z"
+                                                  Fill="{DynamicResource TextPrimaryBrush}"
+                                                  IsHitTestVisible="False" />
+                                        </Grid>
+                                    </Border>
+                                    <Border Width="24"
+                                            Height="3"
+                                            Margin="0,14,0,0"
+                                            HorizontalAlignment="Center"
+                                            Background="{DynamicResource AccentActionBrush}"
+                                            IsHitTestVisible="False" />
+                                    <TextBlock Margin="0,12,0,0" HorizontalAlignment="Center" FontSize="16" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimaryBrush}" Text="{Binding LibrarySession.EmptyTitle}" TextAlignment="Center" TextWrapping="Wrap" />
+                                    <TextBlock Margin="0,6,0,0" MaxWidth="460" HorizontalAlignment="Center" FontSize="12" Foreground="{DynamicResource TextMutedBrush}" Text="{Binding LibrarySession.EmptyDescription}" TextAlignment="Center" TextWrapping="Wrap" />
+                                </StackPanel>
+                                <Path Width="10"
+                                      Height="10"
+                                      HorizontalAlignment="Right"
+                                      VerticalAlignment="Top"
+                                      Data="M 0,0 L 10,0 10,10 Z"
+                                      Fill="{DynamicResource TextPrimaryBrush}"
+                                      IsHitTestVisible="False" />
+                            </Grid>
                         </Border>
                     </Grid>
             </Grid>
