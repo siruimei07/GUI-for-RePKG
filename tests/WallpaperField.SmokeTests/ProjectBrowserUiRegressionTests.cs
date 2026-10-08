@@ -43,8 +43,8 @@ internal static class ProjectBrowserUiRegressionTests
         (1059d, 680d, "Compact", 3, 0d),
         (1060d, 760d, "Regular", 4, 294d),
         (1189d, 800d, "Regular", 4, 294d),
-        (1190d, 800d, "Wide", 5, 328d),
-        (1600d, 1000d, "Wide", 6, 328d)
+        (1190d, 800d, "Wide", 5, 300d),
+        (1600d, 1000d, "Wide", 6, 300d)
     ];
 
     internal static async Task RunAsync(Action<bool, string> assert)
@@ -3529,9 +3529,9 @@ internal static class ProjectBrowserUiRegressionTests
             var cards = FindCardButtons(grid).Take(item.Columns).ToArray();
             assert(cards.Length == item.Columns
                    && cards.All(card => card.ActualWidth >= 104 - 0.75
-                                         && Math.Abs(card.ActualHeight - card.ActualWidth * 10d / 16d) < 1.0
+                                         && Math.Abs(card.ActualHeight - card.ActualWidth) < 1.0
                                          && card.Effect is null),
-                $"Browse card 104-DIP minimum, 16:10 geometry, or shadow boundary failed at {item.Width:0} DIP. "
+                $"Browse card 104-DIP minimum, square geometry, or shadow boundary failed at {item.Width:0} DIP. "
                 + $"cards={cards.Length}; values=[{string.Join(';', cards.Select(card =>
                     $"{card.ActualWidth:0.###}x{card.ActualHeight:0.###}/effect={card.Effect?.GetType().Name ?? "none"}"))}].");
             if (cards.Length >= 2)
@@ -6048,7 +6048,7 @@ internal static class ProjectBrowserUiRegressionTests
                 || rowBounds.Right > viewportWidth + 0.75
                 || cardBounds.Any(bounds => bounds.Left < -0.75
                                             || bounds.Right > viewportWidth + 0.75)
-                || minimumGap < 7.99)
+                || minimumGap < 5.99)
             {
                 rowFailures.Add(
                     $"{grid.ItemContainerGenerator.IndexFromContainer(row)}:"

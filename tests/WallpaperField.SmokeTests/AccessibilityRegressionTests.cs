@@ -99,10 +99,16 @@ internal static class AccessibilityRegressionTests
         {
             palette.Invoke(window, [true]);
             var resources = Application.Current.Resources;
-            assert(ReferenceEquals(resources["PaperBrush"], SystemColors.WindowBrush)
-                   && ReferenceEquals(resources["TextOnDarkMutedBrush"], SystemColors.WindowBrush)
+            assert(ReferenceEquals(resources["PaperBrush"], SystemColors.WindowTextBrush)
+                   && ReferenceEquals(resources["TextOnDarkMutedBrush"], SystemColors.WindowTextBrush)
                    && ReferenceEquals(resources["Paper24Brush"], SystemColors.WindowBrush)
-                   && ReferenceEquals(resources["InkBrush"], SystemColors.WindowTextBrush)
+                   && ReferenceEquals(resources["InkBrush"], SystemColors.WindowBrush)
+                   && ReferenceEquals(resources["SurfaceMutedBrush"], SystemColors.WindowBrush)
+                   && ReferenceEquals(resources["SurfacePressedBrush"], SystemColors.WindowBrush)
+                   && ReferenceEquals(resources["InputBackgroundBrush"], SystemColors.WindowBrush)
+                   && ReferenceEquals(resources["AccentTextBrush"], SystemColors.WindowTextBrush)
+                   && ReferenceEquals(resources["AccentActionBrush"], SystemColors.HighlightBrush)
+                   && ReferenceEquals(resources["OverlayBrush"], SystemColors.WindowBrush)
                    && ReferenceEquals(resources["SelectionBackgroundBrush"], SystemColors.HighlightBrush)
                    && ReferenceEquals(resources["SelectionTextBrush"], SystemColors.HighlightTextBrush)
                    && ReferenceEquals(resources["SignalTextBrush"], SystemColors.HighlightTextBrush)

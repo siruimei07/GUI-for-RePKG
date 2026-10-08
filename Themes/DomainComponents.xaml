@@ -4,11 +4,11 @@
     xmlns:controls="clr-namespace:WallpaperField.Controls">
 
     <!-- Navigation, cards, panels, status, typography, and problem presentation. -->
-    <!-- Navigation keeps a rounded touch target and a hard signal rail. -->
+    <!-- Compact navigation with a persistent active-page marker. -->
     <Style x:Key="NavButton" TargetType="{x:Type Button}">
         <Setter Property="MinWidth" Value="44" />
-        <Setter Property="MinHeight" Value="52" />
-        <Setter Property="Padding" Value="16,0,14,0" />
+        <Setter Property="MinHeight" Value="46" />
+        <Setter Property="Padding" Value="10,0" />
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
         <Setter Property="BorderBrush" Value="Transparent" />
@@ -41,7 +41,7 @@
                                 Margin="0,0,3,0"
                                 HorizontalAlignment="Left"
                                 VerticalAlignment="Center"
-                                Background="{DynamicResource SignalBrush}"
+                                Background="{DynamicResource AccentActionBrush}"
                                 Opacity="0" />
                         <ContentPresenter Margin="{TemplateBinding Padding}"
                                           HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
@@ -50,23 +50,23 @@
                     </Grid>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="NavHover" Property="Opacity" Value="0.08" />
+                            <Setter TargetName="NavChrome" Property="BorderBrush" Value="{DynamicResource AccentTextBrush}" />
                         </Trigger>
                         <Trigger Property="IsPressed" Value="True">
-                            <Setter TargetName="NavHover" Property="Opacity" Value="0.16" />
+                            <Setter TargetName="NavChrome" Property="BorderBrush" Value="{DynamicResource SignalPressedBrush}" />
                         </Trigger>
                         <Trigger Property="IsDefault" Value="True">
                             <Setter Property="Foreground" Value="{DynamicResource PaperBrush}" />
                             <Setter Property="FontWeight" Value="SemiBold" />
                             <Setter TargetName="NavChrome" Property="Background" Value="{DynamicResource InkBrush}" />
-                            <Setter TargetName="NavChrome" Property="BorderBrush" Value="{DynamicResource InkBrush}" />
+                            <Setter TargetName="NavChrome" Property="BorderBrush" Value="{DynamicResource BorderStrongBrush}" />
                             <Setter TargetName="NavMarker" Property="Opacity" Value="1" />
                         </Trigger>
                         <Trigger Property="Tag" Value="Active">
                             <Setter Property="Foreground" Value="{DynamicResource PaperBrush}" />
                             <Setter Property="FontWeight" Value="SemiBold" />
                             <Setter TargetName="NavChrome" Property="Background" Value="{DynamicResource InkBrush}" />
-                            <Setter TargetName="NavChrome" Property="BorderBrush" Value="{DynamicResource InkBrush}" />
+                            <Setter TargetName="NavChrome" Property="BorderBrush" Value="{DynamicResource BorderStrongBrush}" />
                             <Setter TargetName="NavMarker" Property="Opacity" Value="1" />
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
@@ -83,8 +83,8 @@
         <Setter Property="MinWidth" Value="180" />
         <Setter Property="MinHeight" Value="200" />
         <Setter Property="Padding" Value="0" />
-        <Setter Property="Background" Value="{DynamicResource PaperElevatedBrush}" />
-        <Setter Property="Foreground" Value="{DynamicResource InkBrush}" />
+        <Setter Property="Background" Value="{DynamicResource SurfaceBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
         <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}" />
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="Cursor" Value="Hand" />
@@ -119,13 +119,13 @@
                                 Margin="18,0,18,0"
                                 HorizontalAlignment="Stretch"
                                 VerticalAlignment="Bottom"
-                                Background="{DynamicResource SignalBrush}"
+                                Background="{DynamicResource AccentActionBrush}"
                                 IsHitTestVisible="False"
                                 Opacity="0" />
                     </Grid>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="CardChrome" Property="BorderBrush" Value="{DynamicResource InkBrush}" />
+                            <Setter TargetName="CardChrome" Property="BorderBrush" Value="{DynamicResource BorderStrongBrush}" />
                             <Setter TargetName="CardHoverWash" Property="Opacity" Value="0.035" />
                             <Setter TargetName="CardSignalRule" Property="Opacity" Value="1" />
                         </Trigger>
@@ -143,7 +143,7 @@
 
     <Style x:Key="BrowseProjectCardButton" TargetType="{x:Type Button}">
         <Setter Property="MinWidth" Value="{DynamicResource BrowseCardMinimumWidth}" />
-        <Setter Property="MinHeight" Value="65" />
+        <Setter Property="MinHeight" Value="104" />
         <Setter Property="Padding" Value="0" />
         <Setter Property="Background" Value="{DynamicResource InkSoftBrush}" />
         <Setter Property="Foreground" Value="{DynamicResource PaperBrush}" />
@@ -161,7 +161,7 @@
                             Background="{TemplateBinding Background}"
                             BorderBrush="{TemplateBinding BorderBrush}"
                             BorderThickness="{TemplateBinding BorderThickness}"
-                            CornerRadius="8"
+                            CornerRadius="3"
                             ClipToBounds="True">
                         <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
                                           VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
@@ -170,7 +170,7 @@
                         <Trigger Property="IsMouseOver" Value="True">
                             <Setter TargetName="BrowseCardChrome"
                                     Property="BorderBrush"
-                                    Value="{DynamicResource InkBrush}" />
+                                    Value="{DynamicResource AccentTextBrush}" />
                         </Trigger>
                         <Trigger Property="IsKeyboardFocused" Value="True">
                             <Setter TargetName="BrowseCardChrome"
@@ -191,12 +191,12 @@
 
     <!-- Panels and status -->
     <Style x:Key="LightPanel" TargetType="{x:Type Border}">
-        <Setter Property="Background" Value="{DynamicResource PaperElevatedBrush}" />
+        <Setter Property="Background" Value="{DynamicResource SurfaceBrush}" />
         <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}" />
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="CornerRadius" Value="{DynamicResource PanelCornerRadius}" />
         <Setter Property="Padding" Value="{DynamicResource PanelPadding}" />
-        <Setter Property="TextElement.Foreground" Value="{DynamicResource InkBrush}" />
+        <Setter Property="TextElement.Foreground" Value="{DynamicResource TextPrimaryBrush}" />
         <Setter Property="SnapsToDevicePixels" Value="True" />
     </Style>
 
@@ -213,11 +213,11 @@
     <Style x:Key="StatusPill" TargetType="{x:Type Border}">
         <Setter Property="MinHeight" Value="28" />
         <Setter Property="Padding" Value="10,4" />
-        <Setter Property="Background" Value="{DynamicResource Ink08Brush}" />
-        <Setter Property="BorderBrush" Value="{DynamicResource Ink18Brush}" />
+        <Setter Property="Background" Value="{DynamicResource SurfaceMutedBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}" />
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="CornerRadius" Value="{DynamicResource PillCornerRadius}" />
-        <Setter Property="TextElement.Foreground" Value="{DynamicResource InkBrush}" />
+        <Setter Property="TextElement.Foreground" Value="{DynamicResource TextPrimaryBrush}" />
         <Setter Property="TextElement.FontFamily" Value="{DynamicResource TechnicalFontFamily}" />
         <Setter Property="TextElement.FontSize" Value="11" />
     </Style>
@@ -231,7 +231,7 @@
     </Style>
 
     <Style x:Key="PreviewFrame" TargetType="{x:Type Border}">
-        <Setter Property="Background" Value="{DynamicResource PaperMutedBrush}" />
+        <Setter Property="Background" Value="{DynamicResource SurfaceMutedBrush}" />
         <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}" />
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="CornerRadius" Value="0" />
@@ -241,7 +241,7 @@
 
     <Style x:Key="SignalDivider" TargetType="{x:Type Border}">
         <Setter Property="Height" Value="2" />
-        <Setter Property="Background" Value="{DynamicResource SignalBrush}" />
+        <Setter Property="Background" Value="{DynamicResource AccentActionBrush}" />
         <Setter Property="HorizontalAlignment" Value="Stretch" />
         <Setter Property="SnapsToDevicePixels" Value="True" />
     </Style>
@@ -276,8 +276,8 @@
         <Setter Property="FontSize" Value="{DynamicResource FontSizeSection}" />
         <Setter Property="FontStretch" Value="SemiCondensed" />
         <Setter Property="FontWeight" Value="Bold" />
-        <Setter Property="Foreground" Value="{DynamicResource InkBrush}" />
-        <Setter Property="LineHeight" Value="35" />
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+        <Setter Property="LineHeight" Value="30" />
         <Setter Property="TextOptions.TextFormattingMode" Value="Display" />
         <Setter Property="TextWrapping" Value="Wrap" />
     </Style>
@@ -286,15 +286,15 @@
            BasedOn="{StaticResource SectionTitle}"
            TargetType="{x:Type TextBlock}">
         <Setter Property="FontSize" Value="{DynamicResource FontSizeDisplay}" />
-        <Setter Property="LineHeight" Value="49" />
+        <Setter Property="LineHeight" Value="38" />
     </Style>
 
     <Style x:Key="HeroNumeral"
            BasedOn="{StaticResource SectionTitle}"
            TargetType="{x:Type TextBlock}">
         <Setter Property="FontSize" Value="{DynamicResource FontSizeHero}" />
-        <Setter Property="LineHeight" Value="70" />
-        <Setter Property="Foreground" Value="{DynamicResource Ink12Brush}" />
+        <Setter Property="LineHeight" Value="50" />
+        <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
         <Setter Property="Typography.NumeralStyle" Value="Lining" />
         <Setter Property="Typography.NumeralAlignment" Value="Tabular" />
     </Style>
@@ -317,7 +317,7 @@
         <Setter Property="FontFamily" Value="{DynamicResource UiFontFamily}" />
         <Setter Property="FontSize" Value="{DynamicResource FontSizeBodyLarge}" />
         <Setter Property="FontWeight" Value="SemiBold" />
-        <Setter Property="Foreground" Value="{DynamicResource InkBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
         <Setter Property="TextTrimming" Value="CharacterEllipsis" />
     </Style>
 
@@ -344,7 +344,7 @@
     <!-- Problem filtering and shared wallpaper-card presentation. -->
     <Style x:Key="ProblemFilterComboBoxItem" TargetType="{x:Type ComboBoxItem}">
         <Setter Property="Padding" Value="12,9" />
-        <Setter Property="Foreground" Value="{DynamicResource InkBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
         <Setter Property="FocusVisualStyle" Value="{DynamicResource FocusVisual}" />
         <Setter Property="HorizontalContentAlignment" Value="Stretch" />
         <Setter Property="Template">
@@ -353,15 +353,15 @@
                     <Border x:Name="ItemChrome"
                             Padding="{TemplateBinding Padding}"
                             Background="Transparent"
-                            CornerRadius="8">
+                            CornerRadius="3">
                         <ContentPresenter />
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsHighlighted" Value="True">
-                            <Setter TargetName="ItemChrome" Property="Background" Value="{DynamicResource PaperMutedBrush}" />
+                            <Setter TargetName="ItemChrome" Property="Background" Value="{DynamicResource SurfaceMutedBrush}" />
                         </Trigger>
                         <Trigger Property="IsSelected" Value="True">
-                            <Setter TargetName="ItemChrome" Property="Background" Value="{DynamicResource SignalBrush}" />
+                            <Setter TargetName="ItemChrome" Property="Background" Value="{DynamicResource AccentActionBrush}" />
                             <Setter Property="Foreground" Value="{DynamicResource SignalTextBrush}" />
                             <Setter Property="FontWeight" Value="SemiBold" />
                         </Trigger>
@@ -372,10 +372,10 @@
     </Style>
 
     <Style x:Key="ProblemFilterComboBox" TargetType="{x:Type ComboBox}">
-        <Setter Property="MinHeight" Value="46" />
+        <Setter Property="MinHeight" Value="40" />
         <Setter Property="Padding" Value="14,0,40,0" />
-        <Setter Property="Background" Value="{DynamicResource PaperBrush}" />
-        <Setter Property="Foreground" Value="{DynamicResource InkBrush}" />
+        <Setter Property="Background" Value="{DynamicResource InputBackgroundBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
         <Setter Property="BorderBrush" Value="{DynamicResource BorderStrongBrush}" />
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="FontSize" Value="13" />
@@ -388,6 +388,7 @@
                         <ToggleButton x:Name="DropDownToggle"
                                       Padding="{TemplateBinding Padding}"
                                       Background="{TemplateBinding Background}"
+                                      Foreground="{TemplateBinding Foreground}"
                                       BorderBrush="{TemplateBinding BorderBrush}"
                                       BorderThickness="{TemplateBinding BorderThickness}"
                                       Content="{TemplateBinding SelectionBoxItem}"
@@ -400,7 +401,7 @@
                                             Background="{TemplateBinding Background}"
                                             BorderBrush="{TemplateBinding BorderBrush}"
                                             BorderThickness="{TemplateBinding BorderThickness}"
-                                            CornerRadius="11">
+                                            CornerRadius="3">
                                         <Grid>
                                             <ContentPresenter Margin="{TemplateBinding Padding}"
                                                               VerticalAlignment="Center"
@@ -416,7 +417,7 @@
                                     </Border>
                                     <ControlTemplate.Triggers>
                                         <Trigger Property="IsMouseOver" Value="True">
-                                            <Setter TargetName="ComboChrome" Property="BorderBrush" Value="{DynamicResource InkBrush}" />
+                                            <Setter TargetName="ComboChrome" Property="BorderBrush" Value="{DynamicResource BorderStrongBrush}" />
                                         </Trigger>
                                         <Trigger Property="IsChecked" Value="True">
                                             <Setter TargetName="ComboChrome" Property="BorderBrush" Value="{DynamicResource SignalPressedBrush}" />
@@ -434,10 +435,10 @@
                                     MaxHeight="330"
                                     Margin="0,5,0,0"
                                     Padding="5"
-                                    Background="{DynamicResource PaperBrush}"
+                                    Background="{DynamicResource BackgroundBrush}"
                                     BorderBrush="{DynamicResource BorderStrongBrush}"
                                     BorderThickness="1"
-                                    CornerRadius="11">
+                                    CornerRadius="3">
                                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                                     <ItemsPresenter />
                                 </ScrollViewer>
@@ -478,7 +479,7 @@
                 <Border Grid.Column="0"
                         Background="{DynamicResource InkSoftBrush}"
                         ClipToBounds="True"
-                        CornerRadius="15,3,3,15">
+                        CornerRadius="3,0,0,3">
                     <Grid>
                         <controls:AnimatedPreviewImage SourcePath="{Binding PreviewPath}"
                                                        AnimationEnabled="{Binding MotionEnabled, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
@@ -521,7 +522,7 @@
                                 HorizontalAlignment="Left"
                                 Panel.ZIndex="2"
                                 Background="{DynamicResource OverlayBrush}"
-                                CornerRadius="0,0,12,0">
+                                CornerRadius="0,0,3,0">
                             <TextBlock VerticalAlignment="Center"
                                        FontFamily="Consolas"
                                        FontSize="11"
@@ -534,8 +535,8 @@
                                 HorizontalAlignment="Right"
                                 VerticalAlignment="Top"
                                 Panel.ZIndex="2"
-                                Background="{DynamicResource SignalBrush}"
-                                CornerRadius="10"
+                                Background="{DynamicResource AccentActionBrush}"
+                                CornerRadius="3"
                                 ToolTip="{Binding WarningSummary}">
                             <Border.Style>
                                 <Style TargetType="Border">
@@ -568,16 +569,16 @@
                                 HorizontalAlignment="Left"
                                 VerticalAlignment="Bottom"
                                 Panel.ZIndex="2"
-                                CornerRadius="9"
+                                CornerRadius="3"
                                 ToolTip="{Binding PackageStatusDetail}">
                             <Border.Style>
                                 <Style TargetType="Border">
-                                    <Setter Property="Background" Value="{DynamicResource PaperBrush}" />
-                                    <Setter Property="BorderBrush" Value="{DynamicResource Ink42Brush}" />
+                                    <Setter Property="Background" Value="{DynamicResource BackgroundBrush}" />
+                                    <Setter Property="BorderBrush" Value="{DynamicResource BorderStrongBrush}" />
                                     <Setter Property="BorderThickness" Value="1" />
                                     <Style.Triggers>
                                         <DataTrigger Binding="{Binding HasUnpackableContent}" Value="True">
-                                            <Setter Property="Background" Value="{DynamicResource SignalBrush}" />
+                                            <Setter Property="Background" Value="{DynamicResource AccentActionBrush}" />
                                             <Setter Property="BorderThickness" Value="0" />
                                         </DataTrigger>
                                     </Style.Triggers>
@@ -586,7 +587,7 @@
                             <StackPanel Orientation="Horizontal">
                                 <StackPanel.Style>
                                     <Style TargetType="StackPanel">
-                                        <Setter Property="TextElement.Foreground" Value="{DynamicResource InkBrush}" />
+                                        <Setter Property="TextElement.Foreground" Value="{DynamicResource TextPrimaryBrush}" />
                                         <Style.Triggers>
                                             <DataTrigger Binding="{Binding HasUnpackableContent}" Value="True">
                                                 <Setter Property="TextElement.Foreground" Value="{DynamicResource SignalTextBrush}" />
@@ -626,7 +627,7 @@
                                VerticalAlignment="Top"
                                FontSize="18"
                                FontWeight="SemiBold"
-                               Foreground="{DynamicResource InkBrush}"
+                               Foreground="{DynamicResource TextPrimaryBrush}"
                                Text="{Binding Title}"
                                TextTrimming="CharacterEllipsis"
                                TextWrapping="NoWrap" />
@@ -642,7 +643,7 @@
                             <TextBlock Margin="0,3,0,0"
                                        FontFamily="Consolas"
                                        FontSize="11"
-                                       Foreground="{DynamicResource InkBrush}"
+                                       Foreground="{DynamicResource TextPrimaryBrush}"
                                        Text="{Binding FolderName}"
                                        TextTrimming="CharacterEllipsis" />
                         </StackPanel>
@@ -666,7 +667,7 @@
                         HorizontalAlignment="Center"
                         VerticalAlignment="Center"
                         Background="{DynamicResource InkBrush}"
-                        CornerRadius="19">
+                        CornerRadius="3">
                     <Border.Style>
                         <Style TargetType="Border">
                             <Setter Property="Visibility" Value="Visible" />

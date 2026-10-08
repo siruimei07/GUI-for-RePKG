@@ -4,8 +4,7 @@ using System.Text;
 using RePKG.Application.Exceptions;
 using RePKG.Application.Texture;
 using RePKG.Core.Texture;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
+using System.Windows.Media;
 using WallpaperField.Models;
 using WallpaperField.Services;
 
@@ -115,15 +114,12 @@ internal static class TexStringAndPixelRegressionTests
             failures.Add("boxed RG88 equality/hash does not follow the packed RG value");
         }
 
-        var toRgba32 = rg88Type.GetMethod(
-            "ToRgba32",
-            BindingFlags.Public | BindingFlags.Instance)
-            ?? throw new MissingMethodException(rg88Type.FullName, "ToRgba32");
-        var rgbaArguments = new object[] { new Rgba32() };
-        _ = toRgba32.Invoke(equalLeft, rgbaArguments);
-        if ((Rgba32)rgbaArguments[0] != new Rgba32(192, 192, 192, 64))
+        var toBgra32 = rg88Type.GetMethod(
+            "ToBgra32", BindingFlags.Public | BindingFlags.Instance)
+            ?? throw new MissingMethodException(rg88Type.FullName, "ToBgra32");
+        if ((uint)toBgra32.Invoke(equalLeft, null)! != 0x40c0c0c0U)
         {
-            failures.Add("RG88.ToRgba32 does not match its established grayscale/alpha semantics");
+            failures.Add("RG88.ToBgra32 does not match its established grayscale/alpha semantics");
         }
 
         var testRoot = Path.Combine(
@@ -163,9 +159,9 @@ internal static class TexStringAndPixelRegressionTests
             }
             else
             {
-                using var image = Image.Load<Rgba32>(imagePath);
-                var pixel = image[0, 0];
-                if (pixel != new Rgba32(192, 192, 192, 64))
+                var image = TexBitmapTestSupport.Decode(File.ReadAllBytes(imagePath));
+                var pixel = TexBitmapTestSupport.Pixel(image.Frames[0]);
+                if (pixel != Color.FromArgb(64, 192, 192, 192))
                 {
                     failures.Add(
                         $"RG88 PNG pixel was {pixel}, expected RGBA(192,192,192,64)");

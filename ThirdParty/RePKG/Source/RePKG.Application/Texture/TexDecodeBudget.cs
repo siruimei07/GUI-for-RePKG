@@ -170,18 +170,6 @@ namespace RePKG.Application.Texture
                         MaximumDecodedBytesPerMipmap);
                 }
 
-                var nextDecodedBytes = CheckedAdd(
-                    _decodedBytes,
-                    decodedBytes,
-                    "File decoded bytes");
-                if (nextDecodedBytes > MaximumDecodedBytesPerFile)
-                {
-                    throw UnsafeLimit(
-                        "File decoded bytes",
-                        nextDecodedBytes,
-                        MaximumDecodedBytesPerFile);
-                }
-
                 var nextPixels = CheckedAdd(_pixels, pixels, "File mipmap pixels");
                 if (nextPixels > MaximumPixelsPerFile)
                 {
@@ -191,9 +179,26 @@ namespace RePKG.Application.Texture
                         MaximumPixelsPerFile);
                 }
 
-                _owner.ReserveBatchDecodedBytes(decodedBytes);
-                _decodedBytes = nextDecodedBytes;
+                ReserveDecodedBytes(decodedBytes);
                 _pixels = nextPixels;
+            }
+
+            public void ReserveConversionBytes(long byteCount)
+            {
+                ValidateRange(byteCount, 1, MaximumDecodedBytesPerFile, "Conversion decoded bytes");
+                ReserveDecodedBytes(byteCount);
+            }
+
+            private void ReserveDecodedBytes(long byteCount)
+            {
+                var next = CheckedAdd(_decodedBytes, byteCount, "File decoded bytes");
+                if (next > MaximumDecodedBytesPerFile)
+                {
+                    throw UnsafeLimit("File decoded bytes", next, MaximumDecodedBytesPerFile);
+                }
+
+                _owner.ReserveBatchDecodedBytes(byteCount);
+                _decodedBytes = next;
             }
 
             public void ReserveFrameCount(int count)

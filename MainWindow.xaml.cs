@@ -39,6 +39,11 @@ public partial class MainWindow : Window
         "Paper24Brush",
         "BackgroundBrush",
         "SurfaceBrush",
+        "SurfaceMutedBrush",
+        "SurfacePressedBrush",
+        "InputBackgroundBrush",
+        "AccentActionBrush",
+        "AccentTextBrush",
         "InkBrush",
         "InkRaisedBrush",
         "InkSoftBrush",
@@ -542,7 +547,7 @@ public partial class MainWindow : Window
     private void UpdateWindowStateVisuals()
     {
         var maximized = WindowState == WindowState.Maximized;
-        WindowFrame.CornerRadius = maximized ? new CornerRadius(0) : new CornerRadius(16);
+        WindowFrame.CornerRadius = maximized ? new CornerRadius(0) : new CornerRadius(4);
         WindowFrame.BorderThickness = maximized ? new Thickness(0) : new Thickness(1);
         MaximizeGlyph.Text = maximized ? "\uE923" : "\uE922";
     }
@@ -568,7 +573,6 @@ public partial class MainWindow : Window
         SetResourceBrushes(
             resources,
             SystemColors.WindowBrush,
-            "PaperBrush",
             "PaperElevatedBrush",
             "PaperMutedBrush",
             "PaperPressedBrush",
@@ -577,13 +581,18 @@ public partial class MainWindow : Window
             "Paper24Brush",
             "BackgroundBrush",
             "SurfaceBrush",
-            "TextOnDarkMutedBrush");
+            "SurfaceMutedBrush",
+            "SurfacePressedBrush",
+            "InputBackgroundBrush",
+            "InkBrush",
+            "InkRaisedBrush",
+            "InkSoftBrush");
         SetResourceBrushes(
             resources,
             SystemColors.WindowTextBrush,
-            "InkBrush",
-            "InkRaisedBrush",
-            "InkSoftBrush",
+            "PaperBrush",
+            "TextOnDarkMutedBrush",
+            "AccentTextBrush",
             "TextPrimaryBrush",
             "TextSecondaryBrush",
             "TextMutedBrush",
@@ -597,6 +606,7 @@ public partial class MainWindow : Window
             "SignalBrush",
             "SignalPressedBrush",
             "AccentBrush",
+            "AccentActionBrush",
             "SelectionBackgroundBrush",
             "FocusInnerBrush",
             "SuccessBrush",
@@ -609,7 +619,7 @@ public partial class MainWindow : Window
             "SuccessInkBrush");
         resources["DisabledBrush"] = SystemColors.GrayTextBrush;
         resources["ModalBackdropBrush"] = SystemColors.WindowTextBrush;
-        resources["OverlayBrush"] = SystemColors.WindowTextBrush;
+        resources["OverlayBrush"] = SystemColors.WindowBrush;
         resources["ShadowBrush"] = SystemColors.WindowTextBrush;
     }
 

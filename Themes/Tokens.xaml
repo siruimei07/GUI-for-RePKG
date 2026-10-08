@@ -3,22 +3,22 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:sys="clr-namespace:System;assembly=System.Runtime">
 
-    <!-- Stable palette, typography, geometry, spacing, effects, and density tokens. -->
+    <!-- Charcoal workspace, blue actions, readable media overlays, and shared density tokens. -->
     <!-- Core color tokens -->
     <Color x:Key="InkColor">#FF191919</Color>
-    <Color x:Key="InkRaisedColor">#FF242424</Color>
-    <Color x:Key="InkSoftColor">#FF323232</Color>
-    <Color x:Key="PaperColor">#FFF2F2F0</Color>
+    <Color x:Key="InkRaisedColor">#FF252525</Color>
+    <Color x:Key="InkSoftColor">#FF303030</Color>
+    <Color x:Key="PaperColor">#FFF0F0F0</Color>
     <Color x:Key="PaperElevatedColor">#FFFFFFFF</Color>
-    <Color x:Key="PaperMutedColor">#FFE6E6E1</Color>
-    <Color x:Key="PaperPressedColor">#FFDADAD4</Color>
-    <Color x:Key="SignalColor">#FFFFFA00</Color>
-    <Color x:Key="SignalPressedColor">#FFE8E300</Color>
-    <Color x:Key="SuccessColor">#FF00C982</Color>
-    <Color x:Key="SuccessInkColor">#FF006E49</Color>
-    <Color x:Key="TextMutedColor">#FF696962</Color>
-    <Color x:Key="LineColor">#FFD0D0C9</Color>
-    <Color x:Key="LineStrongColor">#FFA6A69D</Color>
+    <Color x:Key="PaperMutedColor">#FFC6C6C6</Color>
+    <Color x:Key="PaperPressedColor">#FFE0E0E0</Color>
+    <Color x:Key="SignalColor">#FF3F80EF</Color>
+    <Color x:Key="SignalPressedColor">#FF78A8FF</Color>
+    <Color x:Key="SuccessColor">#FF64D9A5</Color>
+    <Color x:Key="SuccessInkColor">#FF82E3B8</Color>
+    <Color x:Key="TextMutedColor">#FFA6A6A6</Color>
+    <Color x:Key="LineColor">#FF3B3B3B</Color>
+    <Color x:Key="LineStrongColor">#FF666666</Color>
 
     <!-- Semantic brush tokens -->
     <SolidColorBrush x:Key="InkBrush" Color="{StaticResource InkColor}" />
@@ -32,41 +32,48 @@
     <SolidColorBrush x:Key="SignalPressedBrush" Color="{StaticResource SignalPressedColor}" />
     <SolidColorBrush x:Key="SuccessBrush" Color="{StaticResource SuccessColor}" />
     <SolidColorBrush x:Key="SuccessInkBrush" Color="{StaticResource SuccessInkColor}" />
-    <SolidColorBrush x:Key="TextPrimaryBrush" Color="{StaticResource InkColor}" />
-    <SolidColorBrush x:Key="TextSecondaryBrush" Color="#B8191919" />
+    <SolidColorBrush x:Key="TextPrimaryBrush" Color="{StaticResource PaperColor}" />
+    <SolidColorBrush x:Key="TextSecondaryBrush" Color="#FFC6C6C6" />
     <SolidColorBrush x:Key="TextMutedBrush" Color="{StaticResource TextMutedColor}" />
-    <SolidColorBrush x:Key="TextOnDarkMutedBrush" Color="#B8F2F2F0" />
+    <SolidColorBrush x:Key="TextOnDarkMutedBrush" Color="#FFB6B6B6" />
     <SolidColorBrush x:Key="BorderBrush" Color="{StaticResource LineColor}" />
     <SolidColorBrush x:Key="BorderStrongBrush" Color="{StaticResource LineStrongColor}" />
-    <SolidColorBrush x:Key="Ink05Brush" Color="#0D191919" />
-    <SolidColorBrush x:Key="Ink08Brush" Color="#14191919" />
-    <SolidColorBrush x:Key="Ink12Brush" Color="#1F191919" />
-    <SolidColorBrush x:Key="Ink18Brush" Color="#2E191919" />
-    <SolidColorBrush x:Key="Ink42Brush" Color="#6B191919" />
-    <SolidColorBrush x:Key="ModalBackdropBrush" Color="#6B191919" />
+    <SolidColorBrush x:Key="Ink05Brush" Color="#0DFFFFFF" />
+    <SolidColorBrush x:Key="Ink08Brush" Color="#14FFFFFF" />
+    <SolidColorBrush x:Key="Ink12Brush" Color="#1FFFFFFF" />
+    <SolidColorBrush x:Key="Ink18Brush" Color="#2EFFFFFF" />
+    <SolidColorBrush x:Key="Ink42Brush" Color="#6BFFFFFF" />
+    <SolidColorBrush x:Key="ModalBackdropBrush" Color="#B3000000" />
     <SolidColorBrush x:Key="Paper08Brush" Color="#14F2F2F0" />
     <SolidColorBrush x:Key="Paper14Brush" Color="#24F2F2F0" />
     <SolidColorBrush x:Key="Paper24Brush" Color="#3DF2F2F0" />
-    <SolidColorBrush x:Key="Signal18Brush" Color="#2EFFFA00" />
-    <SolidColorBrush x:Key="Signal32Brush" Color="#52FFFA00" />
-    <SolidColorBrush x:Key="SuccessSoftBrush" Color="#1F00C982" />
-    <SolidColorBrush x:Key="DisabledBrush" Color="#5C696962" />
-    <SolidColorBrush x:Key="OverlayBrush" Color="#A6191919" />
+    <SolidColorBrush x:Key="Signal18Brush" Color="#2E3F80EF" />
+    <SolidColorBrush x:Key="Signal32Brush" Color="#523F80EF" />
+    <SolidColorBrush x:Key="SuccessSoftBrush" Color="#1F64D9A5" />
+    <SolidColorBrush x:Key="DisabledBrush" Color="#FF8C8C8C" />
+    <SolidColorBrush x:Key="OverlayBrush" Color="#DD151515" />
     <SolidColorBrush x:Key="ShadowBrush" Color="#4D000000" />
-    <SolidColorBrush x:Key="SelectionBackgroundBrush" Color="{StaticResource SignalColor}" />
-    <SolidColorBrush x:Key="SelectionTextBrush" Color="{StaticResource InkColor}" />
-    <SolidColorBrush x:Key="SignalTextBrush" Color="{StaticResource InkColor}" />
-    <SolidColorBrush x:Key="FocusOuterBrush" Color="{StaticResource InkColor}" />
-    <SolidColorBrush x:Key="FocusInnerBrush" Color="{StaticResource SignalColor}" />
+    <SolidColorBrush x:Key="SelectionBackgroundBrush" Color="#FF326FD3" />
+    <SolidColorBrush x:Key="SelectionTextBrush" Color="#FFFFFFFF" />
+    <SolidColorBrush x:Key="SignalTextBrush" Color="#FFFFFFFF" />
+    <SolidColorBrush x:Key="FocusOuterBrush" Color="#FFFFFFFF" />
+    <SolidColorBrush x:Key="FocusInnerBrush" Color="#FF3F80EF" />
 
     <!-- Common semantic aliases make view XAML read by purpose. -->
-    <SolidColorBrush x:Key="BackgroundBrush" Color="{StaticResource PaperColor}" />
-    <SolidColorBrush x:Key="SurfaceBrush" Color="{StaticResource PaperElevatedColor}" />
-    <SolidColorBrush x:Key="ForegroundBrush" Color="{StaticResource InkColor}" />
+    <SolidColorBrush x:Key="BackgroundBrush" Color="#FF202020" />
+    <SolidColorBrush x:Key="SurfaceBrush" Color="#FF292929" />
+    <SolidColorBrush x:Key="ForegroundBrush" Color="{StaticResource PaperColor}" />
     <SolidColorBrush x:Key="AccentBrush" Color="{StaticResource SignalColor}" />
     <SolidColorBrush x:Key="VerifiedBrush" Color="{StaticResource SuccessColor}" />
 
-    <!-- Original low-opacity engineering textures; no external assets. -->
+    <!-- Surfaces and text are distinct so High Contrast can replace each by purpose. -->
+    <SolidColorBrush x:Key="SurfaceMutedBrush" Color="#FF252525" />
+    <SolidColorBrush x:Key="SurfacePressedBrush" Color="#FF343434" />
+    <SolidColorBrush x:Key="InputBackgroundBrush" Color="#FF1B1B1B" />
+    <SolidColorBrush x:Key="AccentActionBrush" Color="#FF326FD3" />
+    <SolidColorBrush x:Key="AccentTextBrush" Color="#FF8AB4FF" />
+
+    <!-- Retained drawing resources keep existing motion contracts stable. -->
     <DrawingBrush x:Key="EngineeringGridBrush"
                   TileMode="Tile"
                   Viewport="0,0,56,56"
@@ -115,11 +122,11 @@
 
     <sys:Double x:Key="FontSizeMicro">10</sys:Double>
     <sys:Double x:Key="FontSizeCaption">12</sys:Double>
-    <sys:Double x:Key="FontSizeBody">14</sys:Double>
-    <sys:Double x:Key="FontSizeBodyLarge">16</sys:Double>
-    <sys:Double x:Key="FontSizeSection">32</sys:Double>
-    <sys:Double x:Key="FontSizeDisplay">48</sys:Double>
-    <sys:Double x:Key="FontSizeHero">72</sys:Double>
+    <sys:Double x:Key="FontSizeBody">13</sys:Double>
+    <sys:Double x:Key="FontSizeBodyLarge">15</sys:Double>
+    <sys:Double x:Key="FontSizeSection">24</sys:Double>
+    <sys:Double x:Key="FontSizeDisplay">30</sys:Double>
+    <sys:Double x:Key="FontSizeHero">48</sys:Double>
 
     <Thickness x:Key="Space4">4</Thickness>
     <Thickness x:Key="Space8">8</Thickness>
@@ -129,35 +136,35 @@
     <Thickness x:Key="Space24">24</Thickness>
     <Thickness x:Key="Space32">32</Thickness>
     <Thickness x:Key="Space40">40</Thickness>
-    <Thickness x:Key="PanelPadding">24</Thickness>
-    <Thickness x:Key="PagePadding">32,28,36,32</Thickness>
-    <sys:Double x:Key="ComfortableCardHeight">154</sys:Double>
-    <sys:Double x:Key="CompactCardHeight">112</sys:Double>
+    <Thickness x:Key="PanelPadding">16</Thickness>
+    <Thickness x:Key="PagePadding">20,16,20,16</Thickness>
+    <sys:Double x:Key="ComfortableCardHeight">138</sys:Double>
+    <sys:Double x:Key="CompactCardHeight">104</sys:Double>
     <sys:Double x:Key="BrowseCardMinimumWidth">104</sys:Double>
     <sys:Double x:Key="BrowseProcessingTrayHeight">72</sys:Double>
     <GridLength x:Key="BrowseProcessingTrayGridLength">72</GridLength>
     <GridLength x:Key="ComfortableCardPreviewWidth">236</GridLength>
     <GridLength x:Key="CompactCardPreviewWidth">168</GridLength>
-    <Thickness x:Key="ComfortableCardMargin">0,0,8,12</Thickness>
-    <Thickness x:Key="CompactCardMargin">0,0,8,8</Thickness>
+    <Thickness x:Key="ComfortableCardMargin">0,0,4,8</Thickness>
+    <Thickness x:Key="CompactCardMargin">0,0,4,6</Thickness>
 
-    <CornerRadius x:Key="ActionCornerRadius">14</CornerRadius>
-    <CornerRadius x:Key="CompactActionCornerRadius">12</CornerRadius>
-    <CornerRadius x:Key="CardCornerRadius">16</CornerRadius>
-    <CornerRadius x:Key="PillCornerRadius">999</CornerRadius>
+    <CornerRadius x:Key="ActionCornerRadius">3</CornerRadius>
+    <CornerRadius x:Key="CompactActionCornerRadius">3</CornerRadius>
+    <CornerRadius x:Key="CardCornerRadius">3</CornerRadius>
+    <CornerRadius x:Key="PillCornerRadius">3</CornerRadius>
     <CornerRadius x:Key="PanelCornerRadius">0</CornerRadius>
 
     <DropShadowEffect x:Key="ButtonShadow"
                       BlurRadius="18"
                       Direction="270"
-                      Opacity="0.18"
+                      Opacity="0"
                       RenderingBias="Performance"
                       ShadowDepth="4"
                       Color="#FF000000" />
     <DropShadowEffect x:Key="CardShadow"
                       BlurRadius="24"
                       Direction="270"
-                      Opacity="0.12"
+                      Opacity="0"
                       RenderingBias="Performance"
                       ShadowDepth="6"
                       Color="#FF000000" />

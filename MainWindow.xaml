@@ -11,7 +11,9 @@
         WindowStartupLocation="CenterScreen"
         WindowStyle="None"
         ResizeMode="CanResize"
-        Background="{DynamicResource InkBrush}"
+        Background="{DynamicResource BackgroundBrush}"
+        Foreground="{DynamicResource TextPrimaryBrush}"
+        FontFamily="{DynamicResource UiFontFamily}"
         SnapsToDevicePixels="True"
         UseLayoutRounding="True"
         KeyboardNavigation.TabNavigation="Cycle"
@@ -20,7 +22,7 @@
     <WindowChrome.WindowChrome>
         <WindowChrome CaptionHeight="0"
                       ResizeBorderThickness="7"
-                      CornerRadius="16"
+                      CornerRadius="4"
                       GlassFrameThickness="0"
                       UseAeroCaptionButtons="False" />
     </WindowChrome.WindowChrome>
@@ -28,8 +30,8 @@
     <Border x:Name="WindowFrame"
             BorderBrush="{DynamicResource BorderStrongBrush}"
             BorderThickness="1"
-            Background="{DynamicResource PaperBrush}"
-            CornerRadius="16"
+            Background="{DynamicResource BackgroundBrush}"
+            CornerRadius="4"
             ClipToBounds="True">
         <Grid>
             <Grid.ColumnDefinitions>
@@ -37,31 +39,33 @@
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
 
-            <!-- Global navigation rail. All three application pages remain reachable at every width. -->
+            <!-- Global navigation rail. All four application pages remain reachable at every width. -->
             <Border x:Name="NavigationRail"
                     Grid.Column="0"
+                    BorderBrush="{DynamicResource BorderBrush}"
+                    BorderThickness="0,0,1,0"
                     Background="{DynamicResource InkBrush}">
                 <Border.Style>
                     <Style TargetType="Border">
-                        <Setter Property="Width" Value="226" />
+                        <Setter Property="Width" Value="184" />
                         <Style.Triggers>
                             <DataTrigger Binding="{Binding LayoutMode, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
                                          Value="{x:Static local:ShellLayoutMode.Compact}">
-                                <Setter Property="Width" Value="92" />
+                                <Setter Property="Width" Value="76" />
                             </DataTrigger>
                         </Style.Triggers>
                     </Style>
                 </Border.Style>
-                <Grid Margin="18,18,18,16">
+                <Grid Margin="10,14,10,12">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
-                        <RowDefinition Height="44" />
+                        <RowDefinition Height="18" />
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
 
-                    <Grid Grid.Row="0" Height="64">
+                    <Grid Grid.Row="0" Height="48">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="48" />
                             <ColumnDefinition Width="*" />
@@ -70,27 +74,27 @@
                                 Height="44"
                                 HorizontalAlignment="Left"
                                 VerticalAlignment="Top"
-                                Background="{DynamicResource SignalBrush}"
-                                CornerRadius="12">
+                                Background="{DynamicResource AccentActionBrush}"
+                                CornerRadius="3">
                             <Grid>
                                 <TextBlock HorizontalAlignment="Center"
                                            VerticalAlignment="Center"
                                            FontFamily="Arial Narrow"
                                            FontSize="19"
                                            FontWeight="Black"
-                                           Foreground="{DynamicResource InkBrush}"
+                                           Foreground="{DynamicResource SignalTextBrush}"
                                            Text="WF" />
                                 <Border Width="7"
                                         Height="7"
                                         Margin="0,0,5,5"
                                         HorizontalAlignment="Right"
                                         VerticalAlignment="Bottom"
-                                        BorderBrush="{DynamicResource InkBrush}"
+                                        BorderBrush="{DynamicResource BorderStrongBrush}"
                                         BorderThickness="1"
-                                        CornerRadius="4" />
+                                        CornerRadius="3" />
                             </Grid>
                         </Border>
-                        <StackPanel x:Name="BrandCopy" Grid.Column="1" Margin="10,3,0,0">
+                        <StackPanel x:Name="BrandCopy" Grid.Column="1" Margin="5,3,0,0">
                             <StackPanel.Style>
                                 <Style TargetType="StackPanel">
                                     <Style.Triggers>
@@ -102,7 +106,7 @@
                                 </Style>
                             </StackPanel.Style>
                             <TextBlock FontFamily="Arial Narrow"
-                                       FontSize="17"
+                                       FontSize="15"
                                        FontWeight="Bold"
                                        Foreground="{DynamicResource PaperBrush}"
                                        Text="WALLPAPER" />
@@ -114,15 +118,15 @@
                     </Grid>
 
                     <Border Grid.Row="1"
-                            Margin="0,4,0,18"
-                            BorderBrush="{DynamicResource Paper24Brush}"
+                            Margin="0,4,0,8"
+                            BorderBrush="{DynamicResource BorderStrongBrush}"
                             BorderThickness="0,1,0,0" />
 
                     <StackPanel Grid.Row="2">
                         <TextBlock x:Name="NavSectionLabel"
-                                   Margin="12,0,0,10"
+                                   Margin="10,0,0,8"
                                    Foreground="{DynamicResource TextOnDarkMutedBrush}"
-                                   Text="OPERATIONS / 04">
+                                   Text="工作区 / WORKSPACE">
                             <TextBlock.Style>
                                 <Style TargetType="TextBlock" BasedOn="{StaticResource TechnicalLabel}">
                                     <Style.Triggers>
@@ -145,7 +149,7 @@
                                     <Setter Property="Foreground" Value="{DynamicResource TextOnDarkMutedBrush}" />
                                     <Style.Triggers>
                                         <DataTrigger Binding="{Binding IsScanPage}" Value="True">
-                                            <Setter Property="Background" Value="{DynamicResource SignalBrush}" />
+                                            <Setter Property="Background" Value="{DynamicResource AccentActionBrush}" />
                                             <Setter Property="Foreground" Value="{DynamicResource SignalTextBrush}" />
                                         </DataTrigger>
                                     </Style.Triggers>
@@ -153,7 +157,7 @@
                             </Button.Style>
                             <Grid>
                                 <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="36" />
+                                    <ColumnDefinition Width="26" />
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
@@ -175,12 +179,6 @@
                                     <TextBlock FontSize="14" FontWeight="SemiBold" Text="扫描中心" />
                                     <TextBlock Margin="0,2,0,0" FontFamily="Consolas" FontSize="9" Text="SCAN FIELD" />
                                 </StackPanel>
-                                <TextBlock Grid.Column="2"
-                                           Margin="8,0,0,0"
-                                           VerticalAlignment="Center"
-                                           FontFamily="Consolas"
-                                           FontSize="10"
-                                           Text="01" />
                             </Grid>
                         </Button>
 
@@ -194,7 +192,7 @@
                                     <Setter Property="Foreground" Value="{DynamicResource TextOnDarkMutedBrush}" />
                                     <Style.Triggers>
                                         <DataTrigger Binding="{Binding IsBrowsePage}" Value="True">
-                                            <Setter Property="Background" Value="{DynamicResource SignalBrush}" />
+                                            <Setter Property="Background" Value="{DynamicResource AccentActionBrush}" />
                                             <Setter Property="Foreground" Value="{DynamicResource SignalTextBrush}" />
                                         </DataTrigger>
                                     </Style.Triggers>
@@ -202,7 +200,7 @@
                             </Button.Style>
                             <Grid>
                                 <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="36" />
+                                    <ColumnDefinition Width="26" />
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
@@ -248,7 +246,7 @@
                                     <Setter Property="Foreground" Value="{DynamicResource TextOnDarkMutedBrush}" />
                                     <Style.Triggers>
                                         <DataTrigger Binding="{Binding IsLibraryPage}" Value="True">
-                                            <Setter Property="Background" Value="{DynamicResource SignalBrush}" />
+                                            <Setter Property="Background" Value="{DynamicResource AccentActionBrush}" />
                                             <Setter Property="Foreground" Value="{DynamicResource SignalTextBrush}" />
                                         </DataTrigger>
                                     </Style.Triggers>
@@ -256,7 +254,7 @@
                             </Button.Style>
                             <Grid>
                                 <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="36" />
+                                    <ColumnDefinition Width="26" />
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
@@ -278,12 +276,6 @@
                                     <TextBlock FontSize="14" FontWeight="SemiBold" Text="输出库" />
                                     <TextBlock Margin="0,2,0,0" FontFamily="Consolas" FontSize="9" Text="OUTPUT LIBRARY" />
                                 </StackPanel>
-                                <TextBlock Grid.Column="2"
-                                           Margin="8,0,0,0"
-                                           VerticalAlignment="Center"
-                                           FontFamily="Consolas"
-                                           FontSize="10"
-                                           Text="03" />
                             </Grid>
                         </Button>
 
@@ -296,7 +288,7 @@
                                     <Setter Property="Foreground" Value="{DynamicResource TextOnDarkMutedBrush}" />
                                     <Style.Triggers>
                                         <DataTrigger Binding="{Binding IsProblemsPage}" Value="True">
-                                            <Setter Property="Background" Value="{DynamicResource SignalBrush}" />
+                                            <Setter Property="Background" Value="{DynamicResource AccentActionBrush}" />
                                             <Setter Property="Foreground" Value="{DynamicResource SignalTextBrush}" />
                                         </DataTrigger>
                                     </Style.Triggers>
@@ -304,7 +296,7 @@
                             </Button.Style>
                             <Grid>
                                 <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="36" />
+                                    <ColumnDefinition Width="26" />
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
@@ -326,12 +318,6 @@
                                     <TextBlock FontSize="14" FontWeight="SemiBold" Text="问题中心" />
                                     <TextBlock Margin="0,2,0,0" FontFamily="Consolas" FontSize="9" Text="PROBLEM CENTER" />
                                 </StackPanel>
-                                <TextBlock Grid.Column="2"
-                                           Margin="8,0,0,0"
-                                           VerticalAlignment="Center"
-                                           FontFamily="Consolas"
-                                           FontSize="10"
-                                           Text="04" />
                             </Grid>
                         </Button>
                     </StackPanel>
@@ -353,10 +339,10 @@
                             <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
                         <Border Padding="12"
-                                Background="{DynamicResource Paper08Brush}"
-                                BorderBrush="{DynamicResource Paper24Brush}"
+                                Background="{DynamicResource SurfaceMutedBrush}"
+                                BorderBrush="{DynamicResource BorderStrongBrush}"
                                 BorderThickness="1"
-                                CornerRadius="13">
+                                CornerRadius="3">
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="18" />
@@ -399,7 +385,7 @@
                                    FontFamily="Consolas"
                                    FontSize="9"
                                    Foreground="{DynamicResource TextOnDarkMutedBrush}"
-                                   Text="LOCAL-FIRST  ·  BACKEND READY">
+                                   Text="LOCAL WORKSHOP">
                             <TextBlock.Style>
                                 <Style TargetType="TextBlock">
                                     <Style.Triggers>
@@ -417,18 +403,18 @@
 
             <Grid Grid.Column="1">
                 <Grid.RowDefinitions>
-                    <RowDefinition Height="62" />
+                    <RowDefinition Height="46" />
                     <RowDefinition Height="*" />
-                    <RowDefinition Height="34" />
+                    <RowDefinition Height="28" />
                 </Grid.RowDefinitions>
 
                 <!-- Custom title bar -->
                 <Border Grid.Row="0"
                         BorderBrush="{DynamicResource BorderBrush}"
                         BorderThickness="0,0,0,1"
-                        Background="{DynamicResource PaperBrush}"
+                        Background="{DynamicResource BackgroundBrush}"
                         MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
-                    <Grid Margin="28,0,10,0">
+                    <Grid Margin="14,0,8,0">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
@@ -436,8 +422,8 @@
                         </Grid.ColumnDefinitions>
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                             <TextBlock Style="{StaticResource TechnicalLabel}"
-                                       Foreground="{DynamicResource InkBrush}"
-                                       Text="WALLPAPER ENGINE / LOCAL WORKSHOP" />
+                                       Foreground="{DynamicResource TextPrimaryBrush}"
+                                       Text="WALLPAPER FIELD / LOCAL WORKSHOP" />
                             <Border Width="1" Height="15" Margin="16,0" Background="{DynamicResource BorderBrush}" />
                             <TextBlock x:Name="PageBreadcrumb"
                                        FontSize="12"
@@ -457,12 +443,12 @@
                         </StackPanel>
 
                         <Border Grid.Column="1"
-                                Margin="0,0,18,0"
-                                Padding="12,6"
+                                Margin="0,0,10,0"
+                                Padding="10,5"
                                 VerticalAlignment="Center"
                                 Background="{DynamicResource InkBrush}"
                                 AutomationProperties.LiveSetting="Polite"
-                                CornerRadius="12">
+                                CornerRadius="3">
                             <StackPanel Orientation="Horizontal">
                                 <Ellipse Width="7" Height="7" Margin="0,0,7,0">
                                     <Ellipse.Style>
@@ -503,8 +489,9 @@
                 </Border>
 
                 <Grid Grid.Row="1" ClipToBounds="True">
-                    <!-- Four coordinated layers: engineering grid, page identifier, route wedge, calibration device. -->
+                    <!-- Quiet catalogue surface; retained named motion layers preserve reduced-motion behavior. -->
                     <Rectangle x:Name="GridLayer"
+                               Visibility="Collapsed"
                                Margin="-56"
                                Fill="{StaticResource EngineeringGridBrush}"
                                IsHitTestVisible="False">
@@ -512,27 +499,11 @@
                             <TranslateTransform x:Name="BackgroundGridOffset" />
                         </Rectangle.RenderTransform>
                     </Rectangle>
-                    <TextBlock Margin="0,-58,-6,0"
-                               HorizontalAlignment="Right"
-                               VerticalAlignment="Top"
-                               IsHitTestVisible="False"
-                               FontFamily="Arial Narrow"
-                               FontSize="232"
-                               FontWeight="Black"
-                               Foreground="{DynamicResource Ink05Brush}"
-                               Text="{Binding PageCode}" />
-                    <Path Margin="0,0,-58,-72"
-                          HorizontalAlignment="Right"
-                          VerticalAlignment="Bottom"
-                          Width="330"
-                          Height="210"
-                          IsHitTestVisible="False"
-                          Fill="#13FFFA00"
-                          Data="M 330,0 L 330,210 L 0,210 Z" />
 
 
 
                     <Grid x:Name="CalibrationInstrument"
+                          Visibility="Collapsed"
                           Width="210"
                           Height="210"
                           Margin="0,40,44,0"
@@ -563,7 +534,7 @@
                               StrokeStartLineCap="Round"
                               StrokeEndLineCap="Round"
                               Data="M 105,18 A 87,87 0 0 1 185,72" />
-                        <Border Width="16" Height="16" Background="{DynamicResource InkBrush}" CornerRadius="8" />
+                        <Border Width="16" Height="16" Background="{DynamicResource InkBrush}" CornerRadius="3" />
                     </Grid>
 
                     <views:ScanPageView x:Name="ScanPage" />
@@ -587,7 +558,7 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                            <Border Width="5" Height="5" Margin="0,0,8,0" Background="{DynamicResource SignalBrush}" CornerRadius="3" />
+                            <Border Width="5" Height="5" Margin="0,0,8,0" Background="{DynamicResource AccentActionBrush}" CornerRadius="3" />
                             <TextBlock Style="{StaticResource TechnicalLabel}" Foreground="{DynamicResource TextOnDarkMutedBrush}" Text="{Binding StatusText}" TextTrimming="CharacterEllipsis" />
                         </StackPanel>
                         <TextBlock Grid.Column="1"

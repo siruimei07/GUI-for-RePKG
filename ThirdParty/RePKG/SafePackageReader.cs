@@ -51,6 +51,10 @@ public static class SafePackageReader
 {
     public const int MaximumEntryCount = 100_000;
     public const int MaximumPathByteCount = 4_096;
+    // Bound cumulative metadata independently of the number of entries.
+    public const int MaximumAggregatePathByteCount = 16 * 1024 * 1024;
+    // Includes the final file segment; check before building ancestor strings.
+    public const int MaximumPathDepth = 64;
 
     private const int MaximumMagicByteCount = 32;
     private static readonly UTF8Encoding StrictUtf8 = new(
@@ -88,11 +92,13 @@ public static class SafePackageReader
                 "The Wallpaper Engine PKG stream position is outside the stream bounds.");
         }
 
+        long remainingMagicBytes = MaximumMagicByteCount;
         var magic = ReadLengthPrefixedUtf8(
             stream,
             "package magic",
             MaximumMagicByteCount,
-            allowEmpty: false);
+            allowEmpty: false,
+            ref remainingMagicBytes);
 
         if (!IsWallpaperEnginePackageMagic(magic))
         {
@@ -111,13 +117,17 @@ public static class SafePackageReader
         }
 
         var pendingEntries = new PendingEntry[entryCount];
+        long remainingPathBytes = MaximumAggregatePathByteCount;
         for (var index = 0; index < entryCount; index++)
         {
             var fullPath = ReadLengthPrefixedUtf8(
                 stream,
                 $"entry {index} path",
                 MaximumPathByteCount,
-                allowEmpty: false);
+                allowEmpty: false,
+                ref remainingPathBytes);
+
+            ValidatePathDepth(fullPath);
 
             if (fullPath.IndexOf('\0') >= 0)
             {
@@ -195,6 +205,20 @@ public static class SafePackageReader
         return new SafePackage(magic, dataStart, readOnlyEntries);
     }
 
+    internal static void ValidatePathDepth(string path)
+    {
+        var depth = 1;
+        foreach (var character in path)
+        {
+            // PKG paths can use either separator, regardless of the host OS.
+            if ((character is '/' or '\\') && ++depth > MaximumPathDepth)
+            {
+                throw new InvalidDataException(
+                    $"Wallpaper Engine PKG path depth exceeds the supported limit of {MaximumPathDepth} segments.");
+            }
+        }
+    }
+
     private static int ReadInt32(Stream stream, string fieldName)
     {
         Span<byte> buffer = stackalloc byte[sizeof(int)];
@@ -224,7 +248,8 @@ public static class SafePackageReader
         Stream stream,
         string fieldName,
         int maximumByteCount,
-        bool allowEmpty)
+        bool allowEmpty,
+        ref long remainingByteCount)
     {
         var byteCount = ReadInt32(stream, $"{fieldName} byte count");
         if (byteCount < 0 || byteCount > maximumByteCount)
@@ -238,6 +263,15 @@ public static class SafePackageReader
         {
             throw new InvalidDataException($"Wallpaper Engine PKG {fieldName} cannot be empty.");
         }
+
+        // Check before allocating or reading the next path. Entry count and
+        // individual path limits alone permit hundreds of MiB of metadata.
+        if (byteCount > remainingByteCount)
+        {
+            throw new InvalidDataException(
+                $"Wallpaper Engine PKG aggregate path byte count exceeds the supported limit of {MaximumAggregatePathByteCount} bytes.");
+        }
+        remainingByteCount -= byteCount;
 
         var bytes = GC.AllocateUninitializedArray<byte>(byteCount);
         ReadExactly(stream, bytes, fieldName);

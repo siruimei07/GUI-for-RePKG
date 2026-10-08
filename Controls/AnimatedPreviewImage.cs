@@ -1,4 +1,3 @@
-using System.Buffers.Binary;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
@@ -6,6 +5,8 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using WallpaperField.Infrastructure;
+using WallpaperField.Models;
+using WallpaperField.Services;
 using XamlAnimatedGif;
 
 namespace WallpaperField.Controls;
@@ -18,10 +19,7 @@ namespace WallpaperField.Controls;
 /// </summary>
 public sealed class AnimatedPreviewImage : Image
 {
-    private const int GifCopyBufferSize = 64 * 1024;
-    private const long MaxGifFileBytes = 64L * 1024 * 1024;
-    private const int MaxGifDimension = 4096;
-    private const long MaxGifCanvasPixels = 16L * 1024 * 1024;
+    private static readonly SemaphoreSlim DecodeSlots = new(PreviewThumbnailLimits.MaximumConcurrentDecodes);
 
     public static readonly DependencyProperty SourcePathProperty = DependencyProperty.Register(
         nameof(SourcePath),
@@ -82,19 +80,82 @@ public sealed class AnimatedPreviewImage : Image
         int decodePixelWidth,
         CancellationToken cancellationToken)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        cancellationToken.ThrowIfCancellationRequested();
+        using var stream = new MemoryStream(ValidatedPreviewFile.Read(path, cancellationToken), writable: false);
+        return DecodeStaticPreview(stream, decodePixelWidth, cancellationToken);
+    }
 
+    private static BitmapSource DecodeStaticPreview(
+        Stream stream,
+        int decodePixelWidth,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        stream.Position = 0;
+        Span<byte> signature = stackalloc byte[6];
+        if (stream.Length >= signature.Length)
+        {
+            stream.ReadExactly(signature);
+            if (signature.SequenceEqual("GIF87a"u8) || signature.SequenceEqual("GIF89a"u8))
+            {
+                GifPreviewValidator.Validate(stream, cancellationToken);
+            }
+        }
+
+        stream.Position = 0;
+        var decoder = BitmapDecoder.Create(stream,
+            BitmapCreateOptions.DelayCreation | BitmapCreateOptions.IgnoreColorProfile, BitmapCacheOption.None);
+        if (decoder is not (PngBitmapDecoder or JpegBitmapDecoder or GifBitmapDecoder)
+            || decoder.Frames.Count == 0)
+        {
+            throw new InvalidDataException("预览图不是受支持的 PNG、JPEG 或 GIF。");
+        }
+
+        var frame = decoder.Frames[0];
+        var width = frame.PixelWidth;
+        var height = frame.PixelHeight;
+        if (width <= 0 || height <= 0
+            || width > PreviewThumbnailLimits.MaximumDimension || height > PreviewThumbnailLimits.MaximumDimension
+            || (long)width * height > PreviewThumbnailLimits.MaximumSourcePixels)
+        {
+            throw new InvalidDataException("预览图尺寸超过安全像素预算。");
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        stream.Position = 0;
         var image = new BitmapImage();
         image.BeginInit();
         image.CacheOption = BitmapCacheOption.OnLoad;
-        image.CreateOptions = BitmapCreateOptions.IgnoreImageCache;
-        image.DecodePixelWidth = decodePixelWidth;
-        image.UriSource = new Uri(Path.GetFullPath(path), UriKind.Absolute);
+        image.CreateOptions = BitmapCreateOptions.IgnoreColorProfile;
+        image.DecodePixelWidth = Math.Min(Math.Clamp(decodePixelWidth, 1, 4096), width);
+        image.StreamSource = stream;
         image.EndInit();
-        image.Freeze();
+
+        // Copy pixels to detach the published image from the decoder and its encoded input.
+        BitmapSource pixels = image.Format == PixelFormats.Bgra32
+            ? image
+            : new FormatConvertedBitmap(image, PixelFormats.Bgra32, null, 0);
+        if (pixels.PixelWidth <= 0 || pixels.PixelHeight <= 0
+            || pixels.PixelWidth > width || pixels.PixelHeight > height)
+        {
+            throw new InvalidDataException("预览图解码尺寸超出已验证的源画布。");
+        }
+
+        var detached = new WriteableBitmap(pixels.PixelWidth, pixels.PixelHeight, 96, 96, PixelFormats.Bgra32, null);
+        detached.Lock();
+        try
+        {
+            pixels.CopyPixels(new Int32Rect(0, 0, detached.PixelWidth, detached.PixelHeight),
+                detached.BackBuffer, checked(detached.BackBufferStride * detached.PixelHeight), detached.BackBufferStride);
+            detached.AddDirtyRect(new Int32Rect(0, 0, detached.PixelWidth, detached.PixelHeight));
+        }
+        finally
+        {
+            detached.Unlock();
+        }
+
+        detached.Freeze();
         cancellationToken.ThrowIfCancellationRequested();
-        return image;
+        return detached;
     }
 
     private static void OnPreviewPropertyChanged(
@@ -195,17 +256,19 @@ public sealed class AnimatedPreviewImage : Image
         CancellationToken cancellationToken)
     {
         MemoryStream? memory = null;
+        var ownsDecodeSlot = false;
         try
         {
-            // FileInfo and FileStream construction can block for remote or
-            // disappearing paths, so the whole GIF read starts off the UI thread.
+            await DecodeSlots.WaitAsync(cancellationToken).ConfigureAwait(false);
+            ownsDecodeSlot = true;
+            // Path validation and file opening can block, so the entire read runs off the UI thread.
             memory = await Task.Run(
                     () => ReadGifIntoMemoryAsync(path, cancellationToken),
                     cancellationToken)
                 .ConfigureAwait(false);
 
             cancellationToken.ThrowIfCancellationRequested();
-            ValidateGifEnvelope(memory);
+            GifPreviewValidator.Validate(memory, cancellationToken);
             memory.Position = 0;
             if (Dispatcher.HasShutdownStarted)
             {
@@ -242,6 +305,12 @@ public sealed class AnimatedPreviewImage : Image
         finally
         {
             memory?.Dispose();
+            if (ownsDecodeSlot)
+            {
+                DecodeSlots.Release();
+            }
+
+            await RetirePendingLoadAsync(version, cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -251,15 +320,25 @@ public sealed class AnimatedPreviewImage : Image
         int version,
         CancellationToken cancellationToken)
     {
-        BitmapSource bitmap;
+        var ownsDecodeSlot = false;
         try
         {
-            bitmap = await Task.Run(
+            await DecodeSlots.WaitAsync(cancellationToken).ConfigureAwait(false);
+            ownsDecodeSlot = true;
+            var bitmap = await Task.Run(
                     () => DecodeStaticPreview(path, decodePixelWidth, cancellationToken),
                     cancellationToken)
                 .ConfigureAwait(false);
+            if (cancellationToken.IsCancellationRequested || Dispatcher.HasShutdownStarted)
+            {
+                return;
+            }
+
+            await Dispatcher.InvokeAsync(
+                () => ApplyStaticPreview(path, bitmap, version, cancellationToken));
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (
+            cancellationToken.IsCancellationRequested || Dispatcher.HasShutdownStarted)
         {
             return;
         }
@@ -274,125 +353,27 @@ public sealed class AnimatedPreviewImage : Image
             return;
         }
 
-        if (cancellationToken.IsCancellationRequested || Dispatcher.HasShutdownStarted)
+        finally
         {
-            return;
-        }
-
-        try
-        {
-            await Dispatcher.InvokeAsync(
-                () => ApplyStaticPreview(path, bitmap, version, cancellationToken));
-        }
-        catch (OperationCanceledException) when (
-            cancellationToken.IsCancellationRequested || Dispatcher.HasShutdownStarted)
-        {
-        }
-    }
-
-    private static async Task CopyGifToMemoryAsync(
-        Stream source,
-        Stream destination,
-        CancellationToken cancellationToken)
-    {
-        var buffer = new byte[GifCopyBufferSize];
-        long copiedBytes = 0;
-        while (true)
-        {
-            var read = await source.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
-            if (read == 0)
+            if (ownsDecodeSlot)
             {
-                return;
+                DecodeSlots.Release();
             }
 
-            copiedBytes += read;
-            if (copiedBytes > MaxGifFileBytes)
-            {
-                throw new InvalidDataException(
-                    $"GIF preview exceeds the {MaxGifFileBytes / (1024 * 1024)} MiB limit.");
-            }
-
-            await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken)
-                .ConfigureAwait(false);
+            await RetirePendingLoadAsync(version, cancellationToken).ConfigureAwait(false);
         }
     }
 
-    private static void ValidateGifEnvelope(MemoryStream stream)
-    {
-        if (stream.Length < 10)
-        {
-            throw new InvalidDataException("GIF preview header is incomplete.");
-        }
-
-        stream.Position = 0;
-        Span<byte> header = stackalloc byte[10];
-        stream.ReadExactly(header);
-        var validSignature = header[..6].SequenceEqual("GIF87a"u8)
-                             || header[..6].SequenceEqual("GIF89a"u8);
-        var width = BinaryPrimitives.ReadUInt16LittleEndian(header.Slice(6, 2));
-        var height = BinaryPrimitives.ReadUInt16LittleEndian(header.Slice(8, 2));
-        if (!validSignature
-            || width == 0
-            || height == 0
-            || width > MaxGifDimension
-            || height > MaxGifDimension
-            || (long)width * height > MaxGifCanvasPixels)
-        {
-            throw new InvalidDataException("GIF preview dimensions or signature are invalid.");
-        }
-    }
-
-    private static async Task<MemoryStream> ReadGifIntoMemoryAsync(
+    private static Task<MemoryStream> ReadGifIntoMemoryAsync(
         string path,
         CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        var fileLength = new FileInfo(path).Length;
-        if (fileLength <= 0 || fileLength > MaxGifFileBytes)
-        {
-            throw new InvalidDataException(
-                $"GIF preview size must be between 1 byte and {MaxGifFileBytes / (1024 * 1024)} MiB.");
-        }
-
-        var memory = new MemoryStream((int)fileLength);
-        try
-        {
-            await using var source = new FileStream(
-                path,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.ReadWrite | FileShare.Delete,
-                GifCopyBufferSize,
-                FileOptions.Asynchronous | FileOptions.SequentialScan);
-            await CopyGifToMemoryAsync(source, memory, cancellationToken)
-                .ConfigureAwait(false);
-            memory.Position = 0;
-            return memory;
-        }
-        catch
-        {
-            memory.Dispose();
-            throw;
-        }
-    }
+        => Task.FromResult(new MemoryStream(ValidatedPreviewFile.Read(path, cancellationToken), writable: false));
 
     private static BitmapSource DecodeGifFirstFrame(
         Stream stream,
         int decodePixelWidth,
         CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        stream.Position = 0;
-        var image = new BitmapImage();
-        image.BeginInit();
-        image.CacheOption = BitmapCacheOption.OnLoad;
-        image.DecodePixelWidth = decodePixelWidth;
-        image.StreamSource = stream;
-        image.EndInit();
-        image.Freeze();
-        cancellationToken.ThrowIfCancellationRequested();
-        return image;
-    }
+        => DecodeStaticPreview(stream, decodePixelWidth, cancellationToken);
 
     private void ApplyGifPreview(
         string path,
@@ -406,7 +387,7 @@ public sealed class AnimatedPreviewImage : Image
             return;
         }
 
-        CompletePendingLoad();
+        CompletePendingLoad(version, cancellationToken);
         _gifStream = memory;
         AnimationBehavior.SetSourceStream(this, _gifStream);
     }
@@ -422,7 +403,7 @@ public sealed class AnimatedPreviewImage : Image
             return;
         }
 
-        CompletePendingLoad();
+        CompletePendingLoad(version, cancellationToken);
         Source = bitmap;
     }
 
@@ -450,10 +431,32 @@ public sealed class AnimatedPreviewImage : Image
         }
     }
 
-    private void CompletePendingLoad()
+    private void CompletePendingLoad(int version, CancellationToken cancellationToken)
     {
-        _loadCancellation?.Dispose();
+        if (version != _loadVersion || _loadCancellation is null
+            || _loadCancellation.Token != cancellationToken)
+        {
+            return;
+        }
+
+        _loadCancellation.Dispose();
         _loadCancellation = null;
+    }
+
+    private async Task RetirePendingLoadAsync(int version, CancellationToken cancellationToken)
+    {
+        if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished)
+        {
+            return;
+        }
+
+        try
+        {
+            await Dispatcher.InvokeAsync(() => CompletePendingLoad(version, cancellationToken));
+        }
+        catch (OperationCanceledException) when (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished)
+        {
+        }
     }
 
     private void UpdatePlaybackState()
@@ -532,7 +535,7 @@ public sealed class AnimatedPreviewImage : Image
         }
 
         _isWithinViewport = IsInsideViewport();
-        if (_isWithinViewport && Source is null && _gifStream is null)
+        if (_isWithinViewport && Source is null && _gifStream is null && _loadCancellation is null)
         {
             RestartLoad();
             return;
