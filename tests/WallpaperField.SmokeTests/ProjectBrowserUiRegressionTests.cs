@@ -5359,11 +5359,26 @@ internal static class ProjectBrowserUiRegressionTests
             var normalPreviewLayer = FindVisualDescendants<Grid>(normalCard)
                 .First(candidate => candidate.Name == "BrowsePreviewLayer");
             focusWindow.SetReducedMotion(false);
+            assert(focusWindow.MotionEnabled == SystemParameters.ClientAreaAnimation,
+                "Clearing the CLI reduced-motion request must still honor the Windows animation preference.");
+            Console.WriteLine(
+                $"TASK7_SYSTEM_MOTION system_enabled={SystemParameters.ClientAreaAnimation} "
+                + $"policy_enabled={focusWindow.MotionEnabled}");
+            // This presentation check supplies the enabled policy output explicitly:
+            // hosted Windows runners may disable system animations. The policy contract
+            // above and AccessibilityRegressionTests retain the OS/CLI truth table.
+            var normalSearch = WpfElementFinder.FindByName<TextBox>(
+                focusWindow,
+                "BrowseSearchTextBox")!;
+            assert(normalSearch.Focus() && normalSearch.IsKeyboardFocusWithin,
+                "The normal-motion fixture could not establish its search-to-card focus transition.");
+            focusWindow.SetCurrentValue(WallpaperField.MainWindow.MotionEnabledProperty, true);
             assert(normalCard.Focus() && normalCard.IsKeyboardFocusWithin,
                 "The normal-motion fixture lost real WPF keyboard focus on its Browse card.");
             PumpLayout(focusWindow);
             var normalTransform = (ScaleTransform)normalPreviewLayer.RenderTransform;
-            assert(Math.Abs(normalTransform.ScaleX - 1.02) < 0.001
+            assert(focusWindow.MotionEnabled
+                   && Math.Abs(normalTransform.ScaleX - 1.02) < 0.001
                    && Math.Abs(normalTransform.ScaleY - 1.02) < 0.001,
                 "Normal motion did not retain the accepted focused image-only scale of exactly 1.02.");
             var normalBrowseRoot = WpfElementFinder.FindByName<FrameworkElement>(
@@ -5378,7 +5393,8 @@ internal static class ProjectBrowserUiRegressionTests
             focusWindow.SetReducedMotion(true);
             PumpLayout(focusWindow);
             var restoredTransform = (ScaleTransform)normalPreviewLayer.RenderTransform;
-            assert(Math.Abs(restoredTransform.ScaleX - 1.0) < 0.001
+            assert(!focusWindow.MotionEnabled
+                   && Math.Abs(restoredTransform.ScaleX - 1.0) < 0.001
                    && Math.Abs(restoredTransform.ScaleY - 1.0) < 0.001,
                 "Returning to reduced motion did not restore the image layer to exact scale 1.0.");
         }

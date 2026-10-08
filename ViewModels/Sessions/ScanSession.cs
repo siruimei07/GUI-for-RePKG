@@ -21,6 +21,7 @@ public sealed class ScanSession : ObservableObject
     private readonly TaskLifecycleCoordinator _taskLifecycleCoordinator;
     private readonly ProblemCenterSession _problemCenter;
     private readonly SynchronizationContext? _lifecycleOwnerContext;
+    private readonly Dispatcher? _ownerDispatcher;
     private readonly int _ownerThreadId;
     private readonly object _progressGate = new();
     private ScanProgressLease? _activeProgressLease;
@@ -83,6 +84,9 @@ public sealed class ScanSession : ObservableObject
         _isClosing = isClosing ?? (() => false);
         _lifecycleOwnerContext = SynchronizationContext.Current
             ?? CaptureDispatcherContext();
+        _ownerDispatcher = _lifecycleOwnerContext is DispatcherSynchronizationContext
+            ? Dispatcher.FromThread(Thread.CurrentThread)
+            : null;
         _ownerThreadId = Environment.CurrentManagedThreadId;
 
         ScannedWallpapers.CollectionChanged += OnCollectionChanged;
@@ -349,7 +353,57 @@ public sealed class ScanSession : ObservableObject
         set => SetProperty(ref _selectedWallpaper, value);
     }
 
-    public async Task ScanAsync()
+    public Task ScanAsync()
+    {
+        // A WPF dispatcher may exist even when a legacy host has not installed
+        // SynchronizationContext.Current. Restore that owner for the complete
+        // operation so its awaits, progress, and coordinator cleanup stay on UI.
+        // Custom contexts are intentionally left to their caller: some consumers
+        // capture queued notification contexts without pumping operation awaits.
+        if (_lifecycleOwnerContext is not DispatcherSynchronizationContext ownerContext
+            || _ownerDispatcher is not { } dispatcher)
+        {
+            return ScanOnOwnerAsync();
+        }
+
+        if (dispatcher.HasShutdownStarted || dispatcher.HasShutdownFinished)
+        {
+            return Task.FromCanceled(new CancellationToken(canceled: true));
+        }
+
+        if (Environment.CurrentManagedThreadId == _ownerThreadId)
+        {
+            return InvokeScanWithOwnerContext(ownerContext);
+        }
+
+        try
+        {
+            // Observe queue abortion as well as execution: Post can silently
+            // discard the callback during dispatcher shutdown.
+            return dispatcher.InvokeAsync(() => InvokeScanWithOwnerContext(ownerContext))
+                .Task.Unwrap();
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or TaskCanceledException)
+        {
+            return Task.FromException(exception);
+        }
+    }
+
+    private Task InvokeScanWithOwnerContext(DispatcherSynchronizationContext ownerContext)
+    {
+        var previousContext = SynchronizationContext.Current;
+        try
+        {
+            SynchronizationContext.SetSynchronizationContext(ownerContext);
+            return ScanOnOwnerAsync();
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(previousContext);
+        }
+    }
+
+    private async Task ScanOnOwnerAsync()
     {
         try
         {

@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Windows.Threading;
 using WallpaperField.Application;
 using WallpaperField.Contracts;
 using WallpaperField.Models;
@@ -11,13 +12,208 @@ using WallpaperField.ViewModels.Sessions;
 
 internal static class BrowserPerformanceHardeningRegressionTests
 {
-    internal static Task RunAsync(Action<bool, string> assert)
-        => Task.Run(() =>
+    internal static async Task RunAsync(Action<bool, string> assert)
+    {
+        await Task.Run(() =>
         {
             WithContext(context => VerifyScanWorkerAndCancellation(context, assert));
             WithContext(context => VerifyProgressOwnership(context, assert));
             WithContext(context => VerifyProjectionAndSelection(context, assert));
         });
+        await VerifyDispatcherAffinityWithoutContextAsync(assert);
+        await VerifyDispatcherShutdownAsync(assert);
+    }
+
+    private static Task VerifyDispatcherAffinityWithoutContextAsync(Action<bool, string> assert)
+    {
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new Thread(() =>
+        {
+            var dispatcher = Dispatcher.CurrentDispatcher;
+            SynchronizationContext.SetSynchronizationContext(null);
+            try
+            {
+                var ownerThread = Environment.CurrentManagedThreadId;
+                var notificationThreads = new ConcurrentQueue<int>();
+                var serviceThreads = new ConcurrentQueue<int>();
+                var mode = 0;
+                var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                var service = new DelegateScanService(async (_, progress, token) =>
+                {
+                    serviceThreads.Enqueue(Environment.CurrentManagedThreadId);
+                    progress!.Report(LateProgress());
+                    entered.TrySetResult();
+                    if (mode == 1)
+                    {
+                        await Task.Delay(Timeout.Infinite, token).ConfigureAwait(false);
+                    }
+                    else if (mode == 2)
+                    {
+                        throw new IOException("Controlled dispatcher-affinity scan failure.");
+                    }
+
+                    return Result([]);
+                });
+                using (var fixture = new Fixture(service))
+                {
+                    fixture.Scan.PropertyChanged += (_, _) =>
+                        notificationThreads.Enqueue(Environment.CurrentManagedThreadId);
+                    fixture.Scan.ScannedWallpapers.CollectionChanged += (_, _) =>
+                        notificationThreads.Enqueue(Environment.CurrentManagedThreadId);
+                    fixture.Coordinator.Changed += (_, _) =>
+                        notificationThreads.Enqueue(Environment.CurrentManagedThreadId);
+
+                    var success = fixture.Scan.ScanAsync();
+                    assert(SynchronizationContext.Current is null,
+                        "ScanAsync did not restore the legacy host's absent synchronization context.");
+                    PumpDispatcherUntil(dispatcher, () => success.IsCompleted);
+                    success.GetAwaiter().GetResult();
+                    assert(fixture.Scan.ProjectSnapshot is not null
+                           && fixture.Coordinator.Current.State == TaskLifecycleState.Succeeded,
+                        "A dispatcher-owned scan without a current context did not publish success.");
+
+                    mode = 1;
+                    entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                    var cancellation = fixture.Scan.ScanAsync();
+                    PumpDispatcherUntil(dispatcher, () => entered.Task.IsCompleted);
+                    fixture.Coordinator.RequestCancellation();
+                    PumpDispatcherUntil(dispatcher, () => cancellation.IsCompleted);
+                    cancellation.GetAwaiter().GetResult();
+                    assert(!fixture.Scan.IsScanning
+                           && fixture.Coordinator.Current.State == TaskLifecycleState.Cancelled,
+                        "Dispatcher-owned cancellation failed to publish its terminal cleanup.");
+
+                    mode = 2;
+                    // Calling from a different thread must also enter the captured
+                    // owner before coordinator, error, or finally notifications fire.
+                    var failure = Task.Run(fixture.Scan.ScanAsync);
+                    PumpDispatcherUntil(dispatcher, () => failure.IsCompleted);
+                    failure.GetAwaiter().GetResult();
+                    assert(!fixture.Scan.IsScanning
+                           && fixture.Coordinator.Current.State == TaskLifecycleState.Failed,
+                        "An off-owner scan failure did not publish its terminal cleanup.");
+                    assert(!notificationThreads.IsEmpty
+                           && notificationThreads.All(threadId => threadId == ownerThread)
+                           && serviceThreads.Count == 3
+                           && serviceThreads.All(threadId => threadId != ownerThread),
+                        "A scan progress/snapshot/lifecycle/finally notification escaped its dispatcher owner, or scan I/O ran on it.");
+                }
+                completion.TrySetResult();
+            }
+            catch (Exception exception)
+            {
+                completion.TrySetException(exception);
+            }
+            finally
+            {
+                dispatcher.InvokeShutdown();
+            }
+        }) { IsBackground = true };
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        return completion.Task.WaitAsync(TimeSpan.FromSeconds(40));
+    }
+
+    private static void PumpDispatcherUntil(Dispatcher dispatcher, Func<bool> condition)
+    {
+        if (condition())
+        {
+            return;
+        }
+
+        var elapsed = Stopwatch.StartNew();
+        var frame = new DispatcherFrame();
+        var timer = new DispatcherTimer(DispatcherPriority.Background, dispatcher)
+        {
+            Interval = TimeSpan.FromMilliseconds(5)
+        };
+        timer.Tick += (_, _) =>
+        {
+            if (condition() || elapsed.Elapsed > TimeSpan.FromSeconds(10))
+            {
+                frame.Continue = false;
+            }
+        };
+        timer.Start();
+        try
+        {
+            Dispatcher.PushFrame(frame);
+        }
+        finally
+        {
+            timer.Stop();
+        }
+
+        if (!condition())
+        {
+            throw new TimeoutException("The dispatcher-owned scan did not reach the expected state.");
+        }
+    }
+
+    private static Task VerifyDispatcherShutdownAsync(Action<bool, string> assert)
+    {
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new Thread(() =>
+        {
+            var dispatcher = Dispatcher.CurrentDispatcher;
+            SynchronizationContext.SetSynchronizationContext(null);
+            try
+            {
+                var serviceCalls = 0;
+                var service = new DelegateScanService((_, _, _) =>
+                {
+                    Interlocked.Increment(ref serviceCalls);
+                    return Task.FromResult(Result([]));
+                });
+                using (var fixture = new Fixture(service))
+                {
+                    Task? queuedScan = null;
+                    // Keep the dispatcher unpumped until the off-owner call has
+                    // queued its entry point, then abort that queue with shutdown.
+                    Task.Run(() => { queuedScan = fixture.Scan.ScanAsync(); })
+                        .WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
+                    assert(queuedScan is not null && !queuedScan.IsCompleted,
+                        "The off-owner scan did not wait for its dispatcher entry point.");
+                    dispatcher.InvokeShutdown();
+                    AssertShutdownCancellation(queuedScan!, assert);
+                    AssertShutdownCancellation(fixture.Scan.ScanAsync(), assert);
+                    AssertShutdownCancellation(Task.Run(fixture.Scan.ScanAsync), assert);
+                    assert(serviceCalls == 0 && !fixture.Scan.IsScanning,
+                        "A queued or post-shutdown scan started work after its dispatcher stopped.");
+                }
+                completion.TrySetResult();
+            }
+            catch (Exception exception)
+            {
+                completion.TrySetException(exception);
+            }
+            finally
+            {
+                if (!dispatcher.HasShutdownFinished)
+                {
+                    dispatcher.InvokeShutdown();
+                }
+            }
+        }) { IsBackground = true };
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        return completion.Task.WaitAsync(TimeSpan.FromSeconds(20));
+    }
+
+    private static void AssertShutdownCancellation(Task scan, Action<bool, string> assert)
+    {
+        var cancelled = false;
+        try
+        {
+            scan.WaitAsync(TimeSpan.FromSeconds(2)).GetAwaiter().GetResult();
+        }
+        catch (OperationCanceledException)
+        {
+            cancelled = true;
+        }
+
+        assert(cancelled, "Dispatcher shutdown did not complete the pending scan as cancelled.");
+    }
 
     private static void VerifyScanWorkerAndCancellation(
         QueuedContext context,
