@@ -42,17 +42,36 @@
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <StackPanel>
-                    <TextBlock Style="{StaticResource TechnicalLabel}"
-                               Foreground="{DynamicResource TextMutedBrush}"
-                               Text="DIAGNOSTICS / 04 · PROBLEM CENTER" />
+                    <!-- Page coordinate: ink index chip + kicker. -->
+                    <StackPanel Orientation="Horizontal" IsHitTestVisible="False">
+                        <Border Style="{StaticResource IndexChip}" VerticalAlignment="Center">
+                            <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" Text="04" />
+                        </Border>
+                        <TextBlock Margin="8,0,0,0"
+                                   VerticalAlignment="Center"
+                                   Style="{StaticResource TechnicalLabel}"
+                                   Text="DIAGNOSTICS / 问题中心" />
+                    </StackPanel>
                     <TextBlock x:Name="ProblemsPageTitle"
-                               Margin="0,5,0,0"
+                               Margin="0,6,0,0"
                                Style="{StaticResource SectionTitle}"
                                AutomationProperties.HeadingLevel="Level1"
                                Text="问题中心" />
+                    <Grid Margin="0,7,0,0" IsHitTestVisible="False">
+                        <Border Width="40"
+                                Height="3"
+                                HorizontalAlignment="Left"
+                                VerticalAlignment="Center"
+                                Background="{DynamicResource AccentActionBrush}" />
+                        <Border Height="1"
+                                Margin="48,0,0,0"
+                                VerticalAlignment="Center"
+                                Background="{DynamicResource BorderBrush}" />
+                    </Grid>
                     <TextBlock x:Name="ProblemsDescription"
-                               Margin="0,6,0,0"
+                               Margin="0,8,0,0"
                                MaxWidth="670"
+                               HorizontalAlignment="Left"
                                FontSize="13"
                                Foreground="{DynamicResource TextMutedBrush}"
                                Text="浏览启动、扫描、解包、图库与诊断问题；筛选不会改变“复制全部”的完整集合。"
@@ -68,15 +87,16 @@
                             </Style>
                         </TextBlock.Style>
                     </TextBlock>
+                    <!-- Navigation status: white slip with a cyan signal edge (never collapses in Compact). -->
                     <Border x:Name="ProblemsProjectNavigationStatus"
-                            Margin="2,10,0,0"
+                            Margin="0,10,0,0"
                             Padding="12,9"
                             MaxWidth="670"
                             HorizontalAlignment="Left"
-                            Background="{DynamicResource SurfaceMutedBrush}"
-                            BorderBrush="{DynamicResource SignalPressedBrush}"
-                            BorderThickness="1"
-                            CornerRadius="3">
+                            Background="{DynamicResource SurfaceBrush}"
+                            BorderBrush="{DynamicResource AccentActionBrush}"
+                            BorderThickness="3,0,0,0"
+                            CornerRadius="0">
                         <Border.Style>
                             <Style TargetType="Border">
                                 <Style.Triggers>
@@ -112,182 +132,195 @@
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
-                    <StackPanel Width="92">
-                        <TextBlock Style="{StaticResource TechnicalLabel}" Text="OPEN" />
-                        <TextBlock Margin="0,4,0,0"
-                                   FontFamily="Segoe UI"
-                                   FontSize="24"
-                                   FontWeight="Bold"
+                    <StackPanel Width="100">
+                        <TextBlock Style="{StaticResource TechnicalLabel}" Text="OPEN / 开放" />
+                        <TextBlock Margin="0,1,0,0"
+                                   Style="{StaticResource StatReadout}"
                                    Text="{Binding ProblemCenterSession.OpenIssueCount, StringFormat={}{0:00}}" />
                     </StackPanel>
-                    <Border Grid.Column="1" Width="1" Height="42" Margin="18,0" Background="{DynamicResource BorderBrush}" />
-                    <StackPanel Grid.Column="2" Width="92">
-                        <TextBlock Style="{StaticResource TechnicalLabel}" Text="RESOLVED" />
-                        <TextBlock Margin="0,4,0,0"
-                                   FontFamily="Segoe UI"
-                                   FontSize="24"
-                                   FontWeight="Bold"
+                    <Border Grid.Column="1"
+                            Width="1"
+                            Margin="18,0"
+                            Background="{DynamicResource BorderBrush}"
+                            IsHitTestVisible="False" />
+                    <StackPanel Grid.Column="2" Width="100">
+                        <TextBlock Style="{StaticResource TechnicalLabel}" Text="RESOLVED / 已解决" />
+                        <TextBlock Margin="0,1,0,0"
+                                   Style="{StaticResource StatReadout}"
+                                   Foreground="{DynamicResource TextMutedBrush}"
                                    Text="{Binding ProblemCenterSession.ResolvedIssueCount, StringFormat={}{0:00}}" />
                     </StackPanel>
                 </Grid>
             </Grid>
 
+            <!-- Query / export instrument: white slab, ink spine over the 4px left edge, cut corner. -->
             <Border x:Name="ProblemsActionPanel"
                     Grid.Row="1"
                     Margin="0,0,0,10"
-                    Padding="14,12"
-                    Background="{DynamicResource SurfaceBrush}"
-                    BorderBrush="{DynamicResource BorderStrongBrush}"
-                    BorderThickness="1"
-                    CornerRadius="3">
+                    Padding="0"
+                    Style="{StaticResource InstrumentPanel}">
                 <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
-                    </Grid.RowDefinitions>
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <Grid Height="40">
-                            <TextBox x:Name="ProblemSearchBox"
-                                     Style="{StaticResource SearchTextBox}"
-                                     AutomationProperties.Name="搜索问题代码、摘要或详情"
-                                     Text="{Binding ProblemCenterSession.SearchText, UpdateSourceTrigger=PropertyChanged, Delay=120}" />
-                            <TextBlock Margin="16,0,0,0"
-                                       HorizontalAlignment="Left"
-                                       VerticalAlignment="Center"
-                                       IsHitTestVisible="False"
-                                       FontFamily="Segoe Fluent Icons"
-                                       FontSize="15"
-                                       Foreground="{DynamicResource TextPrimaryBrush}"
-                                       Text="&#xE721;" />
-                            <TextBlock Margin="47,0,54,0"
-                                       VerticalAlignment="Center"
-                                       IsHitTestVisible="False"
-                                       FontSize="13"
-                                       Foreground="{DynamicResource TextMutedBrush}"
-                                       Text="搜索代码、摘要或详情">
-                                <TextBlock.Style>
-                                    <Style TargetType="TextBlock">
-                                        <Setter Property="Visibility" Value="Collapsed" />
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding Text, ElementName=ProblemSearchBox}" Value="">
-                                                <Setter Property="Visibility" Value="Visible" />
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </TextBlock.Style>
-                            </TextBlock>
-                            <Button HorizontalAlignment="Right"
-                                    VerticalAlignment="Center"
-                                    Margin="0,0,3,0"
-                                    Command="{Binding ProblemCenterSession.ClearSearchCommand}"
-                                    AutomationProperties.Name="清除问题搜索"
-                                    ToolTip="清除搜索">
-                                <Button.Style>
-                                    <Style TargetType="Button" BasedOn="{StaticResource IconButton}">
-                                        <Setter Property="Visibility" Value="Collapsed" />
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding ProblemCenterSession.HasSearchText}" Value="True">
-                                                <Setter Property="Visibility" Value="Visible" />
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </Button.Style>
-                                <TextBlock FontFamily="Segoe Fluent Icons" Text="&#xE711;" />
-                            </Button>
+                    <Border Width="4"
+                            Margin="-4,-1,0,-1"
+                            HorizontalAlignment="Left"
+                            Background="{DynamicResource TextPrimaryBrush}"
+                            IsHitTestVisible="False" />
+                    <Path Width="10"
+                          Height="10"
+                          HorizontalAlignment="Right"
+                          VerticalAlignment="Top"
+                          Data="M 0,0 L 10,0 10,10 Z"
+                          Fill="{DynamicResource TextPrimaryBrush}"
+                          IsHitTestVisible="False" />
+                    <Grid Margin="14,12">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <Grid Height="40">
+                                <TextBox x:Name="ProblemSearchBox"
+                                         Style="{StaticResource SearchTextBox}"
+                                         AutomationProperties.Name="搜索问题代码、摘要或详情"
+                                         Text="{Binding ProblemCenterSession.SearchText, UpdateSourceTrigger=PropertyChanged, Delay=120}" />
+                                <TextBlock Margin="16,0,0,0"
+                                           HorizontalAlignment="Left"
+                                           VerticalAlignment="Center"
+                                           IsHitTestVisible="False"
+                                           FontFamily="{DynamicResource IconFontFamily}"
+                                           FontSize="15"
+                                           Foreground="{DynamicResource TextPrimaryBrush}"
+                                           Text="&#xE721;" />
+                                <TextBlock Margin="47,0,54,0"
+                                           VerticalAlignment="Center"
+                                           IsHitTestVisible="False"
+                                           FontSize="13"
+                                           Foreground="{DynamicResource TextMutedBrush}"
+                                           Text="搜索代码、摘要或详情">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Text, ElementName=ProblemSearchBox}" Value="">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                                <Button HorizontalAlignment="Right"
+                                        VerticalAlignment="Center"
+                                        Margin="0,0,3,0"
+                                        Command="{Binding ProblemCenterSession.ClearSearchCommand}"
+                                        AutomationProperties.Name="清除问题搜索"
+                                        ToolTip="清除搜索">
+                                    <Button.Style>
+                                        <Style TargetType="Button" BasedOn="{StaticResource IconButton}">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding ProblemCenterSession.HasSearchText}" Value="True">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Button.Style>
+                                    <TextBlock FontFamily="{DynamicResource IconFontFamily}" Text="&#xE711;" />
+                                </Button>
+                            </Grid>
+                            <ComboBox x:Name="ProblemSeverityComboBox"
+                                      Grid.Column="1"
+                                      Width="154"
+                                      Height="40"
+                                      Margin="12,0,0,0"
+                                      Style="{DynamicResource ProblemFilterComboBox}"
+                                      SelectedValue="{Binding ProblemCenterSession.SeverityFilter, Mode=TwoWay}"
+                                      SelectedValuePath="Tag"
+                                      AutomationProperties.Name="按严重度筛选问题">
+                                <ComboBoxItem Tag="ALL" Content="全部严重度" />
+                                <ComboBoxItem Tag="Error" Content="错误" />
+                                <ComboBoxItem Tag="Warning" Content="警告" />
+                                <ComboBoxItem Tag="Information" Content="信息" />
+                            </ComboBox>
+                            <ComboBox x:Name="ProblemSourceComboBox"
+                                      Grid.Column="2"
+                                      Width="166"
+                                      Height="40"
+                                      Margin="12,0,0,0"
+                                      Style="{DynamicResource ProblemFilterComboBox}"
+                                      SelectedValue="{Binding ProblemCenterSession.SourceFilter, Mode=TwoWay}"
+                                      SelectedValuePath="Tag"
+                                      AutomationProperties.Name="按来源筛选问题">
+                                <ComboBoxItem Tag="ALL" Content="全部来源" />
+                                <ComboBoxItem Tag="Startup" Content="启动" />
+                                <ComboBoxItem Tag="Scan" Content="扫描" />
+                                <ComboBoxItem Tag="Unpack" Content="解包" />
+                                <ComboBoxItem Tag="Library" Content="图库" />
+                                <ComboBoxItem Tag="Settings" Content="设置" />
+                                <ComboBoxItem Tag="Diagnostics" Content="诊断" />
+                                <ComboBoxItem Tag="Browse" Content="项目浏览" />
+                            </ComboBox>
                         </Grid>
-                        <ComboBox x:Name="ProblemSeverityComboBox"
-                                  Grid.Column="1"
-                                  Width="154"
-                                  Height="40"
-                                  Margin="12,0,0,0"
-                                  Style="{DynamicResource ProblemFilterComboBox}"
-                                  SelectedValue="{Binding ProblemCenterSession.SeverityFilter, Mode=TwoWay}"
-                                  SelectedValuePath="Tag"
-                                  AutomationProperties.Name="按严重度筛选问题">
-                            <ComboBoxItem Tag="ALL" Content="全部严重度" />
-                            <ComboBoxItem Tag="Error" Content="错误" />
-                            <ComboBoxItem Tag="Warning" Content="警告" />
-                            <ComboBoxItem Tag="Information" Content="信息" />
-                        </ComboBox>
-                        <ComboBox x:Name="ProblemSourceComboBox"
-                                  Grid.Column="2"
-                                  Width="166"
-                                  Height="40"
-                                  Margin="12,0,0,0"
-                                  Style="{DynamicResource ProblemFilterComboBox}"
-                                  SelectedValue="{Binding ProblemCenterSession.SourceFilter, Mode=TwoWay}"
-                                  SelectedValuePath="Tag"
-                                  AutomationProperties.Name="按来源筛选问题">
-                            <ComboBoxItem Tag="ALL" Content="全部来源" />
-                            <ComboBoxItem Tag="Startup" Content="启动" />
-                            <ComboBoxItem Tag="Scan" Content="扫描" />
-                            <ComboBoxItem Tag="Unpack" Content="解包" />
-                            <ComboBoxItem Tag="Library" Content="图库" />
-                            <ComboBoxItem Tag="Settings" Content="设置" />
-                            <ComboBoxItem Tag="Diagnostics" Content="诊断" />
-                            <ComboBoxItem Tag="Browse" Content="项目浏览" />
-                        </ComboBox>
-                    </Grid>
 
-                    <Grid Grid.Row="1" Margin="0,12,0,0">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel VerticalAlignment="Center">
-                            <StackPanel Orientation="Horizontal">
-                                <Button MinWidth="112"
-                                        Margin="0,0,8,0"
-                                        Style="{StaticResource SecondaryButton}"
-                                        IsEnabled="{Binding ProblemCenterSession.HasSelectedIssue}"
-                                        Click="CopySelectedIssue_Click"
-                                        Content="复制所选" />
-                                <Button MinWidth="112"
-                                        Margin="0,0,8,0"
-                                        Style="{StaticResource SecondaryButton}"
-                                        Click="CopyAllIssues_Click"
-                                        Content="复制全部" />
-                                <Button MinWidth="132"
-                                        Style="{StaticResource GhostButton}"
-                                        Command="{Binding ProblemCenterSession.ClearResolvedCommand}"
-                                        Content="清除已解决" />
+                        <Grid Grid.Row="1" Margin="0,12,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel VerticalAlignment="Center">
+                                <StackPanel Orientation="Horizontal">
+                                    <Button MinWidth="112"
+                                            Margin="0,0,8,0"
+                                            Style="{StaticResource SecondaryButton}"
+                                            IsEnabled="{Binding ProblemCenterSession.HasSelectedIssue}"
+                                            Click="CopySelectedIssue_Click"
+                                            Content="复制所选" />
+                                    <Button MinWidth="112"
+                                            Margin="0,0,8,0"
+                                            Style="{StaticResource SecondaryButton}"
+                                            Click="CopyAllIssues_Click"
+                                            Content="复制全部" />
+                                    <Button MinWidth="132"
+                                            Style="{StaticResource GhostButton}"
+                                            Command="{Binding ProblemCenterSession.ClearResolvedCommand}"
+                                            Content="清除已解决" />
+                                </StackPanel>
+                                <StackPanel Margin="0,8,0,0" Orientation="Horizontal">
+                                    <Button MinWidth="112"
+                                            Margin="0,0,8,0"
+                                            Style="{StaticResource GhostButton}"
+                                            Click="OpenLogs_Click"
+                                            Content="打开日志" />
+                                    <Button MinWidth="112"
+                                            Style="{StaticResource GhostButton}"
+                                            Command="{Binding OpenFolderCommand}"
+                                            CommandParameter="{Binding LibrarySession.OutputPath}"
+                                            Content="打开输出" />
+                                </StackPanel>
                             </StackPanel>
-                            <StackPanel Margin="0,8,0,0" Orientation="Horizontal">
-                                <Button MinWidth="112"
-                                        Margin="0,0,8,0"
-                                        Style="{StaticResource GhostButton}"
-                                        Click="OpenLogs_Click"
-                                        Content="打开日志" />
-                                <Button MinWidth="112"
-                                        Style="{StaticResource GhostButton}"
-                                        Command="{Binding OpenFolderCommand}"
-                                        CommandParameter="{Binding LibrarySession.OutputPath}"
-                                        Content="打开输出" />
+                            <StackPanel Grid.Column="1" Margin="16,0,0,0" HorizontalAlignment="Right">
+                                <CheckBox x:Name="IncludePathContextsCheckBox"
+                                          Margin="0,0,0,7"
+                                          HorizontalAlignment="Right"
+                                          Content="导出时包含完整本地路径"
+                                          AutomationProperties.Name="导出诊断时包含完整本地路径" />
+                                <StackPanel HorizontalAlignment="Right" Orientation="Horizontal">
+                                    <Button MinWidth="92"
+                                            Margin="0,0,8,0"
+                                            Style="{StaticResource GhostButton}"
+                                            Click="About_Click"
+                                            Content="关于" />
+                                    <Button MinWidth="142"
+                                            Style="{StaticResource PrimaryButton}"
+                                            Click="ExportDiagnostics_Click"
+                                            Content="导出诊断" />
+                                </StackPanel>
                             </StackPanel>
-                        </StackPanel>
-                        <StackPanel Grid.Column="1" Margin="16,0,0,0" HorizontalAlignment="Right">
-                            <CheckBox x:Name="IncludePathContextsCheckBox"
-                                      Margin="0,0,0,7"
-                                      HorizontalAlignment="Right"
-                                      Content="导出时包含完整本地路径"
-                                      AutomationProperties.Name="导出诊断时包含完整本地路径" />
-                            <StackPanel HorizontalAlignment="Right" Orientation="Horizontal">
-                                <Button MinWidth="92"
-                                        Margin="0,0,8,0"
-                                        Style="{StaticResource GhostButton}"
-                                        Click="About_Click"
-                                        Content="关于" />
-                                <Button MinWidth="142"
-                                        Style="{StaticResource PrimaryButton}"
-                                        Click="ExportDiagnostics_Click"
-                                        Content="导出诊断" />
-                            </StackPanel>
-                        </StackPanel>
+                        </Grid>
                     </Grid>
                 </Grid>
             </Border>
@@ -310,11 +343,16 @@
                          VirtualizingPanel.CacheLength="1,2"
                          VirtualizingPanel.CacheLengthUnit="Page"
                          AutomationProperties.Name="问题记录">
+                    <!-- Default ListBoxItem template is kept (focusable container + FocusVisual).
+                         The gutter moves onto the container so its system selection tint stays
+                         hidden behind the opaque card; selection is drawn by the card itself. -->
                     <ListBox.ItemContainerStyle>
                         <Style TargetType="ListBoxItem">
                             <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+                            <Setter Property="Background" Value="Transparent" />
+                            <Setter Property="BorderThickness" Value="0" />
                             <Setter Property="Padding" Value="0" />
-                            <Setter Property="Margin" Value="0" />
+                            <Setter Property="Margin" Value="0,0,8,10" />
                             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
                             <Setter Property="FocusVisualStyle" Value="{StaticResource FocusVisual}" />
                         </Style>
@@ -326,17 +364,23 @@
                     </ListBox.ItemsPanel>
                     <ListBox.ItemTemplate>
                         <DataTemplate>
-                            <Border Margin="0,0,8,10"
-                                    Padding="12,10"
-                                    Background="{DynamicResource SurfaceBrush}"
-                                    BorderBrush="{DynamicResource BorderBrush}"
+                            <!-- Issue record: white square card, flush severity rail, ink frame + cyan corner when selected. -->
+                            <Border Background="{DynamicResource SurfaceBrush}"
                                     BorderThickness="1"
-                                    CornerRadius="3">
+                                    CornerRadius="0"
+                                    SnapsToDevicePixels="True">
                                 <Border.Style>
                                     <Style TargetType="Border">
+                                        <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}" />
                                         <Style.Triggers>
                                             <DataTrigger Binding="{Binding ResolutionState}" Value="Resolved">
                                                 <Setter Property="Opacity" Value="0.64" />
+                                            </DataTrigger>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter Property="BorderBrush" Value="{DynamicResource BorderStrongBrush}" />
+                                            </Trigger>
+                                            <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType={x:Type ListBoxItem}}}" Value="True">
+                                                <Setter Property="BorderBrush" Value="{DynamicResource TextPrimaryBrush}" />
                                             </DataTrigger>
                                         </Style.Triggers>
                                     </Style>
@@ -347,24 +391,27 @@
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
-                                    <Border CornerRadius="4">
+                                    <!-- Severity rail: muted = information, amber = warning, red = error. -->
+                                    <Border IsHitTestVisible="False">
                                         <Border.Style>
                                             <Style TargetType="Border">
                                                 <Setter Property="Background" Value="{DynamicResource TextMutedBrush}" />
                                                 <Style.Triggers>
                                                     <DataTrigger Binding="{Binding Severity}" Value="Warning">
-                                                        <Setter Property="Background" Value="{DynamicResource AccentActionBrush}" />
+                                                        <Setter Property="Background" Value="{DynamicResource WarningBrush}" />
                                                     </DataTrigger>
                                                     <DataTrigger Binding="{Binding Severity}" Value="Error">
-                                                        <Setter Property="Background" Value="{DynamicResource SignalPressedBrush}" />
+                                                        <Setter Property="Background" Value="{DynamicResource DangerBrush}" />
                                                     </DataTrigger>
                                                 </Style.Triggers>
                                             </Style>
                                         </Border.Style>
                                     </Border>
-                                    <StackPanel Grid.Column="1" Margin="14,0,18,0">
+                                    <StackPanel Grid.Column="1" Margin="14,10,18,10">
                                         <StackPanel Orientation="Horizontal">
-                                            <TextBlock FontWeight="Bold">
+                                            <TextBlock VerticalAlignment="Center"
+                                                       FontWeight="Bold"
+                                                       Foreground="{DynamicResource TextPrimaryBrush}">
                                                 <TextBlock.Style>
                                                     <Style TargetType="TextBlock" BasedOn="{StaticResource TechnicalLabel}">
                                                         <Setter Property="Text" Value="启动" />
@@ -392,20 +439,38 @@
                                                 </TextBlock.Style>
                                             </TextBlock>
                                             <TextBlock Margin="8,0,0,0"
+                                                       VerticalAlignment="Center"
                                                        Style="{StaticResource TechnicalLabel}"
+                                                       FontFamily="{DynamicResource TechnicalFontFamily}"
                                                        Foreground="{DynamicResource TextMutedBrush}"
                                                        Text="{Binding Code}" />
+                                            <!-- State chip: ink = open, muted = resolved. -->
                                             <Border Margin="10,0,0,0"
-                                                    Padding="7,2"
-                                                    Background="{DynamicResource SurfaceMutedBrush}"
-                                                    CornerRadius="3">
+                                                    Padding="6,1"
+                                                    VerticalAlignment="Center"
+                                                    BorderThickness="1"
+                                                    CornerRadius="0">
+                                                <Border.Style>
+                                                    <Style TargetType="Border">
+                                                        <Setter Property="Background" Value="{DynamicResource InkBrush}" />
+                                                        <Setter Property="BorderBrush" Value="{DynamicResource InkBrush}" />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding ResolutionState}" Value="Resolved">
+                                                                <Setter Property="Background" Value="{DynamicResource SurfaceMutedBrush}" />
+                                                                <Setter Property="BorderBrush" Value="{DynamicResource BorderStrongBrush}" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Border.Style>
                                                 <TextBlock>
                                                     <TextBlock.Style>
                                                         <Style TargetType="TextBlock" BasedOn="{StaticResource TechnicalLabel}">
                                                             <Setter Property="Text" Value="开放" />
+                                                            <Setter Property="Foreground" Value="{DynamicResource PaperBrush}" />
                                                             <Style.Triggers>
                                                                 <DataTrigger Binding="{Binding ResolutionState}" Value="Resolved">
                                                                     <Setter Property="Text" Value="已解决" />
+                                                                    <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
                                                                 </DataTrigger>
                                                             </Style.Triggers>
                                                         </Style>
@@ -426,22 +491,30 @@
                                                   DataContextChanged="ProblemDetails_DataContextChanged"
                                                   Expanded="ProblemDetails_Expanded"
                                                   Collapsed="ProblemDetails_Collapsed">
-                                            <StackPanel Margin="0,6,0,2">
-                                                <TextBlock FontFamily="Consolas"
-                                                           FontSize="11"
-                                                           Foreground="{DynamicResource TextPrimaryBrush}"
-                                                           Text="{Binding Details}"
-                                                           TextWrapping="Wrap" />
-                                                <TextBlock Margin="0,6,0,0"
-                                                           FontFamily="Consolas"
-                                                           FontSize="10"
-                                                           Foreground="{DynamicResource TextMutedBrush}"
-                                                           Text="{Binding PathContext}"
-                                                           TextWrapping="Wrap" />
-                                            </StackPanel>
+                                            <!-- Technical well: muted slab with a strong left rule. -->
+                                            <Border Margin="0,6,0,2"
+                                                    Padding="10,8"
+                                                    Background="{DynamicResource SurfaceMutedBrush}"
+                                                    BorderBrush="{DynamicResource BorderStrongBrush}"
+                                                    BorderThickness="2,0,0,0"
+                                                    CornerRadius="0">
+                                                <StackPanel>
+                                                    <TextBlock FontFamily="{DynamicResource TechnicalFontFamily}"
+                                                               FontSize="11"
+                                                               Foreground="{DynamicResource TextPrimaryBrush}"
+                                                               Text="{Binding Details}"
+                                                               TextWrapping="Wrap" />
+                                                    <TextBlock Margin="0,6,0,0"
+                                                               FontFamily="{DynamicResource TechnicalFontFamily}"
+                                                               FontSize="10"
+                                                               Foreground="{DynamicResource TextMutedBrush}"
+                                                               Text="{Binding PathContext}"
+                                                               TextWrapping="Wrap" />
+                                                </StackPanel>
+                                            </Border>
                                         </Expander>
                                         <TextBlock Margin="0,6,0,0"
-                                                   FontFamily="Consolas"
+                                                   FontFamily="{DynamicResource TechnicalFontFamily}"
                                                    FontSize="10"
                                                    Foreground="{DynamicResource TextMutedBrush}"
                                                    Text="{Binding ProjectKey, StringFormat=项目关联 · {0}}"
@@ -465,6 +538,7 @@
                                             <TextBlock>
                                                 <TextBlock.Style>
                                                     <Style TargetType="TextBlock" BasedOn="{StaticResource TechnicalLabel}">
+                                                        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
                                                         <Setter Property="Text" Value="状态未知" />
                                                         <Style.Triggers>
                                                             <DataTrigger Binding="{Binding DiskFact}" Value="NotModified">
@@ -487,6 +561,7 @@
                                             <TextBlock>
                                                 <TextBlock.Style>
                                                     <Style TargetType="TextBlock" BasedOn="{StaticResource TechnicalLabel}">
+                                                        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
                                                         <Setter Property="Text" Value="无需操作" />
                                                         <Style.Triggers>
                                                             <DataTrigger Binding="{Binding SuggestedAction}" Value="Retry">
@@ -510,23 +585,28 @@
                                             </TextBlock>
                                         </StackPanel>
                                     </StackPanel>
-                                    <StackPanel Grid.Column="2" HorizontalAlignment="Right">
+                                    <StackPanel Grid.Column="2" Margin="0,10,14,10" HorizontalAlignment="Right">
                                         <TextBlock HorizontalAlignment="Right"
-                                                   FontFamily="Consolas"
+                                                   FontFamily="{DynamicResource TechnicalFontFamily}"
                                                    FontSize="10"
                                                    Foreground="{DynamicResource TextMutedBrush}"
                                                    Text="{Binding TimestampUtc, StringFormat={}{0:yyyy-MM-dd HH:mm:ss} UTC}" />
                                         <TextBlock Margin="0,6,0,0"
-                                                   HorizontalAlignment="Right">
+                                                   HorizontalAlignment="Right"
+                                                   FontWeight="Bold">
                                             <TextBlock.Style>
                                                 <Style TargetType="TextBlock" BasedOn="{StaticResource TechnicalLabel}">
+                                                    <Setter Property="FontSize" Value="11" />
                                                     <Setter Property="Text" Value="信息" />
+                                                    <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
                                                     <Style.Triggers>
                                                         <DataTrigger Binding="{Binding Severity}" Value="Warning">
                                                             <Setter Property="Text" Value="警告" />
+                                                            <Setter Property="Foreground" Value="{DynamicResource WarningTextBrush}" />
                                                         </DataTrigger>
                                                         <DataTrigger Binding="{Binding Severity}" Value="Error">
                                                             <Setter Property="Text" Value="错误" />
+                                                            <Setter Property="Foreground" Value="{DynamicResource DangerTextBrush}" />
                                                         </DataTrigger>
                                                     </Style.Triggers>
                                                 </Style>
@@ -534,8 +614,9 @@
                                         </TextBlock>
                                         <TextBlock Margin="0,6,0,0"
                                                    HorizontalAlignment="Right"
-                                                   FontFamily="Consolas"
-                                                   FontSize="10"
+                                                   FontFamily="{DynamicResource LabelFontFamily}"
+                                                   FontSize="12"
+                                                   FontWeight="SemiBold"
                                                    Foreground="{DynamicResource TextPrimaryBrush}"
                                                    Text="{Binding OccurrenceCount, StringFormat=×{0:N0}}" />
                                         <Button x:Name="ProblemRevealProjectButton"
@@ -560,17 +641,38 @@
                                             </Button.Style>
                                         </Button>
                                     </StackPanel>
+                                    <!-- Selection corner (decoration only). -->
+                                    <Path Grid.Column="2"
+                                          Width="12"
+                                          Height="12"
+                                          HorizontalAlignment="Right"
+                                          VerticalAlignment="Top"
+                                          Data="M 0,0 L 12,0 12,12 Z"
+                                          Fill="{DynamicResource AccentActionBrush}"
+                                          IsHitTestVisible="False">
+                                        <Path.Style>
+                                            <Style TargetType="Path">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType={x:Type ListBoxItem}}}" Value="True">
+                                                        <Setter Property="Visibility" Value="Visible" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Path.Style>
+                                    </Path>
                                 </Grid>
                             </Border>
                         </DataTemplate>
                     </ListBox.ItemTemplate>
                 </ListBox>
 
+                <!-- Empty state: outlined 56px glyph frame with a cut corner. -->
                 <Border Padding="20"
-                        Background="{DynamicResource BackgroundBrush}"
+                        Background="{DynamicResource SurfaceBrush}"
                         BorderBrush="{DynamicResource BorderBrush}"
                         BorderThickness="1"
-                        CornerRadius="3">
+                        CornerRadius="0">
                     <Border.Style>
                         <Style TargetType="Border">
                             <Setter Property="Visibility" Value="Collapsed" />
@@ -582,15 +684,34 @@
                         </Style>
                     </Border.Style>
                     <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-                        <TextBlock HorizontalAlignment="Center"
-                                   FontFamily="Segoe Fluent Icons"
-                                   FontSize="28"
-                                   Foreground="{DynamicResource TextMutedBrush}"
-                                   Text="&#xE73E;" />
-                        <TextBlock Margin="0,12,0,0"
+                        <Grid Width="56" Height="56" HorizontalAlignment="Center">
+                            <Border Background="{DynamicResource SurfaceMutedBrush}"
+                                    BorderBrush="{DynamicResource BorderStrongBrush}"
+                                    BorderThickness="1"
+                                    IsHitTestVisible="False" />
+                            <Path Width="10"
+                                  Height="10"
+                                  HorizontalAlignment="Right"
+                                  VerticalAlignment="Top"
+                                  Data="M 0,0 L 10,0 10,10 Z"
+                                  Fill="{DynamicResource TextPrimaryBrush}"
+                                  IsHitTestVisible="False" />
+                            <TextBlock HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       FontFamily="{DynamicResource IconFontFamily}"
+                                       FontSize="28"
+                                       Foreground="{DynamicResource TextMutedBrush}"
+                                       Text="&#xE73E;" />
+                        </Grid>
+                        <TextBlock Margin="0,14,0,0"
+                                   HorizontalAlignment="Center"
+                                   Style="{StaticResource TechnicalLabel}"
+                                   Text="NO RECORDS / 无匹配记录" />
+                        <TextBlock Margin="0,4,0,0"
                                    HorizontalAlignment="Center"
                                    FontSize="15"
                                    FontWeight="SemiBold"
+                                   Foreground="{DynamicResource TextPrimaryBrush}"
                                    Text="当前筛选没有问题" />
                         <TextBlock Margin="0,5,0,0"
                                    HorizontalAlignment="Center"

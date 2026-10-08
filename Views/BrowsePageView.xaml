@@ -16,11 +16,20 @@
                        Text="{Binding Label}"
                        TextTrimming="CharacterEllipsis" />
         </DataTemplate>
-        <Style x:Key="BrowseDarkGhostButton"
+        <!-- Quiet action on the light details surfaces. Ink text on white / muted paper stays far above
+             4.5:1 on both the persistent pane and the compact overlay, which now share one polarity. -->
+        <Style x:Key="BrowseDetailsGhostButton"
+               BasedOn="{StaticResource GhostButton}"
+               TargetType="{x:Type Button}">
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderStrongBrush}" />
+        </Style>
+        <!-- Quiet action on the ink processing dock: paper text with an on-dark rule. -->
+        <Style x:Key="BrowseTrayGhostButton"
                BasedOn="{StaticResource GhostButton}"
                TargetType="{x:Type Button}">
             <Setter Property="Foreground" Value="{DynamicResource PaperBrush}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource BorderStrongBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource TextOnDarkMutedBrush}" />
         </Style>
         <DataTemplate x:Key="BrowseProjectActionsTemplate">
             <StackPanel Margin="12,8,12,12">
@@ -44,7 +53,7 @@
                              AutomationProperties.Name="问题中心（当前项目）"
                              Content="问题中心">
                         <Button.Style>
-                            <Style BasedOn="{StaticResource BrowseDarkGhostButton}"
+                            <Style BasedOn="{StaticResource BrowseDetailsGhostButton}"
                                    TargetType="Button">
                                 <Style.Triggers>
                                     <DataTrigger Binding="{Binding BrowsePageViewModel.CurrentProject.HasProblems}"
@@ -68,7 +77,7 @@
                 <TextBlock x:Name="BrowseProjectFolderActionStatusText"
                            Margin="0,7,0,0"
                            FontSize="10"
-                           Foreground="{DynamicResource PaperBrush}"
+                           Foreground="{DynamicResource TextSecondaryBrush}"
                            TextWrapping="Wrap"
                            Text="{Binding BrowseProjectActionStatusText}"
                            AutomationProperties.AutomationId="BrowseProjectFolderActionLiveRegion"
@@ -81,7 +90,7 @@
                 <Border x:Name="BrowseDetailPreviewFrame"
                         Background="{DynamicResource InkSoftBrush}"
                         ClipToBounds="True"
-                        CornerRadius="3"
+                        CornerRadius="0"
                         SizeChanged="BrowseDetailPreviewFrame_SizeChanged">
                     <Border.Style>
                         <Style TargetType="{x:Type Border}">
@@ -97,9 +106,9 @@
                     <Grid>
                         <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
                             <TextBlock HorizontalAlignment="Center"
-                                       FontFamily="Segoe Fluent Icons"
+                                       FontFamily="{DynamicResource IconFontFamily}"
                                        FontSize="25"
-                                       Foreground="{DynamicResource TextMutedBrush}"
+                                       Foreground="{DynamicResource TextOnDarkMutedBrush}"
                                        Text="&#xE91B;" />
                             <TextBlock Margin="0,6,0,0"
                                        Foreground="{DynamicResource PaperBrush}"
@@ -118,36 +127,40 @@
                                                         AutomationProperties.Name="{Binding Title, StringFormat=当前项目静态封面：{0}}" />
                     </Grid>
                 </Border>
-                <TextBlock Margin="0,15,0,0"
+                <TextBlock Margin="0,12,0,0"
+                           FontFamily="{DynamicResource DisplayFontFamily}"
                            FontSize="20"
                            FontWeight="Bold"
-                           Foreground="{DynamicResource PaperBrush}"
+                           LineHeight="24"
+                           LineStackingStrategy="BlockLineHeight"
+                           Foreground="{DynamicResource TextPrimaryBrush}"
                            Text="{Binding Title}"
                            TextWrapping="Wrap" />
                 <TextBlock Margin="0,4,0,0"
-                           FontFamily="Consolas"
+                           FontFamily="{DynamicResource TechnicalFontFamily}"
                            FontSize="10"
                            Foreground="{DynamicResource AccentTextBrush}"
                            Text="{Binding WorkshopId, StringFormat=WORKSHOP ID / {0}}" />
-                <Separator Margin="0,14,0,12" Background="{DynamicResource BorderBrush}" />
+                <Separator Margin="0,12,0,12" Background="{DynamicResource BorderBrush}" />
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
-                    <TextBlock Style="{StaticResource TechnicalLabel}"
-                               Foreground="{DynamicResource PaperBrush}"
+                    <TextBlock VerticalAlignment="Center"
+                               Style="{StaticResource TechnicalLabel}"
                                Text="类型 / 处理状态" />
                     <TextBlock Grid.Column="1"
                                Margin="8,0,0,0"
                                VerticalAlignment="Center"
                                FontSize="13"
-                               Foreground="{DynamicResource PaperBrush}"
+                               FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextPrimaryBrush}"
                                Text="{Binding TypeLabel}" />
                 </Grid>
                 <TextBlock Margin="0,3,0,0"
                            FontSize="12"
-                           Foreground="{DynamicResource PaperBrush}"
+                           Foreground="{DynamicResource TextSecondaryBrush}"
                            Text="{Binding ProcessabilityText}"
                            TextWrapping="Wrap" />
                 <Grid Margin="0,12,0,0">
@@ -156,14 +169,13 @@
                         <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
                     <TextBlock Style="{StaticResource TechnicalLabel}"
-                               Foreground="{DynamicResource PaperBrush}"
                                Text="{Binding ProcessingTargetLabel}" />
                     <TextBlock x:Name="BrowseProcessingTargetPathText"
                                Grid.Column="1"
                                Margin="8,0,0,0"
-                               FontFamily="Consolas"
+                               FontFamily="{DynamicResource TechnicalFontFamily}"
                                FontSize="10"
-                               Foreground="{DynamicResource PaperBrush}"
+                               Foreground="{DynamicResource TextSecondaryBrush}"
                                Text="{Binding ProcessingTargetPath}"
                                TextTrimming="CharacterEllipsis"
                                ToolTip="{Binding ProcessingTargetPath}" />
@@ -178,22 +190,25 @@
                                Text="{Binding Owner.CurrentFolderTargetLabel}" />
                     <TextBlock Grid.Column="1"
                                Margin="8,0,0,0"
-                               FontFamily="Consolas"
+                               FontFamily="{DynamicResource TechnicalFontFamily}"
                                FontSize="10"
-                               Foreground="{DynamicResource PaperBrush}"
+                               Foreground="{DynamicResource TextSecondaryBrush}"
                                Text="{Binding Owner.CurrentFolderDisplayPath}"
                                TextTrimming="CharacterEllipsis"
                                ToolTip="{Binding Owner.CurrentFolderDisplayPath}" />
                 </Grid>
                 <TextBlock Margin="0,12,0,0"
                            FontSize="11"
-                           Foreground="{DynamicResource PaperBrush}"
+                           Foreground="{DynamicResource TextSecondaryBrush}"
                            Text="{Binding WarningCount, StringFormat=提示 / {0} 条}" />
             </StackPanel>
         </DataTemplate>
     </UserControl.Resources>
 
+    <!-- Page 02: project browser. The root stays transparent so the shell stage shows through, and it is
+         clock-free: MotionAssist is suppressed for the whole subtree and no view-level animation exists. -->
     <Grid x:Name="BrowseView"
+          controls:MotionAssist.Suppressed="True"
           IsVisibleChanged="BrowsePageView_IsVisibleChanged">
         <Grid.Style>
             <Style TargetType="Grid">
@@ -229,17 +244,48 @@
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <StackPanel>
-                <TextBlock Style="{StaticResource TechnicalLabel}"
-                           Foreground="{DynamicResource TextMutedBrush}"
-                           Text="本地项目 / LOCAL WORKSHOP" />
+                <!-- Page coordinate: index chip, kicker and a hairline rule led by a short signal bar. -->
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Border Height="14"
+                            Padding="4,0"
+                            VerticalAlignment="Center"
+                            Style="{StaticResource IndexChip}">
+                        <TextBlock VerticalAlignment="Center" FontSize="10" Text="02" />
+                    </Border>
+                    <TextBlock Grid.Column="1"
+                               Margin="10,0,0,0"
+                               VerticalAlignment="Center"
+                               Style="{StaticResource TechnicalLabel}"
+                               Text="PROJECT BROWSER / 本地项目" />
+                    <Grid Grid.Column="2"
+                          Margin="12,0,0,0"
+                          VerticalAlignment="Center"
+                          IsHitTestVisible="False">
+                        <Border Height="1"
+                                VerticalAlignment="Center"
+                                Background="{DynamicResource BorderBrush}" />
+                        <Border Width="40"
+                                Height="3"
+                                HorizontalAlignment="Left"
+                                VerticalAlignment="Center"
+                                Background="{DynamicResource AccentActionBrush}" />
+                    </Grid>
+                </Grid>
+                <!-- The Browse header stays no taller than v1.3 so the compact grid keeps its viewport. -->
                 <TextBlock x:Name="BrowsePageTitle"
-                           Margin="0,2,0,0"
-                           FontSize="22"
-                           FontWeight="Bold"
-                           Foreground="{DynamicResource TextPrimaryBrush}"
+                           Margin="0,1,0,0"
+                           Style="{StaticResource SectionTitle}"
+                           FontSize="24"
+                           LineHeight="28"
+                           LineStackingStrategy="BlockLineHeight"
                            Text="项目浏览"
                            AutomationProperties.HeadingLevel="Level1" />
-                <Grid Margin="0,4,0,0">
+                <Grid Margin="0,3,0,0">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="2*" />
@@ -253,7 +299,7 @@
                     <TextBlock x:Name="BrowseSnapshotSourcePathText"
                                Grid.Column="1"
                                Margin="9,0,0,0"
-                               FontFamily="Consolas"
+                               FontFamily="{DynamicResource TechnicalFontFamily}"
                                FontSize="10"
                                Foreground="{DynamicResource TextSecondaryBrush}"
                                Text="{Binding BrowsePageViewModel.SnapshotSourcePath}"
@@ -274,7 +320,7 @@
                     <TextBlock x:Name="BrowseCurrentSourcePathText"
                                Grid.Column="4"
                                Margin="9,0,0,0"
-                               FontFamily="Consolas"
+                               FontFamily="{DynamicResource TechnicalFontFamily}"
                                FontSize="10"
                                Foreground="{DynamicResource TextSecondaryBrush}"
                                Text="{Binding BrowsePageViewModel.CurrentSourcePath}"
@@ -282,35 +328,44 @@
                                ToolTip="{Binding BrowsePageViewModel.CurrentSourcePath}" />
                 </Grid>
             </StackPanel>
+            <!-- Snapshot readout badge: square paper tag with an ink lead on its left edge. -->
             <Border Grid.Column="1"
-                    Padding="9,6"
-                    VerticalAlignment="Top"
-                    Background="{DynamicResource SurfaceMutedBrush}"
+                    Margin="16,0,0,0"
+                    Padding="10,6"
+                    VerticalAlignment="Bottom"
+                    Background="{DynamicResource SurfaceBrush}"
                     BorderBrush="{DynamicResource BorderBrush}"
                     BorderThickness="1"
-                    CornerRadius="3">
-                <StackPanel>
-                    <TextBlock FontFamily="Consolas"
-                               FontSize="10"
-                               Foreground="{DynamicResource TextSecondaryBrush}"
-                               Text="{Binding BrowsePageViewModel.TotalProjectCount, StringFormat={}SNAPSHOT / {0} ITEMS}" />
-                    <TextBlock x:Name="BrowseSnapshotCompletedAtText"
-                               Margin="0,3,0,0"
-                               FontFamily="Consolas"
-                               FontSize="10"
-                               Foreground="{DynamicResource TextMutedBrush}"
-                               Text="{Binding BrowsePageViewModel.SnapshotCompletedAtText}" />
-                </StackPanel>
+                    CornerRadius="0">
+                <Grid>
+                    <Rectangle Width="3"
+                               Margin="-10,-6,0,-6"
+                               HorizontalAlignment="Left"
+                               Fill="{DynamicResource TextPrimaryBrush}"
+                               IsHitTestVisible="False" />
+                    <StackPanel>
+                        <TextBlock FontFamily="{DynamicResource TechnicalFontFamily}"
+                                   FontSize="10"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"
+                                   Text="{Binding BrowsePageViewModel.TotalProjectCount, StringFormat={}SNAPSHOT / {0} ITEMS}" />
+                        <TextBlock x:Name="BrowseSnapshotCompletedAtText"
+                                   Margin="0,3,0,0"
+                                   FontFamily="{DynamicResource TechnicalFontFamily}"
+                                   FontSize="10"
+                                   Foreground="{DynamicResource TextMutedBrush}"
+                                   Text="{Binding BrowsePageViewModel.SnapshotCompletedAtText}" />
+                    </StackPanel>
+                </Grid>
             </Border>
         </Grid>
 
         <Border x:Name="BrowseToolbar"
                 Grid.Row="2"
                 Padding="6"
-                Background="{DynamicResource SurfaceMutedBrush}"
+                Background="{DynamicResource SurfaceBrush}"
                 BorderBrush="{DynamicResource BorderBrush}"
                 BorderThickness="1"
-                CornerRadius="3">
+                CornerRadius="0">
             <Grid x:Name="BrowseToolbarLayoutGrid">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
@@ -321,6 +376,15 @@
                     <ColumnDefinition Width="10" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
+                <!-- Ink spine drawn inside the toolbar padding: marks the page's control instrument
+                     without changing any control geometry. Decorative, never hit-testable. -->
+                <Rectangle Grid.RowSpan="2"
+                           Grid.ColumnSpan="3"
+                           Width="3"
+                           Margin="-6,-6,0,-6"
+                           HorizontalAlignment="Left"
+                           Fill="{DynamicResource TextPrimaryBrush}"
+                           IsHitTestVisible="False" />
                 <Grid x:Name="BrowseSearchHost">
                     <Grid.Style>
                         <Style TargetType="Grid">
@@ -342,12 +406,29 @@
                              Text="{Binding BrowsePageViewModel.SearchText, UpdateSourceTrigger=PropertyChanged}"
                              AutomationProperties.Name="搜索项目名称或 Workshop ID"
                              AutomationProperties.HelpText="输入项目名称或 Workshop ID 后筛选当前扫描快照" />
+                    <!-- Active-query underline: a 3px signal bar while the search narrows the snapshot. -->
+                    <Border Height="3"
+                            Margin="1,0,1,1"
+                            VerticalAlignment="Bottom"
+                            Background="{DynamicResource AccentActionBrush}"
+                            IsHitTestVisible="False">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Visibility" Value="Visible" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding Text, ElementName=BrowseSearchTextBox}" Value="">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+                    </Border>
                     <TextBlock x:Name="BrowseSearchIcon"
                                Margin="16,0,0,0"
                                HorizontalAlignment="Left"
                                VerticalAlignment="Center"
                                IsHitTestVisible="False"
-                               FontFamily="Segoe Fluent Icons"
+                               FontFamily="{DynamicResource IconFontFamily}"
                                FontSize="15"
                                Foreground="{DynamicResource TextPrimaryBrush}"
                                Text="&#xE721;" />
@@ -373,7 +454,7 @@
                                HorizontalAlignment="Right"
                                VerticalAlignment="Center"
                                IsHitTestVisible="False"
-                               FontFamily="Consolas"
+                               FontFamily="{DynamicResource TechnicalFontFamily}"
                                FontSize="10"
                                Foreground="{DynamicResource TextMutedBrush}"
                                 Text="{Binding BrowsePageViewModel.MatchSummaryText}">
@@ -405,7 +486,7 @@
                                 </Style.Triggers>
                             </Style>
                         </Button.Style>
-                        <TextBlock FontFamily="Segoe Fluent Icons" Text="&#xE711;" />
+                        <TextBlock FontFamily="{DynamicResource IconFontFamily}" Text="&#xE711;" />
                     </Button>
                 </Grid>
                 <StackPanel x:Name="BrowseAdvancedFilters"
@@ -548,7 +629,7 @@
                     Background="{DynamicResource SurfaceBrush}"
                     BorderBrush="{DynamicResource BorderBrush}"
                     BorderThickness="1"
-                    CornerRadius="3">
+                    CornerRadius="0">
                 <Border.Style>
                     <Style TargetType="Border">
                         <Setter Property="Visibility" Value="Visible" />
@@ -560,13 +641,32 @@
                     </Style>
                 </Border.Style>
                 <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="520">
-                    <TextBlock HorizontalAlignment="Center"
-                               FontFamily="Segoe Fluent Icons"
-                               FontSize="30"
-                               Foreground="{DynamicResource AccentTextBrush}"
-                               Text="&#xE8B7;" />
+                    <!-- Empty-set mark: icon in a square outlined frame with the cut corner. -->
+                    <Grid Width="56"
+                          Height="56"
+                          HorizontalAlignment="Center"
+                          IsHitTestVisible="False">
+                        <Border BorderBrush="{DynamicResource BorderStrongBrush}"
+                                BorderThickness="1" />
+                        <Path Width="10"
+                              Height="10"
+                              HorizontalAlignment="Right"
+                              VerticalAlignment="Top"
+                              Data="M 0,0 L 10,0 10,10 Z"
+                              Fill="{DynamicResource TextPrimaryBrush}" />
+                        <TextBlock HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"
+                                   FontFamily="{DynamicResource IconFontFamily}"
+                                   FontSize="24"
+                                   Foreground="{DynamicResource AccentTextBrush}"
+                                   Text="&#xE8B7;" />
+                    </Grid>
+                    <TextBlock Margin="0,14,0,0"
+                               HorizontalAlignment="Center"
+                               Style="{StaticResource TechnicalLabel}"
+                               Text="NO RECORDS / 无可显示项目" />
                     <TextBlock x:Name="BrowseEmptyTitle"
-                               Margin="0,14,0,0"
+                               Margin="0,6,0,0"
                                HorizontalAlignment="Center"
                                FontSize="20"
                                FontWeight="Bold"
@@ -576,14 +676,14 @@
                                 HorizontalAlignment="Center"
                                 TextAlignment="Center"
                                 TextWrapping="Wrap"
-                                Foreground="{DynamicResource TextSecondaryBrush}"
+                                Foreground="{DynamicResource TextMutedBrush}"
                                 Text="{Binding BrowsePageViewModel.EmptyDescription}" />
                     <TextBlock x:Name="BrowseFilteredEmptyDetailText"
                                Margin="0,7,0,0"
                                HorizontalAlignment="Center"
                                TextAlignment="Center"
                                TextWrapping="Wrap"
-                               Foreground="{DynamicResource TextSecondaryBrush}"
+                               Foreground="{DynamicResource TextMutedBrush}"
                                Text="{Binding BrowsePageViewModel.FilteredEmptyDetailText}"
                                Visibility="{Binding BrowsePageViewModel.ShowClearFiltersAction, Converter={StaticResource BooleanToVisibilityConverter}}" />
                     <Button x:Name="BrowseScanCenterButton"
@@ -630,7 +730,7 @@
                     <ColumnDefinition x:Name="BrowseDetailColumn" Width="300" />
                 </Grid.ColumnDefinitions>
                 <Border x:Name="BrowseGridHost"
-                        Background="{DynamicResource BackgroundBrush}"
+                        Background="Transparent"
                         BorderBrush="{DynamicResource BorderBrush}"
                         BorderThickness="0"
                         CornerRadius="0"
@@ -714,9 +814,9 @@
                                                                 <Grid>
                                                                     <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
                                                                         <TextBlock HorizontalAlignment="Center"
-                                                                                   FontFamily="Segoe Fluent Icons"
+                                                                                   FontFamily="{DynamicResource IconFontFamily}"
                                                                                    FontSize="22"
-                                                                                   Foreground="{DynamicResource TextMutedBrush}"
+                                                                                   Foreground="{DynamicResource TextOnDarkMutedBrush}"
                                                                                    Text="&#xE91B;" />
                                                                         <TextBlock Margin="0,4,0,0"
                                                                                    FontSize="10"
@@ -761,7 +861,7 @@
                                                                  <TextBlock Grid.Row="1"
                                                                            Height="12"
                                                                            Margin="0,0,0,1"
-                                                                           FontFamily="Consolas"
+                                                                           FontFamily="{DynamicResource TechnicalFontFamily}"
                                                                            FontSize="{DynamicResource FontSizeMicro}"
                                                                            Foreground="{DynamicResource TextOnDarkMutedBrush}"
                                                                            LineHeight="12"
@@ -769,15 +869,15 @@
                                                                            TextTrimming="CharacterEllipsis" />
                                                                  <Grid Grid.Row="2" Height="12" Margin="0,0,0,1">
                                                                      <TextBlock HorizontalAlignment="Left"
-                                                                                FontFamily="Consolas"
+                                                                                FontFamily="{DynamicResource TechnicalFontFamily}"
                                                                                 FontSize="{DynamicResource FontSizeMicro}"
-                                                                                Foreground="{DynamicResource AccentTextBrush}"
+                                                                                Foreground="{DynamicResource TextOnDarkMutedBrush}"
                                                                                 LineHeight="12"
                                                                                 Text="{Binding TypeLabel}" />
                                                                      <TextBlock HorizontalAlignment="Right"
-                                                                                FontFamily="Consolas"
+                                                                                FontFamily="{DynamicResource TechnicalFontFamily}"
                                                                                 FontSize="{DynamicResource FontSizeMicro}"
-                                                                                Foreground="{DynamicResource AccentTextBrush}"
+                                                                                Foreground="{DynamicResource TextOnDarkMutedBrush}"
                                                                                 LineHeight="12"
                                                                                 Text="{Binding WarningCount, StringFormat=! {0}}" />
                                                                  </Grid>
@@ -786,7 +886,7 @@
                                                                             Height="12"
                                                                             FontSize="{DynamicResource FontSizeMicro}"
                                                                             FontWeight="SemiBold"
-                                                                            Foreground="{DynamicResource AccentTextBrush}"
+                                                                            Foreground="{DynamicResource SignalBrush}"
                                                                             LineHeight="12"
                                                                             Text="{Binding ProcessabilityText}"
                                                                             TextTrimming="CharacterEllipsis">
@@ -818,7 +918,7 @@
                                                         </Border>
                                                         <Border Width="3"
                                                                 HorizontalAlignment="Left"
-                                                                Background="{DynamicResource PaperBrush}"
+                                                                Background="{DynamicResource AccentActionBrush}"
                                                                 IsHitTestVisible="False">
                                                             <Border.Style>
                                                                 <Style TargetType="Border">
@@ -901,12 +1001,32 @@
                         Focusable="False"
                         KeyboardNavigation.IsTabStop="False"
                         AutomationProperties.Name="当前项目详情"
-                        Background="{DynamicResource SurfaceMutedBrush}"
+                        Background="{DynamicResource SurfaceBrush}"
                         BorderBrush="{DynamicResource BorderBrush}"
                         BorderThickness="1"
-                        CornerRadius="3">
+                        CornerRadius="0">
                     <Grid>
                         <Grid.RowDefinitions><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                        <!-- Inspector marks, drawn beneath the scroll content: a signal lead on the top edge,
+                             the cut corner, and a muted action dock behind the shared actions template. -->
+                        <Border Width="48"
+                                Height="3"
+                                HorizontalAlignment="Left"
+                                VerticalAlignment="Top"
+                                Background="{DynamicResource AccentActionBrush}"
+                                IsHitTestVisible="False" />
+                        <Path Width="10"
+                              Height="10"
+                              HorizontalAlignment="Right"
+                              VerticalAlignment="Top"
+                              Data="M 0,0 L 10,0 10,10 Z"
+                              Fill="{DynamicResource TextPrimaryBrush}"
+                              IsHitTestVisible="False" />
+                        <Border Grid.Row="1"
+                                Background="{DynamicResource SurfaceMutedBrush}"
+                                BorderBrush="{DynamicResource BorderBrush}"
+                                BorderThickness="0,1,0,0"
+                                IsHitTestVisible="False" />
                         <ScrollViewer x:Name="BrowsePersistentDetailsScrollViewer"
                                       VerticalScrollBarVisibility="Auto"
                                       HorizontalScrollBarVisibility="Disabled"
@@ -947,9 +1067,9 @@
                     Width="320"
                     HorizontalAlignment="Right"
                     Panel.ZIndex="10"
-                    Background="{DynamicResource InkBrush}"
-                    BorderBrush="{DynamicResource BorderStrongBrush}"
-                    BorderThickness="1,0,0,0"
+                    Background="{DynamicResource SurfaceBrush}"
+                    BorderBrush="{DynamicResource TextPrimaryBrush}"
+                    BorderThickness="3,0,0,0"
                     KeyboardNavigation.TabNavigation="Cycle"
                     PreviewKeyDown="BrowseCompactLayer_PreviewKeyDown">
                 <Border.Style>
@@ -962,6 +1082,33 @@
                 </Border.Style>
                 <Grid>
                     <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                    <!-- Sheet header rule, caption and cut corner; the muted dock sits behind the actions. -->
+                    <Border BorderBrush="{DynamicResource BorderBrush}"
+                            BorderThickness="0,0,0,1"
+                            IsHitTestVisible="False" />
+                    <StackPanel Margin="16,0,0,0"
+                                VerticalAlignment="Center"
+                                IsHitTestVisible="False">
+                        <Border Width="40"
+                                Height="3"
+                                Margin="0,0,0,6"
+                                HorizontalAlignment="Left"
+                                Background="{DynamicResource AccentActionBrush}" />
+                        <TextBlock Style="{StaticResource TechnicalLabel}"
+                                   Text="INSPECTOR / 项目详情" />
+                    </StackPanel>
+                    <Path Width="10"
+                          Height="10"
+                          HorizontalAlignment="Right"
+                          VerticalAlignment="Top"
+                          Data="M 0,0 L 10,0 10,10 Z"
+                          Fill="{DynamicResource TextPrimaryBrush}"
+                          IsHitTestVisible="False" />
+                    <Border Grid.Row="2"
+                            Background="{DynamicResource SurfaceMutedBrush}"
+                            BorderBrush="{DynamicResource BorderBrush}"
+                            BorderThickness="0,1,0,0"
+                            IsHitTestVisible="False" />
                     <Button x:Name="BrowseDetailCloseButton"
                             Margin="12"
                             HorizontalAlignment="Right"
@@ -992,9 +1139,9 @@
                     Panel.ZIndex="11"
                     Padding="18"
                     Background="{DynamicResource SurfaceBrush}"
-                    BorderBrush="{DynamicResource BorderStrongBrush}"
-                    BorderThickness="1"
-                    CornerRadius="3"
+                    BorderBrush="{DynamicResource TextPrimaryBrush}"
+                    BorderThickness="3,0,0,0"
+                    CornerRadius="0"
                     KeyboardNavigation.TabNavigation="Cycle"
                     PreviewKeyDown="BrowseCompactLayer_PreviewKeyDown">
                 <Border.Style>
@@ -1007,7 +1154,17 @@
                 </Border.Style>
                 <StackPanel>
                     <Grid>
-                        <TextBlock VerticalAlignment="Center" FontSize="18" FontWeight="Bold" Text="筛选与排序" />
+                        <StackPanel VerticalAlignment="Center" IsHitTestVisible="False">
+                            <Border Width="40"
+                                    Height="3"
+                                    Margin="0,0,0,6"
+                                    HorizontalAlignment="Left"
+                                    Background="{DynamicResource AccentActionBrush}" />
+                            <TextBlock FontSize="18"
+                                       FontWeight="Bold"
+                                       Foreground="{DynamicResource TextPrimaryBrush}"
+                                       Text="筛选与排序" />
+                        </StackPanel>
                         <Button x:Name="BrowseFilterCloseButton"
                                 HorizontalAlignment="Right"
                                 MinWidth="82"
@@ -1041,14 +1198,16 @@
             </Border>
         </Grid>
 
+        <!-- Processing dock: the one ink block on the page, capped by a 2px signal rule. Shown and hidden
+             only through Opacity and IsHitTestVisible so its 72px row never reflows the grid. -->
         <Border x:Name="BrowseProcessingTraySlot"
                 Grid.Row="5"
                 Height="{DynamicResource BrowseProcessingTrayHeight}"
                 Padding="10,7"
                 Background="{DynamicResource InkBrush}"
                 BorderBrush="{DynamicResource SignalBrush}"
-                BorderThickness="1"
-                CornerRadius="3"
+                BorderThickness="0,2,0,0"
+                CornerRadius="0"
                 AutomationProperties.Name="项目处理状态">
             <Border.Style>
                 <Style TargetType="Border">
@@ -1108,7 +1267,7 @@
                                    FontWeight="SemiBold"
                                    Text="{Binding BrowsePageViewModel.SelectedCount, StringFormat=已选 {0:N0} 个项目}" />
                         <TextBlock Margin="0,2,0,0"
-                                   Foreground="{DynamicResource TextSecondaryBrush}"
+                                   Foreground="{DynamicResource TextOnDarkMutedBrush}"
                                    FontSize="10"
                                    Text="{Binding BrowseSelectionTrayStatusText}" />
                     </StackPanel>
@@ -1116,7 +1275,7 @@
                             Margin="8,0,0,0"
                             MinWidth="92"
                             MinHeight="44"
-                            Style="{StaticResource SecondaryButton}"
+                            Style="{StaticResource BrowseTrayGhostButton}"
                             Command="{Binding BrowsePageViewModel.ClearSelectionCommand}"
                             AutomationProperties.Name="清空选择（项目处理）"
                             Content="清空选择" />
@@ -1150,8 +1309,8 @@
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <TextBlock VerticalAlignment="Center"
-                               Foreground="{DynamicResource AccentTextBrush}"
-                               FontFamily="Consolas"
+                               Foreground="{DynamicResource SignalBrush}"
+                               FontFamily="{DynamicResource TechnicalFontFamily}"
                                FontWeight="Bold">
                         <TextBlock.Text>
                             <MultiBinding StringFormat="RUN {0:N0} · PKG {1:N0} / VIDEO {2:N0}">
@@ -1167,8 +1326,8 @@
                                    Text="{Binding UnpackSession.TrayStatusText}"
                                    TextTrimming="CharacterEllipsis" />
                         <TextBlock Margin="0,2,0,0"
-                                   Foreground="{DynamicResource TextSecondaryBrush}"
-                                   FontFamily="Consolas"
+                                   Foreground="{DynamicResource TextOnDarkMutedBrush}"
+                                   FontFamily="{DynamicResource TechnicalFontFamily}"
                                    FontSize="10"
                                    Text="{Binding UnpackSession.WorkText}"
                                    TextTrimming="CharacterEllipsis" />
@@ -1176,7 +1335,7 @@
                     <Button Grid.Column="2"
                             MinWidth="104"
                             MinHeight="44"
-                            Style="{StaticResource SecondaryButton}"
+                            Style="{StaticResource BrowseTrayGhostButton}"
                             Command="{Binding UnpackSession.CancelUnpackCommand}"
                             AutomationProperties.Name="安全取消（当前处理任务）"
                             Content="安全取消" />
@@ -1208,8 +1367,8 @@
                                    FontWeight="SemiBold"
                                    Text="{Binding UnpackSession.CompletionSummary.TotalCount, StringFormat=处理完成 · 共 {0:N0}}" />
                         <TextBlock Margin="0,2,0,0"
-                                   Foreground="{DynamicResource TextSecondaryBrush}"
-                                   FontFamily="Consolas"
+                                   Foreground="{DynamicResource TextOnDarkMutedBrush}"
+                                   FontFamily="{DynamicResource TechnicalFontFamily}"
                                    FontSize="10">
                             <Run Text="成功 " /><Run Text="{Binding UnpackSession.CompletionSummary.SucceededCount}" />
                             <Run Text=" · 失败 " /><Run Text="{Binding UnpackSession.CompletionSummary.FailedCount}" />
@@ -1219,12 +1378,12 @@
                         </TextBlock>
                     </StackPanel>
                     <Button Grid.Column="1" Margin="8,0,0,0" MinWidth="72" MinHeight="44"
-                            Style="{StaticResource GhostButton}"
+                            Style="{StaticResource BrowseTrayGhostButton}"
                             Command="{Binding UnpackSession.ClearCompletionCommand}"
                             AutomationProperties.Name="清除项目处理完成摘要"
                             Content="清除" />
                     <Button Grid.Column="2" Margin="8,0,0,0" MinWidth="88" MinHeight="44"
-                            Style="{StaticResource SecondaryButton}"
+                            Style="{StaticResource BrowseTrayGhostButton}"
                             Command="{Binding NavigateProblemsCommand}"
                             AutomationProperties.Name="问题中心（打开）"
                             Content="问题中心" />

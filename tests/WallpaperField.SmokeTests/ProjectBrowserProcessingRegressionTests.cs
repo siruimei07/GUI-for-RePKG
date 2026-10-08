@@ -1224,7 +1224,7 @@ internal static class ProjectBrowserProcessingRegressionTests
                 "diagnostic-project-key",
                 projectKey: projectKey);
             var environment = new DiagnosticEnvironment(
-                "1.3.0",
+                "1.4.0",
                 "task6",
                 "Windows fixture",
                 "x64",

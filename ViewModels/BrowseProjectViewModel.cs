@@ -66,7 +66,7 @@ public sealed class BrowseProjectViewModel : ObservableObject
     {
         WallpaperProjectKind.Package => "可解包 scene.pkg",
         WallpaperProjectKind.Video => "可复制视频文件",
-        WallpaperProjectKind.Website => "v1.3 暂不支持网站输出",
+        WallpaperProjectKind.Website => "当前版本暂不支持网站输出",
         WallpaperProjectKind.Other when string.Equals(
             Record.WallpaperType?.Trim(),
             "video",

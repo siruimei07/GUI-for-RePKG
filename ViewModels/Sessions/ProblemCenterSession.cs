@@ -149,7 +149,13 @@ public sealed class ProblemCenterSession : ObservableObject
     public void Publish(IEnumerable<AppIssue> issues)
     {
         ArgumentNullException.ThrowIfNull(issues);
-        _store.Publish(issues);
+        var batch = issues.ToArray();
+        if (batch.Length == 0)
+        {
+            return;
+        }
+
+        _store.Publish(batch);
         Synchronize();
     }
 
@@ -171,6 +177,81 @@ public sealed class ProblemCenterSession : ObservableObject
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Applies a refresh that re-derives project-less facts on every run. A legacy
+    /// publication whose open fact is already listed unchanged is skipped, and a
+    /// changed one replaces it, so repeated refreshes never stack duplicates.
+    /// </summary>
+    internal AppIssueBatchResult ApplyRefreshBatch(
+        IEnumerable<AppIssue> publications,
+        IEnumerable<AppIssueResolutionRequest> resolutions)
+    {
+        ArgumentNullException.ThrowIfNull(publications);
+        ArgumentNullException.ThrowIfNull(resolutions);
+        var resolutionRequests = resolutions.ToList();
+        var resolvedInBatch = resolutionRequests
+            .Where(request => request is not null
+                && string.IsNullOrWhiteSpace(request.ProjectKey))
+            .Select(request => new LegacyIssueKey(
+                request.Source,
+                request.Code,
+                request.ContextKey))
+            .ToHashSet();
+        var openLegacy = new Dictionary<LegacyIssueKey, AppIssue>();
+        foreach (var issue in _store.Snapshot())
+        {
+            if (issue is { ResolutionState: AppIssueResolutionState.Open, ProjectKey: null })
+            {
+                openLegacy.TryAdd(
+                    new LegacyIssueKey(issue.Source, issue.Code, issue.ContextKey),
+                    issue);
+            }
+        }
+
+        var accepted = new List<AppIssue>();
+        var seenInBatch = new HashSet<LegacyIssueKey>();
+        foreach (var publication in publications)
+        {
+            ArgumentNullException.ThrowIfNull(publication);
+            var normalized = publication.Normalize();
+            if (normalized.ProjectKey is not null)
+            {
+                accepted.Add(publication);
+                continue;
+            }
+
+            var key = new LegacyIssueKey(
+                normalized.Source,
+                normalized.Code,
+                normalized.ContextKey);
+            if (!seenInBatch.Add(key))
+            {
+                continue;
+            }
+
+            if (!resolvedInBatch.Contains(key)
+                && openLegacy.TryGetValue(key, out var existing))
+            {
+                // An empty context cannot be addressed by a resolution request,
+                // so the listed fact is kept rather than stacked.
+                if (HasSameFacts(existing, normalized) || key.ContextKey.Length == 0)
+                {
+                    continue;
+                }
+
+                resolutionRequests.Add(new AppIssueResolutionRequest(
+                    key.Source,
+                    key.Code,
+                    ProjectKey: null,
+                    key.ContextKey));
+            }
+
+            accepted.Add(publication);
+        }
+
+        return ApplyBatch(accepted, resolutionRequests);
     }
 
     public int ResolveProjectIssues(
@@ -426,4 +507,17 @@ public sealed class ProblemCenterSession : ObservableObject
             ? "ALL"
             : parsed.ToString();
     }
+
+    private static bool HasSameFacts(AppIssue existing, AppIssue candidate)
+        => existing.Severity == candidate.Severity
+           && existing.DiskFact == candidate.DiskFact
+           && existing.SuggestedAction == candidate.SuggestedAction
+           && string.Equals(existing.Summary, candidate.Summary, StringComparison.Ordinal)
+           && string.Equals(existing.Details, candidate.Details, StringComparison.Ordinal)
+           && string.Equals(existing.PathContext, candidate.PathContext, StringComparison.Ordinal);
+
+    private readonly record struct LegacyIssueKey(
+        AppIssueSource Source,
+        string Code,
+        string ContextKey);
 }

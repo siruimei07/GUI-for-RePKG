@@ -997,7 +997,10 @@ public sealed class ShellViewModel : ObservableObject, IDisposable
             NotifyBrowseProcessingAvailabilityChanged();
         }
 
-        UpdateCommandStates();
+        if (!IsProgressOnlyProperty(args.PropertyName))
+        {
+            UpdateCommandStates();
+        }
     }
 
     private void OnUnpackSessionPropertyChanged(
@@ -1068,7 +1071,10 @@ public sealed class ShellViewModel : ObservableObject, IDisposable
                 break;
         }
 
-        UpdateCommandStates();
+        if (!IsProgressOnlyProperty(args.PropertyName))
+        {
+            UpdateCommandStates();
+        }
     }
 
     private void OnLibrarySessionPropertyChanged(
@@ -1141,8 +1147,33 @@ public sealed class ShellViewModel : ObservableObject, IDisposable
                 break;
         }
 
-        UpdateCommandStates();
+        if (!IsProgressOnlyProperty(args.PropertyName))
+        {
+            UpdateCommandStates();
+        }
     }
+
+    // Progress reports arrive many times per second and only feed bars and
+    // status text. No command's CanExecute reads these values, so re-querying
+    // every command for them only floods the UI thread. Lifecycle facts such as
+    // IsScanning, IsUnpacking, CanCancel and CurrentStage still refresh commands.
+    private static bool IsProgressOnlyProperty(string? propertyName)
+        => propertyName is nameof(ScanSession.ProgressValue)
+            or nameof(ScanSession.ScannedCount)
+            or nameof(ScanSession.TotalCount)
+            or nameof(ScanSession.ProgressSummary)
+            or nameof(ScanSession.CurrentFolder)
+            or nameof(ScanSession.CurrentTitle)
+            or nameof(ScanSession.StatusText)
+            or nameof(ScanSession.StatusKind)
+            or nameof(UnpackSession.ProcessedCount)
+            or nameof(UnpackSession.CompletedWork)
+            or nameof(UnpackSession.TotalWork)
+            or nameof(UnpackSession.WorkUnit)
+            or nameof(UnpackSession.WorkText)
+            or nameof(UnpackSession.IsProgressIndeterminate)
+            or nameof(UnpackSession.TrayStatusText)
+            or nameof(UnpackSession.TrayLiveRegionText);
 
     private void OnProblemCenterChanged(object? sender, EventArgs args)
     {

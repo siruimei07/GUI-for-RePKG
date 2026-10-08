@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -30,7 +31,7 @@ public enum ShellLayoutMode
 public partial class MainWindow : Window
 {
     private const int DwmWindowCornerPreference = 33;
-    private const int DwmRoundCorners = 2;
+    private const int DwmSquareCorners = 1;
     private static readonly TimeSpan CloseWaitTimeout = TimeSpan.FromSeconds(30);
     private static readonly string[] HighContrastResourceKeys =
     [
@@ -72,7 +73,30 @@ public partial class MainWindow : Window
         "DisabledBrush",
         "ModalBackdropBrush",
         "OverlayBrush",
-        "ShadowBrush"
+        "ShadowBrush",
+        "VerifiedBrush",
+        "Ink05Brush",
+        "Ink08Brush",
+        "Ink12Brush",
+        "Ink18Brush",
+        "Ink42Brush",
+        "Signal18Brush",
+        "Signal32Brush",
+        "WarningBrush",
+        "WarningTextBrush",
+        "DangerBrush",
+        "DangerTextBrush",
+        "ProgressTrackBrush",
+        "DecorationLineBrush",
+        "DecorationFillBrush",
+        "DockRuleBrush"
+    ];
+    private static readonly string[] PageRevealRootNames =
+    [
+        "ScanView",
+        "BrowseView",
+        "LibraryView",
+        "ProblemsView"
     ];
 
     public static readonly DependencyProperty MotionEnabledProperty = DependencyProperty.Register(
@@ -80,6 +104,12 @@ public partial class MainWindow : Window
         typeof(bool),
         typeof(MainWindow),
         new PropertyMetadata(SystemParameters.ClientAreaAnimation));
+
+    public static readonly DependencyProperty IsHighContrastActiveProperty = DependencyProperty.Register(
+        nameof(IsHighContrastActive),
+        typeof(bool),
+        typeof(MainWindow),
+        new PropertyMetadata(false));
 
     public static readonly DependencyProperty LayoutModeProperty = DependencyProperty.Register(
         nameof(LayoutMode),
@@ -100,6 +130,9 @@ public partial class MainWindow : Window
     private Task<bool>? _snapshotCaptureTask;
     private bool _snapshotCaptureStarted;
     private readonly MotionPolicy _motionPolicy = new();
+    private readonly List<UIElement> _revealedElements = [];
+    private FrameworkElement? _animatedPage;
+    private int _pageTransitionGeneration;
     private UserSettingsStore? _settingsStore;
     private bool _persistSettingsOnClose;
     private bool _closePrepared;
@@ -115,6 +148,7 @@ public partial class MainWindow : Window
         _motionPolicy.PropertyChanged += MotionPolicy_PropertyChanged;
         SystemParameters.StaticPropertyChanged += SystemParameters_StaticPropertyChanged;
         MotionEnabled = _motionPolicy.MotionEnabled;
+        Controls.MotionAssist.SetEnabled(MotionEnabled);
         ApplyHighContrastPalette(SystemParameters.HighContrast);
     }
 
@@ -124,6 +158,12 @@ public partial class MainWindow : Window
     {
         get => (bool)GetValue(MotionEnabledProperty);
         private set => SetValue(MotionEnabledProperty, value);
+    }
+
+    public bool IsHighContrastActive
+    {
+        get => (bool)GetValue(IsHighContrastActiveProperty);
+        private set => SetValue(IsHighContrastActiveProperty, value);
     }
 
     public ShellLayoutMode LayoutMode
@@ -180,6 +220,30 @@ public partial class MainWindow : Window
         _settingsStore = settingsStore;
         _persistSettingsOnClose = persistSettings;
         Closing += Window_Closing;
+        if (System.Windows.Application.Current is { } application)
+        {
+            application.SessionEnding += Application_SessionEnding;
+        }
+    }
+
+    private void Application_SessionEnding(object? sender, SessionEndingCancelEventArgs e)
+    {
+        // Windows logoff and shutdown do not raise Window.Closing, so keep the chosen paths here.
+        if (ViewModel is not { } viewModel || _settingsStore is null)
+        {
+            return;
+        }
+
+        viewModel.CancelPendingWork();
+        if (_persistSettingsOnClose && !_allowCloseWithoutSettings)
+        {
+            _ = _settingsStore.Save(new UserSettings
+            {
+                SourcePath = viewModel.SourcePath.Trim(),
+                OutputPath = viewModel.OutputPath.Trim(),
+                Density = viewModel.Density
+            });
+        }
     }
 
     public void SetReducedMotion(bool reduceMotion)
@@ -205,6 +269,7 @@ public partial class MainWindow : Window
     private void ApplyMotionPolicy()
     {
         MotionEnabled = _motionPolicy.MotionEnabled;
+        Controls.MotionAssist.SetEnabled(MotionEnabled);
         BrowsePage.RefreshMotionVisuals();
         StartAmbientMotion();
         AnimateCurrentPage();
@@ -233,6 +298,11 @@ public partial class MainWindow : Window
     private void Window_Closed(object? sender, EventArgs e)
     {
         Closing -= Window_Closing;
+        if (System.Windows.Application.Current is { } application)
+        {
+            application.SessionEnding -= Application_SessionEnding;
+        }
+
         DataContextChanged -= OnDataContextChanged;
         if (DataContext is INotifyPropertyChanged viewModel)
         {
@@ -387,7 +457,16 @@ public partial class MainWindow : Window
             or nameof(ShellViewModel.IsProblemsPage)
             or nameof(ShellViewModel.PageCode))
         {
-            Dispatcher.BeginInvoke(AnimateCurrentPage, DispatcherPriority.Loaded);
+            // Start the transition before the next render so the incoming page never flashes
+            // fully drawn for a frame before its fade-in begins.
+            if (Dispatcher.CheckAccess())
+            {
+                AnimateCurrentPage();
+            }
+            else
+            {
+                Dispatcher.BeginInvoke(AnimateCurrentPage, DispatcherPriority.Render);
+            }
         }
 
         if (e.PropertyName == nameof(ShellViewModel.IsBusy))
@@ -412,6 +491,7 @@ public partial class MainWindow : Window
             return;
         }
 
+        // The blueprint grid drifts one tile diagonally, slowly enough to read as a living stage.
         var gridAnimation = new DoubleAnimation(0, 56, TimeSpan.FromSeconds(28))
         {
             RepeatBehavior = RepeatBehavior.Forever,
@@ -420,7 +500,7 @@ public partial class MainWindow : Window
         BackgroundGridOffset.BeginAnimation(TranslateTransform.XProperty, gridAnimation);
         BackgroundGridOffset.BeginAnimation(TranslateTransform.YProperty, gridAnimation);
 
-        var beaconAnimation = new DoubleAnimation(0.42, 1, TimeSpan.FromSeconds(1.15))
+        var beaconAnimation = new DoubleAnimation(0.35, 1, TimeSpan.FromSeconds(1.15))
         {
             AutoReverse = true,
             RepeatBehavior = RepeatBehavior.Forever,
@@ -432,8 +512,10 @@ public partial class MainWindow : Window
     private void StartCalibrationLoop()
     {
         CalibrationInstrument.ApplyAnimationClock(OpacityProperty, null);
-        CalibrationInstrument.Opacity = 0.17;
+        CalibrationInstrument.Opacity = 0.6;
         CalibrationRotation.ApplyAnimationClock(RotateTransform.AngleProperty, null);
+        BusyStripeOffset.ApplyAnimationClock(TranslateTransform.XProperty, null);
+        BusyStripeOffset.X = 0;
 
         if (!MotionEnabled)
         {
@@ -443,7 +525,7 @@ public partial class MainWindow : Window
         var idleRotation = new DoubleAnimation(
             CalibrationRotation.Angle,
             CalibrationRotation.Angle + 360,
-            TimeSpan.FromSeconds(42))
+            TimeSpan.FromSeconds(48))
         {
             RepeatBehavior = RepeatBehavior.Forever
         };
@@ -460,7 +542,7 @@ public partial class MainWindow : Window
 
         CalibrationInstrument.BeginAnimation(
             OpacityProperty,
-            new DoubleAnimation(0.18, 0.42, TimeSpan.FromMilliseconds(520))
+            new DoubleAnimation(0.55, 1, TimeSpan.FromMilliseconds(520))
             {
                 AutoReverse = true,
                 RepeatBehavior = RepeatBehavior.Forever,
@@ -469,7 +551,15 @@ public partial class MainWindow : Window
 
         CalibrationRotation.BeginAnimation(
             RotateTransform.AngleProperty,
-            new DoubleAnimation(0, 360, TimeSpan.FromSeconds(1.8))
+            new DoubleAnimation(0, 360, TimeSpan.FromSeconds(2.4))
+            {
+                RepeatBehavior = RepeatBehavior.Forever
+            });
+
+        // The hazard stripe crawls one tile per cycle while foreground work is running.
+        BusyStripeOffset.BeginAnimation(
+            TranslateTransform.XProperty,
+            new DoubleAnimation(0, 12, TimeSpan.FromMilliseconds(480))
             {
                 RepeatBehavior = RepeatBehavior.Forever
             });
@@ -484,12 +574,16 @@ public partial class MainWindow : Window
                 : ViewModel?.IsBrowsePage == true
                     ? BrowsePage
                     : ScanPage;
-        foreach (var view in new FrameworkElement[] { ScanPage, BrowsePage, LibraryPage, ProblemCenterPage })
+
+        // One navigation raises several page properties; replay the transition once per page change.
+        if (MotionEnabled && ReferenceEquals(target, _animatedPage))
         {
-            view.ApplyAnimationClock(OpacityProperty, null);
-            view.RenderTransform = Transform.Identity;
+            return;
         }
 
+        _animatedPage = target;
+        _pageTransitionGeneration++;
+        ResetPageMotion();
         target.Opacity = 1;
 
         CalibrationRotation.ApplyAnimationClock(RotateTransform.AngleProperty, null);
@@ -501,6 +595,172 @@ public partial class MainWindow : Window
                     ? 16
                     : 0;
         SetBusyAnimation(ViewModel?.IsBusy == true);
+
+        if (MotionEnabled && IsLoaded)
+        {
+            PlayPageTransition(target, _pageTransitionGeneration);
+        }
+    }
+
+    private void ResetPageMotion()
+    {
+        foreach (var view in new FrameworkElement[] { ScanPage, BrowsePage, LibraryPage, ProblemCenterPage })
+        {
+            view.ApplyAnimationClock(OpacityProperty, null);
+            view.RenderTransform = Transform.Identity;
+        }
+
+        foreach (var element in _revealedElements)
+        {
+            element.ApplyAnimationClock(OpacityProperty, null);
+            if (element.RenderTransform is TranslateTransform)
+            {
+                element.RenderTransform = Transform.Identity;
+            }
+        }
+
+        _revealedElements.Clear();
+        PageWipe.ApplyAnimationClock(OpacityProperty, null);
+        PageWipe.Opacity = 0;
+        PageWipeOffset.ApplyAnimationClock(TranslateTransform.XProperty, null);
+        PageWipeOffset.X = 0;
+    }
+
+    private void PlayPageTransition(FrameworkElement target, int generation)
+    {
+        var slideEase = new QuinticEase { EasingMode = EasingMode.EaseOut };
+        var pageShift = new TranslateTransform(36, 0);
+        target.RenderTransform = pageShift;
+        var pageFade = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(320));
+        pageFade.Completed += (_, _) =>
+        {
+            if (generation == _pageTransitionGeneration)
+            {
+                target.ApplyAnimationClock(OpacityProperty, null);
+            }
+        };
+        var pageSlide = new DoubleAnimation(36, 0, TimeSpan.FromMilliseconds(560))
+        {
+            EasingFunction = slideEase
+        };
+        pageSlide.Completed += (_, _) =>
+        {
+            if (generation == _pageTransitionGeneration && ReferenceEquals(target.RenderTransform, pageShift))
+            {
+                target.RenderTransform = Transform.Identity;
+            }
+        };
+        target.BeginAnimation(OpacityProperty, pageFade);
+        pageShift.BeginAnimation(TranslateTransform.XProperty, pageSlide);
+
+        // Masked lateral wipe: an ink slab with a cyan edge crosses the stage once.
+        var stageWidth = Math.Max(StageHost.ActualWidth, 1);
+        var wipeWidth = double.IsNaN(PageWipe.Width) ? PageWipe.ActualWidth : PageWipe.Width;
+        var wipeTravel = new DoubleAnimation(-wipeWidth - 80, stageWidth + 80, TimeSpan.FromMilliseconds(520))
+        {
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseInOut }
+        };
+        var wipeOpacity = new DoubleAnimationUsingKeyFrames { Duration = TimeSpan.FromMilliseconds(520) };
+        wipeOpacity.KeyFrames.Add(new DiscreteDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.Zero)));
+        wipeOpacity.KeyFrames.Add(new LinearDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(380))));
+        wipeOpacity.KeyFrames.Add(new LinearDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(520))));
+        wipeOpacity.Completed += (_, _) =>
+        {
+            if (generation == _pageTransitionGeneration)
+            {
+                PageWipe.ApplyAnimationClock(OpacityProperty, null);
+                PageWipeOffset.ApplyAnimationClock(TranslateTransform.XProperty, null);
+                PageWipe.Opacity = 0;
+            }
+        };
+        PageWipeOffset.BeginAnimation(TranslateTransform.XProperty, wipeTravel);
+        PageWipe.BeginAnimation(OpacityProperty, wipeOpacity);
+
+        // Staggered section reveal: each top-level page region rises into place in reading order.
+        // Browse keeps its regions clock-free because its viewport anchoring and focus contracts
+        // are measured live; it still receives the page slide and the stage wipe.
+        if (ReferenceEquals(target, BrowsePage))
+        {
+            return;
+        }
+
+        var index = 0;
+        foreach (var section in GetRevealSections(target))
+        {
+            var delay = TimeSpan.FromMilliseconds(70 + (index * 55));
+            var rise = new TranslateTransform(0, 14);
+            section.RenderTransform = rise;
+            _revealedElements.Add(section);
+            var sectionFade = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(300))
+            {
+                BeginTime = delay
+            };
+            sectionFade.Completed += (_, _) =>
+            {
+                if (generation == _pageTransitionGeneration)
+                {
+                    section.ApplyAnimationClock(OpacityProperty, null);
+                }
+            };
+            var sectionRise = new DoubleAnimation(14, 0, TimeSpan.FromMilliseconds(460))
+            {
+                BeginTime = delay,
+                EasingFunction = slideEase
+            };
+            sectionRise.Completed += (_, _) =>
+            {
+                if (generation == _pageTransitionGeneration && ReferenceEquals(section.RenderTransform, rise))
+                {
+                    section.RenderTransform = Transform.Identity;
+                }
+            };
+            section.BeginAnimation(OpacityProperty, sectionFade);
+            rise.BeginAnimation(TranslateTransform.YProperty, sectionRise);
+            index++;
+        }
+    }
+
+    private static List<UIElement> GetRevealSections(FrameworkElement page)
+    {
+        var sections = new List<UIElement>();
+        Panel? current = null;
+        foreach (var name in PageRevealRootNames)
+        {
+            if (page.FindName(name) is Panel root)
+            {
+                current = root;
+                break;
+            }
+        }
+
+        while (current is { Children.Count: 1 } && current.Children[0] is Panel only)
+        {
+            current = only;
+        }
+
+        if (current is null)
+        {
+            return sections;
+        }
+
+        foreach (UIElement child in current.Children)
+        {
+            if (sections.Count == 6)
+            {
+                break;
+            }
+
+            // The page root may still be collapsed while its route trigger catches up, so test
+            // each section's own Visibility rather than IsVisible.
+            if (child.Visibility == Visibility.Visible
+                && child.Opacity > 0.99
+                && (child.RenderTransform is null || ReferenceEquals(child.RenderTransform, Transform.Identity)))
+            {
+                sections.Add(child);
+            }
+        }
+
+        return sections;
     }
 
     private void Window_SizeChanged(object sender, SizeChangedEventArgs e)
@@ -551,15 +811,11 @@ public partial class MainWindow : Window
     private void UpdateWindowStateVisuals()
     {
         var maximized = WindowState == WindowState.Maximized;
-        WindowFrame.CornerRadius = maximized ? new CornerRadius(0) : new CornerRadius(4);
+        WindowFrame.CornerRadius = new CornerRadius(0);
         WindowFrame.BorderThickness = maximized ? new Thickness(0) : new Thickness(1);
         MaximizeGlyph.Text = maximized ? "\uE923" : "\uE922";
     }
 
-    [System.Diagnostics.CodeAnalysis.SuppressMessage(
-        "Performance",
-        "CA1822:Mark members as static",
-        Justification = "Keep the existing instance entry point used by window accessibility regression tests to exercise live palette changes.")]
     private void ApplyHighContrastPalette(bool enabled)
     {
         var resources = System.Windows.Application.Current?.Resources;
@@ -573,6 +829,7 @@ public partial class MainWindow : Window
             resources.Remove(key);
         }
 
+        IsHighContrastActive = enabled;
         if (!enabled)
         {
             return;
@@ -594,7 +851,15 @@ public partial class MainWindow : Window
             "InputBackgroundBrush",
             "InkBrush",
             "InkRaisedBrush",
-            "InkSoftBrush");
+            "InkSoftBrush",
+            "ProgressTrackBrush",
+            "DecorationLineBrush",
+            "DecorationFillBrush",
+            "Ink05Brush",
+            "Ink08Brush",
+            "Ink12Brush",
+            "Ink18Brush",
+            "Ink42Brush");
         SetResourceBrushes(
             resources,
             SystemColors.WindowTextBrush,
@@ -607,7 +872,10 @@ public partial class MainWindow : Window
             "ForegroundBrush",
             "BorderBrush",
             "BorderStrongBrush",
-            "FocusOuterBrush");
+            "FocusOuterBrush",
+            "WarningTextBrush",
+            "DangerTextBrush",
+            "DockRuleBrush");
         SetResourceBrushes(
             resources,
             SystemColors.HighlightBrush,
@@ -618,7 +886,12 @@ public partial class MainWindow : Window
             "SelectionBackgroundBrush",
             "FocusInnerBrush",
             "SuccessBrush",
-            "SuccessSoftBrush");
+            "SuccessSoftBrush",
+            "VerifiedBrush",
+            "Signal18Brush",
+            "Signal32Brush",
+            "WarningBrush",
+            "DangerBrush");
         SetResourceBrushes(
             resources,
             SystemColors.HighlightTextBrush,
@@ -647,7 +920,7 @@ public partial class MainWindow : Window
         try
         {
             var handle = new WindowInteropHelper(this).Handle;
-            var preference = DwmRoundCorners;
+            var preference = DwmSquareCorners;
             _ = DwmSetWindowAttribute(
                 handle,
                 DwmWindowCornerPreference,

@@ -565,7 +565,7 @@ public sealed class ScanSession : ObservableObject
             StringComparer.Ordinal);
         foreach (var candidate in ScannedWallpapers)
         {
-            var projectKey = candidate.Record.ProjectKey;
+            var projectKey = candidate.ProjectKey;
             if (!cardsByProjectKey.TryAdd(projectKey, candidate))
             {
                 cardsByProjectKey[projectKey] = null;
@@ -859,23 +859,46 @@ public sealed class ScanSession : ObservableObject
     private void SetSourcePath(string? value)
     {
         value ??= string.Empty;
-        if (SetProperty(ref _sourcePath, value, nameof(SourcePath)))
+        var normalized = NormalizePathInput(value);
+        if (SetProperty(ref _sourcePath, normalized, nameof(SourcePath)))
         {
             SchedulePathValidation();
             OnPropertiesChanged(nameof(IsCurrentIdentity), nameof(UnpackToolTip));
             UpdateCommandStates();
+        }
+        else if (!string.Equals(normalized, value, StringComparison.Ordinal))
+        {
+            // Same path pasted with quotes: let the bound TextBox drop them too.
+            OnPropertyChanged(nameof(SourcePath));
         }
     }
 
     private void SetOutputPath(string? value)
     {
         value ??= string.Empty;
-        if (SetProperty(ref _outputPath, value, nameof(OutputPath)))
+        var normalized = NormalizePathInput(value);
+        if (SetProperty(ref _outputPath, normalized, nameof(OutputPath)))
         {
             SchedulePathValidation();
             OnPropertiesChanged(nameof(IsCurrentIdentity), nameof(UnpackToolTip));
             UpdateCommandStates();
         }
+        else if (!string.Equals(normalized, value, StringComparison.Ordinal))
+        {
+            OnPropertyChanged(nameof(OutputPath));
+        }
+    }
+
+    // Explorer "复制为路径" wraps the path in double quotes. Strip one such pair
+    // and the whitespace around and inside it. Unquoted text is kept verbatim:
+    // the TextBox writes back on every keystroke, and trimming there would eat
+    // the space while the user is typing a path such as "C:\Program Files".
+    private static string NormalizePathInput(string value)
+    {
+        var trimmed = value.Trim();
+        return trimmed.Length >= 2 && trimmed[0] == '"' && trimmed[^1] == '"'
+            ? trimmed[1..^1].Trim()
+            : value;
     }
 
     private void SchedulePathValidation()
@@ -1258,8 +1281,8 @@ public sealed class ScanSession : ObservableObject
         {
             var unpackContext = NormalizeItemContext(card.WorkshopId);
             card.SetHasOpenIssues(
-                projectKeys.Contains(card.Record.ProjectKey)
-                || scanContexts.Contains(NormalizeIssueContext(card.SourceFolder))
+                projectKeys.Contains(card.ProjectKey)
+                || scanContexts.Contains(card.SourceIssueContext)
                 || (uniqueUnpackContexts.Contains(unpackContext)
                     && unpackContexts.Contains(unpackContext)));
         }
