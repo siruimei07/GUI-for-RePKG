@@ -2,6 +2,8 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using WallpaperField.Application;
 using WallpaperField.Contracts;
@@ -14,6 +16,7 @@ internal static class BrowserPerformanceHardeningRegressionTests
 {
     internal static async Task RunAsync(Action<bool, string> assert)
     {
+        await VerifyIncidentalMtaDispatcherAsync(assert);
         await Task.Run(() =>
         {
             WithContext(context => VerifyScanWorkerAndCancellation(context, assert));
@@ -22,6 +25,74 @@ internal static class BrowserPerformanceHardeningRegressionTests
         });
         await VerifyDispatcherAffinityWithoutContextAsync(assert);
         await VerifyDispatcherShutdownAsync(assert);
+    }
+
+    private static Task VerifyIncidentalMtaDispatcherAsync(Action<bool, string> assert)
+    {
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new Thread(() =>
+        {
+            Dispatcher? incidentalDispatcher = null;
+            try
+            {
+                SynchronizationContext.SetSynchronizationContext(null);
+                // Imaging is valid on an MTA worker and creates a Dispatcher as
+                // an implementation detail, without supplying a message pump.
+                var bitmap = BitmapSource.Create(
+                    1, 1, 96, 96, PixelFormats.Bgra32, null, new byte[4], 4);
+                bitmap.Freeze();
+                incidentalDispatcher = Dispatcher.FromThread(Thread.CurrentThread);
+                assert(incidentalDispatcher is not null
+                       && SynchronizationContext.Current is null,
+                    "The MTA imaging fixture did not create an incidental dispatcher without a context.");
+
+                var release = new TaskCompletionSource<ScanResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+                var serviceCalls = 0;
+                var service = new DelegateScanService((_, _, _) =>
+                {
+                    Interlocked.Increment(ref serviceCalls);
+                    return release.Task;
+                });
+                using (var fixture = new Fixture(service))
+                {
+                    // The unreleased service guarantees an asynchronous boundary.
+                    // Neither scan is allowed to require pumping this MTA queue.
+                    var sameOwner = fixture.Scan.ScanAsync();
+                    assert(!fixture.Browse.IsSelectionWritable,
+                        "The MTA scan did not lock shared selection while running.");
+                    release.TrySetResult(Result([]));
+                    sameOwner.WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
+                    assert(fixture.Browse.IsSelectionWritable
+                           && fixture.Scan.CanScan
+                           && fixture.Scan.ScanCommand.CanExecute(null),
+                        "The MTA scan completed without restoring selection and scan commands.");
+                    Task.Run(fixture.Scan.ScanAsync)
+                        .WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
+                    assert(serviceCalls == 2
+                           && fixture.Scan.ProjectSnapshot is not null
+                           && fixture.Coordinator.Current.State == TaskLifecycleState.Succeeded
+                           && !fixture.Scan.IsScanning
+                           && fixture.Browse.IsSelectionWritable
+                           && fixture.Scan.CanScan
+                           && fixture.Scan.ScanCommand.CanExecute(null),
+                        "An incidental MTA dispatcher prevented same-owner or off-owner scan completion.");
+                    assert(SynchronizationContext.Current is null,
+                        "Scanning installed an ambient dispatcher context on an MTA worker.");
+                }
+                completion.TrySetResult();
+            }
+            catch (Exception exception)
+            {
+                completion.TrySetException(exception);
+            }
+            finally
+            {
+                incidentalDispatcher?.InvokeShutdown();
+            }
+        }) { IsBackground = true };
+        thread.SetApartmentState(ApartmentState.MTA);
+        thread.Start();
+        return completion.Task.WaitAsync(TimeSpan.FromSeconds(15));
     }
 
     private static Task VerifyDispatcherAffinityWithoutContextAsync(Action<bool, string> assert)

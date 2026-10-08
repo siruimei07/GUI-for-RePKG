@@ -71,11 +71,16 @@ jobs:
 
       - name: Run and verify SmokeTests
         id: smoke
+        timeout-minutes: 10
         shell: pwsh
         run: |
-          $output = @(& dotnet run --project .\tests\WallpaperField.SmokeTests\WallpaperField.SmokeTests.csproj --configuration Release --no-build --no-restore 2>&1)
+          $output = [System.Collections.Generic.List[string]]::new()
+          & dotnet run --project .\tests\WallpaperField.SmokeTests\WallpaperField.SmokeTests.csproj --configuration Release --no-build --no-restore 2>&1 | ForEach-Object {
+            $line = $_.ToString()
+            $output.Add($line)
+            Write-Host $line
+          }
           $exitCode = $LASTEXITCODE
-          $output | ForEach-Object { Write-Host $_ }
           if ($exitCode -ne 0) {
             $detail = ($output | Select-Object -Last 20) -join "`n"
             $detail = $detail.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
@@ -95,13 +100,18 @@ jobs:
 
       - name: Verify native imaging and browser state matrices
         if: ${{ !cancelled() && (success() || steps.smoke.outcome == 'failure') }}
+        timeout-minutes: 12
         shell: pwsh
         run: |
           $failures = @()
           foreach ($mode in @('--tex-hardening-only', '--project-browser-task7-wpf-only', '--project-browser-task7-visual-only')) {
-            $output = @(& dotnet run --project .\tests\WallpaperField.SmokeTests\WallpaperField.SmokeTests.csproj --configuration Release --no-build --no-restore -- $mode 2>&1)
+            $output = [System.Collections.Generic.List[string]]::new()
+            & dotnet run --project .\tests\WallpaperField.SmokeTests\WallpaperField.SmokeTests.csproj --configuration Release --no-build --no-restore -- $mode 2>&1 | ForEach-Object {
+              $line = $_.ToString()
+              $output.Add($line)
+              Write-Host $line
+            }
             $exitCode = $LASTEXITCODE
-            $output | ForEach-Object { Write-Host $_ }
             if ($exitCode -ne 0) {
               $detail = ($output | Select-Object -Last 20) -join "`n"
               $detail = $detail.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')

@@ -1301,7 +1301,11 @@ public sealed class ScanSession : ObservableObject
     }
 
     private static DispatcherSynchronizationContext? CaptureDispatcherContext()
-        => Dispatcher.FromThread(Thread.CurrentThread) is { } dispatcher
+        // Imaging can create an incidental Dispatcher on an MTA worker without
+        // a message pump. Only infer WPF UI ownership from an STA dispatcher;
+        // explicitly supplied synchronization contexts are captured separately.
+        => Thread.CurrentThread.GetApartmentState() == ApartmentState.STA
+            && Dispatcher.FromThread(Thread.CurrentThread) is { } dispatcher
             ? new DispatcherSynchronizationContext(dispatcher)
             : null;
 

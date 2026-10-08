@@ -1040,7 +1040,10 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
         => SynchronizationContext.Current;
 
     private static DispatcherSynchronizationContext? CaptureDispatcherContext()
-        => Dispatcher.FromThread(Thread.CurrentThread) is { } dispatcher
+        // Bitmap work can register an MTA dispatcher without a message pump.
+        // Explicit contexts are preserved by CaptureOwnerContext above.
+        => Thread.CurrentThread.GetApartmentState() == ApartmentState.STA
+            && Dispatcher.FromThread(Thread.CurrentThread) is { } dispatcher
             ? new DispatcherSynchronizationContext(dispatcher)
             : null;
 
