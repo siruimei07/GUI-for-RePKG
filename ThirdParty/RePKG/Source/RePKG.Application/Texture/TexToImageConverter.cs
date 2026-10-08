@@ -202,7 +202,9 @@ namespace RePKG.Application.Texture
                     paletteColors.Add(Color.FromRgb(color.R, color.G, color.B));
                 var conversion = new FormatConvertedBitmap(source, PixelFormats.Indexed8,
                     new BitmapPalette(paletteColors), 50);
-                conversion.Freeze();
+                // DestinationPalette is a thread-affine DispatcherObject, so this
+                // temporary filter cannot freeze. Materialize it synchronously;
+                // CreateBitmap below owns and freezes the independent pixel copy.
                 conversion.CopyPixels(indexed, width, 0);
                 if (transparent)
                 {

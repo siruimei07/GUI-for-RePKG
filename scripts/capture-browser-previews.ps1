@@ -76,6 +76,12 @@ try {
             if (-not (Test-Path -LiteralPath $snapshot -PathType Leaf) -or (Get-Item -LiteralPath $snapshot).Length -eq 0) {
                 throw "Preview $($size.Name) did not produce an image."
             }
+            $captured = [Drawing.Image]::FromFile($snapshot)
+            try {
+                if ($captured.Width -ne $size.Width -or $captured.Height -ne $size.Height) {
+                    throw "Preview $($size.Name) was clamped to $($captured.Width)x$($captured.Height); expected $($size.Width)x$($size.Height)."
+                }
+            } finally { $captured.Dispose() }
             Write-Output "BROWSER_PREVIEW name=$($size.Name) result=PASS path=$snapshot"
         } finally { $process.Dispose() }
     }

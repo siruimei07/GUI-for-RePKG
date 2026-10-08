@@ -22,6 +22,17 @@ jobs:
       DOTNET_NOLOGO: "1"
 
     steps:
+      - name: Prepare desktop for native layout checks
+        shell: pwsh
+        run: |
+          Set-DisplayResolution -Width 1920 -Height 1080 -Force
+          Add-Type -AssemblyName System.Windows.Forms
+          $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          Write-Host "Native desktop: $($bounds.Width)x$($bounds.Height)"
+          if ($bounds.Width -lt 1920 -or $bounds.Height -lt 1080) {
+            throw 'The native desktop is too small for the 1600-DIP browser layout matrix.'
+          }
+
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 

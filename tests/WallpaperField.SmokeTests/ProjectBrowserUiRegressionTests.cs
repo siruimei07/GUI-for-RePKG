@@ -640,6 +640,18 @@ internal static class ProjectBrowserUiRegressionTests
         window.Height = 1000;
         PumpLayout(window);
 
+        assert(Math.Abs(window.ActualWidth - window.Width) < 1.0
+               && Math.Abs(window.ActualHeight - window.Height) < 1.0
+               && window.LayoutMode == WallpaperField.ShellLayoutMode.Wide
+               && visualLayout.IsSixColumn,
+            "Task 7 visual host did not realize its requested 1600x1000 Wide viewport "
+            + "and initial six-column layout before details inspection: "
+            + $"requested={window.Width:0.###}x{window.Height:0.###}; "
+            + $"actual={window.ActualWidth:0.###}x{window.ActualHeight:0.###}; "
+            + $"mode={window.LayoutMode}; initial_columns={visualLayout.ColumnCount}; "
+            + $"initial_grid={visualLayout.GridWidth:0.###}; "
+            + $"initial_panels=[{string.Join(',', visualLayout.RealizedColumns)}].");
+
         browse.KindFilter = ProjectBrowserKindFilter.Package;
         browse.Sort = ProjectBrowserSort.WorkshopId;
         browse.CurrentProject = browse.VisibleProjects.First(project => project.HasProblems);
@@ -659,8 +671,17 @@ internal static class ProjectBrowserUiRegressionTests
             var persistentDetails = WpfElementFinder.FindByName<Border>(
                 window,
                 "BrowsePersistentDetails")!;
-            var persistentProblems = FindVisualDescendants<Button>(persistentDetails)
-                .Single(button => button.Name == "BrowseProjectProblemsButton");
+            var persistentProblemButtons = FindVisualDescendants<Button>(persistentDetails)
+                .Where(button => button.Name == "BrowseProjectProblemsButton")
+                .ToArray();
+            assert(IsPositiveAreaVisible(persistentDetails)
+                   && persistentProblemButtons.Length == 1,
+                "Task 7 Wide details did not realize its unique current-project problem action: "
+                + $"mode={window.LayoutMode}; actual_width={window.ActualWidth:0.###}; "
+                + $"details_visible={persistentDetails.IsVisible}; "
+                + $"details_size={persistentDetails.ActualWidth:0.###}x{persistentDetails.ActualHeight:0.###}; "
+                + $"problem_buttons={persistentProblemButtons.Length}.");
+            var persistentProblems = persistentProblemButtons.Single();
             var persistentContrast = BrushContrastRatio(
                 persistentProblems.Foreground,
                 persistentDetails.Background);
@@ -3509,6 +3530,13 @@ internal static class ProjectBrowserUiRegressionTests
             window.Width = item.Width;
             window.Height = item.Height;
             PumpLayout(window);
+            assert(Math.Abs(window.ActualWidth - item.Width) < 1.0
+                   && Math.Abs(window.ActualHeight - item.Height) < 1.0,
+                "The responsive fixture could not realize its requested viewport; "
+                + "the Windows test desktop must support the full size matrix: "
+                + $"requested={item.Width:0.###}x{item.Height:0.###}; "
+                + $"actual={window.ActualWidth:0.###}x{window.ActualHeight:0.###}; "
+                + $"primary_screen={SystemParameters.PrimaryScreenWidth:0.###}x{SystemParameters.PrimaryScreenHeight:0.###}.");
             var grid = WpfElementFinder.FindByName<ListBox>(window, "BrowseProjectGrid")!;
             var details = WpfElementFinder.FindByName<FrameworkElement>(window, "BrowsePersistentDetails");
             var detailColumn = WpfElementFinder.FindByName<ColumnDefinition>(window, "BrowseDetailColumn");
