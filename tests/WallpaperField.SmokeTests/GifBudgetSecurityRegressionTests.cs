@@ -1,4 +1,5 @@
 using System.IO;
+using System.Globalization;
 using System.Reflection;
 using System.Text;
 using K4os.Compression.LZ4;
@@ -58,7 +59,7 @@ internal static class GifBudgetSecurityRegressionTests
         {
             var type = typeof(TexToImageConverter).GetNestedType("LimitedMemoryStream", BindingFlags.NonPublic)!;
             using var stream = (Stream)Activator.CreateInstance(type, [4L])!;
-            ExpectUnsafe(() => stream.WriteAsync(new byte[5].AsMemory()).GetAwaiter().GetResult());
+            ExpectUnsafe(() => stream.WriteAsync(new byte[5].AsMemory()).AsTask().GetAwaiter().GetResult());
         }, failures);
 
         Check("raw RGBA pixel and alpha survive PNG encoding", () =>
@@ -120,10 +121,10 @@ internal static class GifBudgetSecurityRegressionTests
                 "GIF frame order or local palettes changed");
             var first = (BitmapMetadata)image.Frames[0].Metadata;
             var second = (BitmapMetadata)image.Frames[1].Metadata;
-            Require(System.Convert.ToInt32(first.GetQuery("/grctlext/Delay")) == 7
-                && System.Convert.ToInt32(second.GetQuery("/grctlext/Delay")) == 15,
+            Require(System.Convert.ToInt32(first.GetQuery("/grctlext/Delay"), CultureInfo.InvariantCulture) == 7
+                && System.Convert.ToInt32(second.GetQuery("/grctlext/Delay"), CultureInfo.InvariantCulture) == 15,
                 "GIF frame delays changed");
-            Require(System.Convert.ToInt32(first.GetQuery("/grctlext/Disposal")) == 0,
+            Require(System.Convert.ToInt32(first.GetQuery("/grctlext/Disposal"), CultureInfo.InvariantCulture) == 0,
                 "GIF unspecified disposal changed");
             Require(result.Bytes.AsSpan().IndexOf("NETSCAPE2.0"u8) < 0,
                 "Play-once GIF unexpectedly gained a looping extension");
@@ -285,7 +286,7 @@ internal static class GifBudgetSecurityRegressionTests
         if (!condition) throw new InvalidOperationException(message);
     }
 
-    private static void Check(string name, Action action, ICollection<string> failures)
+    private static void Check(string name, Action action, List<string> failures)
     {
         try
         {

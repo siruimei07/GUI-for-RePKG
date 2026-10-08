@@ -84,7 +84,7 @@ public sealed class AnimatedPreviewImage : Image
         return DecodeStaticPreview(stream, decodePixelWidth, cancellationToken);
     }
 
-    private static BitmapSource DecodeStaticPreview(
+    private static WriteableBitmap DecodeStaticPreview(
         Stream stream,
         int decodePixelWidth,
         CancellationToken cancellationToken)
@@ -168,6 +168,10 @@ public sealed class AnimatedPreviewImage : Image
         DependencyPropertyChangedEventArgs args)
         => ((AnimatedPreviewImage)dependencyObject).RestartLoad();
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Performance",
+        "CA1859:Use concrete types when possible for improved performance",
+        Justification = "WPF CoerceValueCallback requires an object return; an int-returning method cannot implement that delegate.")]
     private static object CoerceDecodePixelWidth(DependencyObject dependencyObject, object baseValue)
         => Math.Clamp((int)baseValue, 1, 4096);
 
@@ -369,7 +373,7 @@ public sealed class AnimatedPreviewImage : Image
         CancellationToken cancellationToken)
         => Task.FromResult(new MemoryStream(ValidatedPreviewFile.Read(path, cancellationToken), writable: false));
 
-    private static BitmapSource DecodeGifFirstFrame(
+    private static WriteableBitmap DecodeGifFirstFrame(
         Stream stream,
         int decodePixelWidth,
         CancellationToken cancellationToken)

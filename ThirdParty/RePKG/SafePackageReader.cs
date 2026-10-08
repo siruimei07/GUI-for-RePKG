@@ -129,7 +129,7 @@ public static class SafePackageReader
 
             ValidatePathDepth(fullPath);
 
-            if (fullPath.IndexOf('\0') >= 0)
+            if (fullPath.Contains('\0'))
             {
                 throw new InvalidDataException(
                     $"Wallpaper Engine PKG entry {index} path contains a null character.");

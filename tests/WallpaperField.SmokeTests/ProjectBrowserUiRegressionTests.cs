@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Reflection;
 using System.Runtime.ExceptionServices;
@@ -32,6 +33,7 @@ internal static class ProjectBrowserUiRegressionTests
 {
     private const string XamlNamespace = "http://schemas.microsoft.com/winfx/2006/xaml";
     private const int RuntimeProjectCount = 1_000;
+    private static readonly string[] ChangingSnapshotFingerprints = ["A", "B", "C", "D"];
     private static readonly (
         double Width,
         double Height,
@@ -223,7 +225,7 @@ internal static class ProjectBrowserUiRegressionTests
             var name = element.Attributes().FirstOrDefault(attribute =>
                 attribute.Name.LocalName == "AutomationProperties.Name")?.Value;
             if (string.IsNullOrWhiteSpace(content)
-                || content.StartsWith("{", StringComparison.Ordinal)
+                || content.StartsWith('{')
                 || string.IsNullOrWhiteSpace(name))
             {
                 continue;
@@ -1085,7 +1087,7 @@ internal static class ProjectBrowserUiRegressionTests
                 "; ",
                 results.Select(item =>
                     $"{item.Page}=success:{item.Result.Succeeded},"
-                    + $"index:{item.Result.PositionedIndex?.ToString() ?? "null"},"
+                    + $"index:{item.Result.PositionedIndex?.ToString(CultureInfo.InvariantCulture) ?? "null"},"
                     + $"last:{item.LastRealized},diag:{item.Result.Diagnostic}"))
             + $"; strict={strictResult}; empty={emptyResult}; "
             + $"strictCanceled={canceled}; legacyCanceled={legacyCanceled}");
@@ -2339,7 +2341,7 @@ internal static class ProjectBrowserUiRegressionTests
             "The snapshot fingerprint gate did not reset A,B,B until the third observation.");
 
         gate.Reset();
-        assert(!new[] { "A", "B", "C", "D" }.Any(gate.Observe),
+        assert(!ChangingSnapshotFingerprints.Any(gate.Observe),
             "The snapshot fingerprint gate accepted a continuously changing A,B,C,D sequence.");
     }
 
@@ -2658,7 +2660,7 @@ internal static class ProjectBrowserUiRegressionTests
         return (bool)method.Invoke(page, null)!;
     }
 
-    private static ImageSource CreateFrozenSnapshotBitmap(byte marker)
+    private static WriteableBitmap CreateFrozenSnapshotBitmap(byte marker)
     {
         var writable = new System.Windows.Media.Imaging.WriteableBitmap(
             2,
@@ -5819,7 +5821,7 @@ internal static class ProjectBrowserUiRegressionTests
     }
 
     private static void AddAnimated(
-        ICollection<string> failures,
+        List<string> failures,
         string owner,
         string property,
         Animatable? value)
@@ -6284,7 +6286,7 @@ internal static class ProjectBrowserUiRegressionTests
         Console.WriteLine(
             "PERF_METRIC name=browse.grid.real_reflow_3_4_5_6 "
             + "service=projection_rows_wpf_layout_render_contextidle "
-            + $"samples_ms=[{string.Join(',', samples.Select(value => value.ToString("0.###")))}] "
+            + $"samples_ms=[{string.Join(',', samples.Select(value => value.ToString("0.###", CultureInfo.InvariantCulture)))}] "
             + $"p95_ms={p95:0.###} budget_ms={budgetMilliseconds:0} "
             + $"result={(p95 <= budgetMilliseconds ? "PASS" : "FAIL")} "
             + $"transitions=[{string.Join(',', transitions)}] fixture={RuntimeProjectCount} "
@@ -6368,7 +6370,7 @@ internal static class ProjectBrowserUiRegressionTests
             var p95 = NearestRank95(samples);
             Console.WriteLine(
                 $"PERF_METRIC name=browse.grid.scroll_round_{round} "
-                + $"service=ui_layout_render_dispatch samples_ms=[{string.Join(',', samples.Select(value => value.ToString("0.###")))}] "
+                + $"service=ui_layout_render_dispatch samples_ms=[{string.Join(',', samples.Select(value => value.ToString("0.###", CultureInfo.InvariantCulture)))}] "
                 + $"p95_ms={p95:0.###} budget_ms={budgetMilliseconds:0.0} "
                 + $"result={(p95 <= budgetMilliseconds ? "PASS" : "FAIL")}");
             assert(samples.Count == stepsPerDirection * 2 && p95 <= budgetMilliseconds,
@@ -6935,7 +6937,7 @@ internal static class ProjectBrowserUiRegressionTests
         }
     }
 
-    private static IReadOnlyDictionary<string, PreviewThumbnailStatus>
+    private static Dictionary<string, PreviewThumbnailStatus>
         CreateExpectedPreviewStatuses(
             PerformanceRegressionTests.ProjectBrowserPerformanceFixture fixture)
     {
@@ -7108,7 +7110,7 @@ internal static class ProjectBrowserUiRegressionTests
         var peakObservedObservers = 0;
         string? firstBudgetFailure = null;
         PreviewThumbnailMetrics metrics;
-        IReadOnlyList<(ThumbnailPreviewImage Image, BrowseProjectViewModel Project)> visible;
+        List<(ThumbnailPreviewImage Image, BrowseProjectViewModel Project)> visible;
         do
         {
             PumpLayout(window);
@@ -7224,7 +7226,7 @@ internal static class ProjectBrowserUiRegressionTests
             peakObservedObservers);
     }
 
-    private static IReadOnlyList<(
+    private static List<(
         ThumbnailPreviewImage Image,
         BrowseProjectViewModel Project)> CaptureVisibleCardPreviews(
         ListBox grid,
@@ -8438,14 +8440,14 @@ internal static class ProjectBrowserUiRegressionTests
                 : File.GetLastWriteTimeUtc(previewPath);
             var items = Enumerable.Range(0, ProjectCount).Select(index =>
             {
-                var projectSource = Path.Combine(sourceRoot, index.ToString("D4"));
+                var projectSource = Path.Combine(sourceRoot, index.ToString("D4", CultureInfo.InvariantCulture));
                 var hasPreview = previewPath is not null && index == 0;
                 return new WallpaperRecord
                 {
                     WorkshopId = $"task5-{index:D4}",
                     Title = $"Task 5 runtime project {index:D4}",
                     SourceDirectory = projectSource,
-                    OutputDirectory = Path.Combine(outputRoot, index.ToString("D4")),
+                    OutputDirectory = Path.Combine(outputRoot, index.ToString("D4", CultureInfo.InvariantCulture)),
                     WallpaperType = (index % 4) switch
                     {
                         1 => "video",

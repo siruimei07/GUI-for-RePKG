@@ -125,9 +125,9 @@ public sealed class WallpaperLibraryService : IWallpaperLibraryService
         };
     }
 
-    private static IReadOnlyList<string> DiscoverMetadataFiles(
+    private static string[] DiscoverMetadataFiles(
         string root,
-        ICollection<LibraryLoadError> errors,
+        List<LibraryLoadError> errors,
         CancellationToken cancellationToken)
     {
         var results = new List<string>();

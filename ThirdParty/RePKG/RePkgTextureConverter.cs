@@ -147,7 +147,7 @@ internal static class RePkgTextureConverter
         stream.Flush(flushToDisk: true);
     }
 
-    private static void TryDeleteOwnedFile(string path, ICollection<Exception> errors)
+    private static void TryDeleteOwnedFile(string path, List<Exception> errors)
     {
         try
         {

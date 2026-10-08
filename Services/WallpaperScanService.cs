@@ -328,7 +328,7 @@ public sealed class WallpaperScanService : IWallpaperScanService
         string sourceFolder,
         string? wallpaperType,
         string? projectFile,
-        ICollection<string> warnings)
+        List<string> warnings)
     {
         var declaresVideo = string.Equals(wallpaperType, "video", StringComparison.OrdinalIgnoreCase);
         if (!declaresVideo)
@@ -378,7 +378,7 @@ public sealed class WallpaperScanService : IWallpaperScanService
 
     private static PreviewSnapshot? CapturePreviewSnapshot(
         string sourceFolder,
-        ICollection<string> warnings)
+        List<string> warnings)
     {
         try
         {
@@ -401,7 +401,7 @@ public sealed class WallpaperScanService : IWallpaperScanService
 
     private static PreviewSnapshot? CapturePreviewFileFacts(
         string previewPath,
-        ICollection<string> warnings)
+        List<string> warnings)
     {
         try
         {

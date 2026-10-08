@@ -1,8 +1,10 @@
+using System.Collections.ObjectModel;
+
 namespace WallpaperField.ViewModels;
 
 public sealed class BrowseRowViewModel : ObservableObject
 {
-    private IReadOnlyList<BrowseProjectViewModel?> _projects;
+    private ReadOnlyCollection<BrowseProjectViewModel?> _projects;
 
     public BrowseRowViewModel(IReadOnlyList<BrowseProjectViewModel?> projects)
     {
@@ -44,11 +46,11 @@ public sealed class BrowseRowViewModel : ObservableObject
         => index < Projects.Count ? Projects[index] : null;
 
     private static BrowseProjectViewModel? GetSlot(
-        IReadOnlyList<BrowseProjectViewModel?> projects,
+        ReadOnlyCollection<BrowseProjectViewModel?> projects,
         int index)
         => index < projects.Count ? projects[index] : null;
 
-    private static IReadOnlyList<BrowseProjectViewModel?> CopyProjects(
+    private static ReadOnlyCollection<BrowseProjectViewModel?> CopyProjects(
         IReadOnlyList<BrowseProjectViewModel?> projects)
     {
         if (projects.Count is < 3 or > 6)

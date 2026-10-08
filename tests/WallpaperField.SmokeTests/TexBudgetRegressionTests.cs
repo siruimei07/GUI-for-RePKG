@@ -458,7 +458,7 @@ internal static class TexBudgetRegressionTests
             0,
             buffer.Length);
         var encoded = buffer.AsSpan(0, encodedLength).ToArray();
-        ITexMipmap mipmap = new TexMipmap
+        var mipmap = new TexMipmap
         {
             Width = 1,
             Height = 1,
@@ -571,7 +571,7 @@ internal static class TexBudgetRegressionTests
     private static void ExpectUnsafe(
         string caseName,
         Action action,
-        ICollection<string> failures)
+        List<string> failures)
     {
         try
         {
@@ -591,7 +591,7 @@ internal static class TexBudgetRegressionTests
         string caseName,
         Action action,
         TimeSpan maximumElapsed,
-        ICollection<string> failures)
+        List<string> failures)
     {
         var stopwatch = Stopwatch.StartNew();
         ExpectUnsafe(caseName, action, failures);
@@ -610,7 +610,7 @@ internal static class TexBudgetRegressionTests
         string name,
         int limit,
         Action<TexDecodeBudget.FileScope, int> exercise,
-        ICollection<string> failures)
+        List<string> failures)
     {
         ExpectPass($"{name} limit-1", () => exercise(NewScope(), limit - 1), failures);
         ExpectPass($"{name} limit", () => exercise(NewScope(), limit), failures);
@@ -623,7 +623,7 @@ internal static class TexBudgetRegressionTests
         string name,
         int limit,
         Action<int> exercise,
-        ICollection<string> failures)
+        List<string> failures)
     {
         ExpectPass($"{name} limit-1", () => exercise(limit - 1), failures);
         ExpectPass($"{name} limit", () => exercise(limit), failures);
@@ -635,7 +635,7 @@ internal static class TexBudgetRegressionTests
         string name,
         long limit,
         Action<TexDecodeBudget.FileScope, long> exercise,
-        ICollection<string> failures)
+        List<string> failures)
     {
         ExpectPass($"{name} limit-1", () => exercise(NewScope(), limit - 1), failures);
         ExpectPass($"{name} limit", () => exercise(NewScope(), limit), failures);
@@ -647,7 +647,7 @@ internal static class TexBudgetRegressionTests
     private static void ExpectPass(
         string caseName,
         Action action,
-        ICollection<string> failures)
+        List<string> failures)
     {
         try
         {

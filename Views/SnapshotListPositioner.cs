@@ -40,8 +40,8 @@ internal static class SnapshotListPositioner
             verifyPreview,
             deadlineClock,
             timeout,
-            cancellationToken,
-            SnapshotUnavailableTargetPolicy.ClampNonEmpty);
+            SnapshotUnavailableTargetPolicy.ClampNonEmpty,
+            cancellationToken);
 
     internal static async Task<bool> PositionAsync(
         ListBox list,
@@ -71,8 +71,8 @@ internal static class SnapshotListPositioner
                 verifyPreview,
                 Stopwatch.StartNew(),
                 TimeSpan.FromSeconds(12),
-                CancellationToken.None,
-                SnapshotUnavailableTargetPolicy.Fail))
+                SnapshotUnavailableTargetPolicy.Fail,
+                CancellationToken.None))
             .Succeeded;
 
     internal static async Task<bool> PositionWithoutLoggingAsync(
@@ -88,8 +88,8 @@ internal static class SnapshotListPositioner
                 verifyPreview,
                 Stopwatch.StartNew(),
                 TimeSpan.FromSeconds(12),
-                cancellationToken,
-                SnapshotUnavailableTargetPolicy.Fail))
+                SnapshotUnavailableTargetPolicy.Fail,
+                cancellationToken))
             .Succeeded;
 
     internal static async Task<bool> PositionWithoutLoggingAsync(
@@ -107,8 +107,8 @@ internal static class SnapshotListPositioner
                 verifyPreview,
                 deadlineClock,
                 timeout,
-                cancellationToken,
-                SnapshotUnavailableTargetPolicy.Fail))
+                SnapshotUnavailableTargetPolicy.Fail,
+                cancellationToken))
             .Succeeded;
 
     private static async Task<SnapshotPositionResult> PositionCoreAsync(
@@ -118,8 +118,8 @@ internal static class SnapshotListPositioner
         bool verifyPreview,
         Stopwatch deadlineClock,
         TimeSpan timeout,
-        CancellationToken cancellationToken,
-        SnapshotUnavailableTargetPolicy unavailableTargetPolicy)
+        SnapshotUnavailableTargetPolicy unavailableTargetPolicy,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(list);
         ArgumentNullException.ThrowIfNull(isBusy);

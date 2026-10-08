@@ -7,21 +7,13 @@
 > [!NOTE]
 > 这是一个非官方社区项目，与 Wallpaper Engine 或其关联公司无隶属或背书关系。界面采用深灰与蓝色的桌面图库样式，不包含官方徽标、角色图、宣传素材或字体。
 
-![项目浏览器：高密度网格、组合筛选、详情与批量处理托盘](docs/images/project-browser.png)
+![项目浏览器：高密度网格、组合筛选、详情与批量处理托盘](https://github.com/siruimei07/GUI-for-RePKG/releases/download/v1.3.0/browser-wide.png)
 
 _项目浏览器：方形封面、紧凑工具栏与右侧详情；当前项、键盘焦点和批量选择彼此独立。_
 
-![紧凑扫描中心：组合筛选并选择当前匹配的可处理壁纸](docs/images/scan-center.png)
+![窄窗口项目浏览器](https://github.com/siruimei07/GUI-for-RePKG/releases/download/v1.3.0/browser-compact.png)
 
-_Compact 扫描中心：显示当前成功快照、组合筛选、批量选择、真实进度与可见取消入口。_
-
-![输出壁纸库：浏览已保存的壁纸记录](docs/images/output-library.png)
-
-_输出壁纸库：递归读取稳定的 metadata 记录；点击卡片即可在 Windows 文件资源管理器中打开对应文件夹。_
-
-![问题中心：筛选、复制并导出结构化诊断](docs/images/problem-center.png)
-
-_问题中心：集中浏览完整问题、磁盘事实与下一步操作；扫描和图库页只保留紧凑摘要。_
+_窄窗口保留搜索、筛选与批量操作，详情通过浮层查看。以上为 v1.3.0 Windows 实际运行截图，封面使用生成的抽象测试图案。_
 
 ## 功能概览
 

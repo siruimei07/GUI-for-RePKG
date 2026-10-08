@@ -12,6 +12,13 @@ using WallpaperField.ViewModels;
 internal static class AccessibilityRegressionTests
 {
     private const string XamlNamespace = "http://schemas.microsoft.com/winfx/2006/xaml";
+    private static readonly string[] ThemeLayerFileNames =
+    [
+        "Tokens.xaml",
+        "AccessibilityMotion.xaml",
+        "BaseControls.xaml",
+        "DomainComponents.xaml"
+    ];
 
     internal static void Run(Action<bool, string> assert)
     {
@@ -338,13 +345,7 @@ internal static class AccessibilityRegressionTests
         var themePath = FindRepositoryFile(Path.Combine("Themes", "EndfieldTheme.xaml"));
         var themeDirectory = Path.GetDirectoryName(themePath)
             ?? throw new InvalidDataException("The theme path has no parent directory.");
-        var layerFiles = new[]
-        {
-            "Tokens.xaml",
-            "AccessibilityMotion.xaml",
-            "BaseControls.xaml",
-            "DomainComponents.xaml"
-        };
+        var layerFiles = ThemeLayerFileNames;
         foreach (var layerFile in layerFiles)
         {
             assert(File.Exists(Path.Combine(themeDirectory, layerFile)),
@@ -487,13 +488,7 @@ internal static class AccessibilityRegressionTests
     {
         var resources = Application.Current.Resources;
         var mergedNames = ReadRuntimeMergedDictionaryNames(resources);
-        assert(mergedNames.SequenceEqual(new[]
-               {
-                   "Tokens.xaml",
-                   "AccessibilityMotion.xaml",
-                   "BaseControls.xaml",
-                   "DomainComponents.xaml"
-               }),
+        assert(mergedNames.SequenceEqual(ThemeLayerFileNames),
             "The live application did not load the four theme layers in order.");
         foreach (var key in new[]
                  {
@@ -515,13 +510,7 @@ internal static class AccessibilityRegressionTests
                 "/WallpaperField;component/Themes/EndfieldTheme.xaml",
                 UriKind.Relative)
         };
-        assert(ReadRuntimeMergedDictionaryNames(compatibilityTheme).SequenceEqual(new[]
-               {
-                   "Tokens.xaml",
-                   "AccessibilityMotion.xaml",
-                   "BaseControls.xaml",
-                   "DomainComponents.xaml"
-               }),
+        assert(ReadRuntimeMergedDictionaryNames(compatibilityTheme).SequenceEqual(ThemeLayerFileNames),
             "The compatibility theme did not load its four runtime layers in order.");
         foreach (var key in new[] { "InkBrush", "FocusVisual", "PrimaryButton", "WallpaperCardTemplate" })
         {
@@ -536,13 +525,7 @@ internal static class AccessibilityRegressionTests
             .ToArray();
 
     private static XDocument[] LoadThemeLayerDocuments()
-        => new[]
-        {
-            "Tokens.xaml",
-            "AccessibilityMotion.xaml",
-            "BaseControls.xaml",
-            "DomainComponents.xaml"
-        }.Select(file => XDocument.Load(
+        => ThemeLayerFileNames.Select(file => XDocument.Load(
             FindRepositoryFile(Path.Combine("Themes", file)),
             LoadOptions.PreserveWhitespace)).ToArray();
 

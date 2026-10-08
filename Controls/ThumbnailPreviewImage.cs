@@ -200,6 +200,10 @@ public sealed class ThumbnailPreviewImage : Image
         DependencyPropertyChangedEventArgs args)
         => ((ThumbnailPreviewImage)dependencyObject).RestartRequest();
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Performance",
+        "CA1859:Use concrete types when possible",
+        Justification = "WPF CoerceValueCallback requires an object return type for dependency property metadata.")]
     private static object CoerceDecodePixelWidth(
         DependencyObject dependencyObject,
         object baseValue)

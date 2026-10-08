@@ -23,6 +23,10 @@ public enum ShellLayoutMode
     Wide
 }
 
+[System.Diagnostics.CodeAnalysis.SuppressMessage(
+    "Design",
+    "CA1001:Types that own disposable fields should be disposable",
+    Justification = "WPF owns Window lifetime; Window_Closed unsubscribes and disposes the motion policy and snapshot cancellation source.")]
 public partial class MainWindow : Window
 {
     private const int DwmWindowCornerPreference = 33;
@@ -552,6 +556,10 @@ public partial class MainWindow : Window
         MaximizeGlyph.Text = maximized ? "\uE923" : "\uE922";
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Performance",
+        "CA1822:Mark members as static",
+        Justification = "Keep the existing instance entry point used by window accessibility regression tests to exercise live palette changes.")]
     private void ApplyHighContrastPalette(bool enabled)
     {
         var resources = System.Windows.Application.Current?.Resources;

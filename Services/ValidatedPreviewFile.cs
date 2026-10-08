@@ -92,6 +92,10 @@ internal static class ValidatedPreviewFile
     }
 
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Performance",
+        "CA1838:Avoid StringBuilder parameters for P/Invokes",
+        Justification = "This reviewed Win32 path query bounds capacity to 32768 characters; retain its verified Unicode marshaling and retry behavior.")]
     [DllImport("kernel32.dll", EntryPoint = "GetFinalPathNameByHandleW",
         CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
     private static extern uint GetFinalPathNameByHandle(

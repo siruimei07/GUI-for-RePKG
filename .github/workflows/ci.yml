@@ -41,9 +41,9 @@ jobs:
       - name: Enforce first-party warnings
         shell: pwsh
         run: |
-          dotnet build .\WallpaperField.csproj --configuration Release --no-restore --no-dependencies -p:EnableNETAnalyzers=true -p:AnalysisMode=Recommended -p:TreatWarningsAsErrors=true
+          dotnet build .\WallpaperField.csproj --configuration Release --no-restore --no-dependencies --no-incremental -p:EnableNETAnalyzers=true -p:AnalysisMode=Recommended -p:TreatWarningsAsErrors=true
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          dotnet build .\tests\WallpaperField.SmokeTests\WallpaperField.SmokeTests.csproj --configuration Release --no-restore --no-dependencies -p:EnableNETAnalyzers=true -p:AnalysisMode=Recommended -p:TreatWarningsAsErrors=true
+          dotnet build .\tests\WallpaperField.SmokeTests\WallpaperField.SmokeTests.csproj --configuration Release --no-restore --no-dependencies --no-incremental -p:EnableNETAnalyzers=true -p:AnalysisMode=Recommended -p:TreatWarningsAsErrors=true
 
       - name: Capture browser previews
         shell: pwsh

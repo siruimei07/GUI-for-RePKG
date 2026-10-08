@@ -587,13 +587,13 @@ internal static class PerformanceRegressionTests
 
     private static void VerifyInteractionSamples(
         string name,
-        IReadOnlyCollection<double> samples,
+        double[] samples,
         Action<bool, string> assert)
     {
         ReportSamples(name, samples, "p95", InteractionP95BudgetMilliseconds);
         var p95 = Percentile95(samples);
-        assert(samples.Count == RepetitionCount && p95 <= InteractionP95BudgetMilliseconds,
-            $"{name} nearest-rank p95 was {p95:F3} ms across {samples.Count} samples, "
+        assert(samples.Length == RepetitionCount && p95 <= InteractionP95BudgetMilliseconds,
+            $"{name} nearest-rank p95 was {p95:F3} ms across {samples.Length} samples, "
             + $"exceeding the {InteractionP95BudgetMilliseconds:F0} ms budget.");
     }
 

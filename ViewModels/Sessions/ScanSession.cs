@@ -1027,7 +1027,7 @@ public sealed class ScanSession : ObservableObject
     }
 
     private bool TryCreateProcessRequest(
-        IReadOnlyList<WallpaperRecord> items,
+        WallpaperRecord[] items,
         out FrozenWallpaperProcessRequest? request)
     {
         request = null;
@@ -1039,7 +1039,7 @@ public sealed class ScanSession : ObservableObject
         var snapshot = ProjectSnapshot;
         if (snapshot is null
             || !IsCurrentScanIdentity()
-            || items.Count == 0)
+            || items.Length == 0)
         {
             request = null;
             return false;
@@ -1246,7 +1246,7 @@ public sealed class ScanSession : ObservableObject
         UpdateCommandStates();
     }
 
-    private static SynchronizationContext? CaptureDispatcherContext()
+    private static DispatcherSynchronizationContext? CaptureDispatcherContext()
         => Dispatcher.FromThread(Thread.CurrentThread) is { } dispatcher
             ? new DispatcherSynchronizationContext(dispatcher)
             : null;

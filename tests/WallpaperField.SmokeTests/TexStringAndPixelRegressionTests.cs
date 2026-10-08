@@ -187,7 +187,7 @@ internal static class TexStringAndPixelRegressionTests
         int maximumBytes,
         string expected,
         long expectedPosition,
-        ICollection<string> failures)
+        List<string> failures)
     {
         try
         {
@@ -210,7 +210,7 @@ internal static class TexStringAndPixelRegressionTests
         byte[] bytes,
         int maximumBytes,
         long expectedPosition,
-        ICollection<string> failures)
+        List<string> failures)
     {
         try
         {

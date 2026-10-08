@@ -134,7 +134,7 @@ internal static class BrowserPerformanceHardeningRegressionTests
         QueuedContext context,
         Action<bool, string> assert)
     {
-        IReadOnlyList<WallpaperRecord> records = [];
+        WallpaperRecord[] records = [];
         using var fixture = new Fixture(new DelegateScanService(
             (_, _, _) => Task.FromResult(Result(records))));
         records = Enumerable.Range(0, 2_000).Select(index => fixture.Record(index)).ToArray();
@@ -177,11 +177,11 @@ internal static class BrowserPerformanceHardeningRegressionTests
             }
         };
         var stopwatch = Stopwatch.StartNew();
-        assert(browse.TrySelectVisibleProjects() && browse.SelectedCount == records.Count
-               && fixture.Scan.SelectedUnpackCount == records.Count,
+        assert(browse.TrySelectVisibleProjects() && browse.SelectedCount == records.Length
+               && fixture.Scan.SelectedUnpackCount == records.Length,
             "Bulk selection did not update the shared scan/browser selection.");
         browse.SearchText = "Item 0000";
-        assert(browse.VisibleSelectedCount == 1 && browse.HiddenSelectedCount == records.Count - 1,
+        assert(browse.VisibleSelectedCount == 1 && browse.HiddenSelectedCount == records.Length - 1,
             "Filtering discarded or miscounted hidden selection.");
         assert(browse.TryClearSelection() && browse.SelectedCount == 0
                && fixture.Scan.SelectedUnpackCount == 0
@@ -224,8 +224,8 @@ internal static class BrowserPerformanceHardeningRegressionTests
                     browse.SearchText = " I ";
                     var expected = OrderedRecords(records, sort);
                     assert(browse.VisibleProjects.Select(project => project.Record).SequenceEqual(
-                            expected.Where(record => record.Title.Contains("I", StringComparison.OrdinalIgnoreCase)
-                                || record.WorkshopId.Contains("I", StringComparison.OrdinalIgnoreCase))),
+                            expected.Where(record => record.Title.Contains('I', StringComparison.OrdinalIgnoreCase)
+                                || record.WorkshopId.Contains('I', StringComparison.OrdinalIgnoreCase))),
                         $"Filtering changed cached {sort} ordering under {culture}.");
                     browse.SearchText = string.Empty;
                     assert(browse.VisibleProjects.Select(project => project.Record).SequenceEqual(expected),

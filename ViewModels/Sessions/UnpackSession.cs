@@ -1046,7 +1046,7 @@ public sealed class UnpackSession : ObservableObject
 
     private static WallpaperRecord? FindWarningRecord(
         FrozenIssueCorrelation correlation,
-        IReadOnlyDictionary<string, string[]> projectKeysByWorkshop,
+        Dictionary<string, string[]> projectKeysByWorkshop,
         string workshopId)
     {
         if (!projectKeysByWorkshop.TryGetValue(workshopId, out var projectKeys))

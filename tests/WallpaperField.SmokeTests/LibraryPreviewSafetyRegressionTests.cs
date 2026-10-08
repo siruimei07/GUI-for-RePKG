@@ -184,7 +184,7 @@ internal static class LibraryPreviewSafetyRegressionTests
         {
             action();
         }
-        catch (IOException)
+        catch (Exception exception) when (exception is IOException or InvalidDataException)
         {
             return;
         }

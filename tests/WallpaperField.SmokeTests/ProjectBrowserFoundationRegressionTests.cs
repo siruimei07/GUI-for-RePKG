@@ -138,7 +138,7 @@ internal static class ProjectBrowserFoundationRegressionTests
                 WorkshopId = null!,
                 SourceDirectory = null!
             };
-            assert(runtimeNullRecord.ProjectKey.StartsWith(":", StringComparison.Ordinal)
+            assert(runtimeNullRecord.ProjectKey.StartsWith(':')
                    && runtimeNullRecord.ProjectKey.Length == 65,
                 "ProjectKey threw while hashing runtime-null identity values.");
 
@@ -297,8 +297,10 @@ internal static class ProjectBrowserFoundationRegressionTests
     }
 
     private static void VerifyFatalScanExceptionClassification(
-        ICollection<string> failures)
+        List<string> failures)
     {
+        // Deliberately construct fatal exceptions to verify the production classifier.
+#pragma warning disable CA2201
         if (!WallpaperScanService.IsFatalScanException(new OutOfMemoryException())
             || !WallpaperScanService.IsFatalScanException(new InsufficientMemoryException())
             || !WallpaperScanService.IsFatalScanException(new StackOverflowException())
@@ -310,10 +312,11 @@ internal static class ProjectBrowserFoundationRegressionTests
         {
             failures.Add("fatal/resource scan exceptions are not separated from recoverable I/O failures");
         }
+#pragma warning restore CA2201
     }
 
     private static async Task VerifyScanExceptionIsolationThroughScanAsync(
-        ICollection<string> failures)
+        List<string> failures)
     {
         var testRoot = Path.Combine(
             Path.GetTempPath(),
@@ -327,7 +330,10 @@ internal static class ProjectBrowserFoundationRegressionTests
         try
         {
             const string privateMarker = @"C:\private\attacker-controlled-marker";
+            // Inject this exact fatal instance to verify ScanAsync propagates it unchanged.
+#pragma warning disable CA2201
             var fatal = new OutOfMemoryException(privateMarker);
+#pragma warning restore CA2201
             var fatalService = new WallpaperScanService(_ => throw fatal);
             Exception? propagated = null;
             try
@@ -390,7 +396,7 @@ internal static class ProjectBrowserFoundationRegressionTests
     }
 
     private static async Task VerifyObservedBusyRejectsWithoutRegistrationAsync(
-        ICollection<string> failures)
+        List<string> failures)
     {
         var testRoot = Path.Combine(
             Path.GetTempPath(),
@@ -484,7 +490,7 @@ internal static class ProjectBrowserFoundationRegressionTests
     }
 
     private static async Task VerifyBusyForegroundRequestRejectedAsync(
-        ICollection<string> failures)
+        List<string> failures)
     {
         var testRoot = Path.Combine(
             Path.GetTempPath(),
@@ -554,7 +560,7 @@ internal static class ProjectBrowserFoundationRegressionTests
     }
 
     private static async Task VerifyLargeSnapshotFreezeCostAsync(
-        ICollection<string> failures)
+        List<string> failures)
     {
         const int projectCount = 1_000;
         const int repetitions = 64;
@@ -773,7 +779,7 @@ internal static class ProjectBrowserFoundationRegressionTests
         WallpaperRecord record,
         string expected,
         PropertyInfo property,
-        ICollection<string> failures)
+        List<string> failures)
     {
         if (!string.Equals(property.GetValue(record)?.ToString(), expected, StringComparison.Ordinal))
         {
@@ -784,7 +790,7 @@ internal static class ProjectBrowserFoundationRegressionTests
     private static void Require(
         bool condition,
         string contract,
-        ICollection<string> missingContracts)
+        List<string> missingContracts)
     {
         if (!condition)
         {
@@ -928,10 +934,10 @@ internal static class ProjectBrowserFoundationRegressionTests
                     {
                         WorkshopId = $"large-{index:D4}",
                         Title = $"Large {index:D4}",
-                        SourceDirectory = Path.Combine(sourceRoot, index.ToString("D4")),
-                        OutputDirectory = Path.Combine(outputRoot, index.ToString("D4")),
+                        SourceDirectory = Path.Combine(sourceRoot, index.ToString("D4", System.Globalization.CultureInfo.InvariantCulture)),
+                        OutputDirectory = Path.Combine(outputRoot, index.ToString("D4", System.Globalization.CultureInfo.InvariantCulture)),
                         HasScenePackage = true,
-                        ScenePackagePath = Path.Combine(sourceRoot, index.ToString("D4"), "scene.pkg"),
+                        ScenePackagePath = Path.Combine(sourceRoot, index.ToString("D4", System.Globalization.CultureInfo.InvariantCulture), "scene.pkg"),
                         ScannedAtUtc = now
                     })
                     .ToArray(),

@@ -1234,6 +1234,10 @@ internal static class ProjectBrowserPreviewRegressionTests
         }
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Usage",
+        "CA2201:Do not raise reserved exception types",
+        Justification = "This regression deliberately injects a fatal decoder fault to verify lease completion and recovery without exhausting memory.")]
     private static async Task VerifyFatalDecoderCompletionAsync(
         Action<bool, string> assert)
     {

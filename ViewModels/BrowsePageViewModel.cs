@@ -1039,7 +1039,7 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
     private static SynchronizationContext? CaptureOwnerContext()
         => SynchronizationContext.Current;
 
-    private static SynchronizationContext? CaptureDispatcherContext()
+    private static DispatcherSynchronizationContext? CaptureDispatcherContext()
         => Dispatcher.FromThread(Thread.CurrentThread) is { } dispatcher
             ? new DispatcherSynchronizationContext(dispatcher)
             : null;
@@ -1079,7 +1079,7 @@ public sealed class BrowsePageViewModel : ObservableObject, IDisposable
         CurrentProject = VisibleProjects.FirstOrDefault(project =>
                              currentKey is not null
                              && string.Equals(project.ProjectKey, currentKey, StringComparison.Ordinal))
-                          ?? VisibleProjects.FirstOrDefault();
+                          ?? (VisibleProjects.Count > 0 ? VisibleProjects[0] : null);
         if (CurrentProject is null)
         {
             CloseDetails();

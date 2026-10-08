@@ -227,7 +227,7 @@ internal static class TransactionRegressionTests
                              ".wallpaper-field-backup-",
                              StringComparison.Ordinal));
 
-    private static IReadOnlyList<string> SnapshotTree(string root)
+    private static List<string> SnapshotTree(string root)
     {
         var snapshot = new List<string>();
         foreach (var directory in Directory

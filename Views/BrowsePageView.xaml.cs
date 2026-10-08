@@ -1675,7 +1675,9 @@ public sealed partial class BrowsePageView : UserControl
 
         var projectKey = viewModel.FocusedProjectKey
                          ?? viewModel.CurrentProject?.ProjectKey
-                         ?? viewModel.VisibleProjects.FirstOrDefault()?.ProjectKey;
+                         ?? (viewModel.VisibleProjects.Count > 0
+                             ? viewModel.VisibleProjects[0]?.ProjectKey
+                             : null);
         if (projectKey is not null)
         {
             await FocusProjectAsync(projectKey).ConfigureAwait(true);
