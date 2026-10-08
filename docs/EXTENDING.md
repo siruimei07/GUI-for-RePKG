@@ -38,7 +38,7 @@ dotnet run --project .\tests\WallpaperField.SmokeTests\WallpaperField.SmokeTests
 - `PreviewPath` / `PreviewFileName`：卡片媒体。
 - `HasScenePackage` / `ScenePackagePath`：扫描时确认的解包资格与源包位置。
 - `WallpaperType` / `HasVideoFile` / `VideoFilePath` / `VideoRelativePath`：视频壁纸类型、源文件与安全的相对输出位置。
-- `Warnings`：非致命降级原因；卡片会自动显示黄色提示徽标。
+- `Warnings`：非致命降级原因；卡片会自动显示琥珀色提示徽标。
 - `ProjectKey`：`WorkshopId` 加规范化源项目路径 SHA-256 指纹形成的跨页关联键。问题定位、浏览当前项和处理结果使用它消除同 ID 不同源歧义；不要改成原始路径，也不要只使用 Workshop ID。
 
 扩展字段时建议保持现有字段兼容；需要改变持久化结构时提高对应 metadata 或处理清单的 `SchemaVersion`。不要把密码、访问令牌或用户隐私信息写入公开的 `metadata.json`。

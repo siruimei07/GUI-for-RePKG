@@ -695,7 +695,8 @@
                         <Grid.RenderTransform>
                             <RotateTransform x:Name="CalibrationRotation" />
                         </Grid.RenderTransform>
-                        <!-- Corner calibration dial: only the lower-left quadrant enters the stage. -->
+                        <!-- Corner calibration dial: only the lower-left quadrant enters the stage; the cyan arcs rest
+                             off-stage and sweep through the corner only while the dial turns. -->
                         <Ellipse Margin="4" Stroke="{DynamicResource DecorationLineBrush}" StrokeThickness="1" StrokeDashArray="1,6" />
                         <Ellipse Margin="34" Stroke="{DynamicResource DecorationLineBrush}" StrokeThickness="1" />
                         <Ellipse Margin="74" Stroke="{DynamicResource DecorationLineBrush}" StrokeThickness="1" StrokeDashArray="4,4" />
@@ -703,10 +704,10 @@
                         <Line X1="0" Y1="150" X2="300" Y2="150" Stroke="{DynamicResource DecorationLineBrush}" StrokeThickness="1" />
                         <Path Stroke="{DynamicResource AccentActionBrush}"
                               StrokeThickness="5"
-                              Data="M 34,150 A 116,116 0 0 0 98,254" />
+                              Data="M 34,150 A 116,116 0 0 1 98,46" />
                         <Path Stroke="{DynamicResource AccentActionBrush}"
                               StrokeThickness="5"
-                              Data="M 266,150 A 116,116 0 0 1 202,254" />
+                              Data="M 266,150 A 116,116 0 0 0 202,46" />
                         <Path Fill="{DynamicResource TextPrimaryBrush}"
                               Data="M 144,262 L 156,262 150,272 Z" />
                     </Grid>
