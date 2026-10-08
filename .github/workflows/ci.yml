@@ -9,6 +9,10 @@ on:
         description: Prepare a v1.4.0 draft from this verified main commit
         type: boolean
         default: false
+      publish_release:
+        description: Publish the prepared v1.4.0 release immediately instead of leaving a draft
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -361,17 +365,23 @@ jobs:
           assert manifest['version'] == '1.4.0', 'Candidate version mismatch'
           assert manifest['sourceTree']['dirtyWorktree'] is False, 'Candidate source was dirty'
           PY
-      - name: Prepare draft with complete assets
+      - name: Prepare release with complete assets
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          PUBLISH_RELEASE: ${{ inputs.publish_release }}
         run: |
           set -euo pipefail
           if [ -n "$(git ls-remote origin refs/tags/v1.4.0)" ]; then
             echo 'v1.4.0 already exists; refusing to overwrite its tag.' >&2
             exit 1
           fi
-          gh release create v1.4.0 --draft --target "$GITHUB_SHA" \
+          # Drafts stay the default; publish only when the dispatch explicitly asks for it.
+          draft_flag='--draft'
+          if [ "$PUBLISH_RELEASE" = 'true' ]; then
+            draft_flag=''
+          fi
+          gh release create v1.4.0 $draft_flag --target "$GITHUB_SHA" \
             --title 'Wallpaper Field v1.4.0' --notes-file docs/releases/v1.4.0.md \
             release-candidate/WallpaperField-v1.4.0-win-x64.zip \
             release-candidate/SHA256SUMS release-candidate/release-manifest.json \
