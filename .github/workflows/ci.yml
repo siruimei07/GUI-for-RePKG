@@ -190,8 +190,19 @@ jobs:
         shell: pwsh
         run: |
           $probeRoot = Join-Path $env:RUNNER_TEMP "WallpaperField-v1.3.0-source-contract-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
-          .\scripts\verify-release-source-cleanliness.ps1 -WorkRoot $probeRoot
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $trace = [System.Collections.Generic.List[string]]::new()
+          try {
+            & .\scripts\verify-release-source-cleanliness.ps1 -WorkRoot $probeRoot *>&1 | ForEach-Object {
+              $trace.Add($_.ToString())
+              Write-Host $_
+            }
+            if ($LASTEXITCODE -ne 0) { throw "Source gate exited with $LASTEXITCODE." }
+          } catch {
+            $detail = (@($trace | Select-Object -Last 30) + $_.Exception.ToString() + $_.ScriptStackTrace) -join "`n"
+            $detail = $detail.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Host "::error title=Release source gate failure::$detail"
+            throw
+          }
 
       - name: Verify dirty clones cannot start a release
         shell: pwsh
@@ -295,7 +306,19 @@ jobs:
         shell: pwsh
         run: |
           $releaseRoot = Join-Path $env:RUNNER_TEMP "WallpaperField-v1.3.0-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
-          .\build-release.ps1 -OutputDirectory $releaseRoot
+          $trace = [System.Collections.Generic.List[string]]::new()
+          try {
+            & .\build-release.ps1 -OutputDirectory $releaseRoot *>&1 | ForEach-Object {
+              $trace.Add($_.ToString())
+              Write-Host $_
+            }
+            if ($LASTEXITCODE -ne 0) { throw "Release build exited with $LASTEXITCODE." }
+          } catch {
+            $detail = (@($trace | Select-Object -Last 30) + $_.Exception.ToString() + $_.ScriptStackTrace) -join "`n"
+            $detail = $detail.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Host "::error title=Release build failure::$detail"
+            throw
+          }
 
       - name: Retain verified release candidate
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
